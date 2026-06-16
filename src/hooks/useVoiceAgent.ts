@@ -87,7 +87,7 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     return "listening";
   })();
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (jumpToIndex?: number) => {
     if (!briefing) return;
     setIsStarting(true);
     setConfigError(null);
@@ -99,15 +99,20 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         setIsStarting(false);
         return;
       }
-      const firstMessage = buildFirstMessage(briefing);
+      const firstMessage = typeof jumpToIndex === "number"
+        ? buildJumpMessage(briefing, jumpToIndex)
+        : buildFirstMessage(briefing);
       const briefingContext = buildBriefingContext(briefing);
+      const startNote = typeof jumpToIndex === "number"
+        ? `\n\nUSER TAPPED STORY #${jumpToIndex + 1}. Start there and continue from that point unless interrupted.`
+        : "";
       await conversation.startSession({
         conversationToken: tokenRes.token,
         connectionType: "webrtc",
         overrides: {
           agent: {
             firstMessage,
-            prompt: { prompt: AGENT_SYSTEM_PROMPT + "\n\nTODAY'S BRIEFING JSON:\n" + briefingContext },
+            prompt: { prompt: AGENT_SYSTEM_PROMPT + "\n\nTODAY'S BRIEFING JSON:\n" + briefingContext + startNote },
           },
         },
       } as any);
