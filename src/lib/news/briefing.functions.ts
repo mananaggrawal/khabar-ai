@@ -369,7 +369,7 @@ TASK: Build a tiered briefing the user can hear in ~15 minutes.
 
 Return STRICT JSON:
 {
-  "home": [ /* up to ${homeCap} topics from H-clusters; the most significant ${homeLabel} stories */ ],
+  "home": [ /* EXACTLY min(${homeCap}, available H-clusters) topics — the most significant ${homeLabel} stories. Do NOT under-fill if H-clusters exist. */ ],
   "world": [ /* up to ${worldCap} topics from W-clusters; the most globally important non-${homeLabel} stories */ ],
   "quickHits": [ /* up to ${quickCap} short bullets from EITHER pool — fun/curious/honorable mentions worth a single sentence */ ]
 }
@@ -389,6 +389,7 @@ LENGTH RULES (strict — this is a 15-minute spoken brief):
 - quickHits[i].explanation: empty string "". Why it matters: empty string "". The "hook" carries the whole thing.
 
 CONTENT RULES:
+- The "home" tier MUST be filled to ${homeCap} when ${homeCap} or more H-clusters are listed above. If fewer H-clusters exist, return one home topic per cluster — never fewer than min(${homeCap}, count of H-clusters).
 - Prioritise ${homeLabel} stories first; avoid duplication between home and world (if a ${homeLabel} story has global angle, put it in home).
 - Order each tier by significance / breadth of coverage.
 - Use clean, conversational English. No filler.
