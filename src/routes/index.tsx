@@ -4,6 +4,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { AnimatePresence, motion } from "motion/react";
 import { History, MicOff, Mic, Settings, X, Loader2, AlertTriangle } from "lucide-react";
+import { ConversationProvider } from "@elevenlabs/react";
 
 import { VoiceOrb } from "@/components/VoiceOrb";
 import { Button } from "@/components/ui/button";
@@ -45,7 +46,11 @@ function Home() {
   if (!authReady || !signedIn) {
     return <FullScreenCanvas><BootingOrb /></FullScreenCanvas>;
   }
-  return <FullScreenCanvas><BriefingSurface /></FullScreenCanvas>;
+  return (
+    <ConversationProvider>
+      <FullScreenCanvas><BriefingSurface /></FullScreenCanvas>
+    </ConversationProvider>
+  );
 }
 
 function FullScreenCanvas({ children }: { children: React.ReactNode }) {
