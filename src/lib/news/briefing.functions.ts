@@ -32,6 +32,8 @@ const CategorySchema = z.enum(ALL_CATEGORIES);
 
 const CHUNK_SIZE = 120;
 const MAX_CHUNKS_PER_POOL = 4;
+const RSS_FETCH_CONCURRENCY = 8;
+const HOME_MIN_ITEMS = 24;
 
 // Per-tier caps that target a ~15 min spoken briefing (~150 wpm).
 const TIER_CAPS = { home: 8, world: 6, quick_hit: 6 } as const;
@@ -68,15 +70,19 @@ export const fetchBriefing = createServerFn({ method: "POST" })
           ...t,
           tier: (t.tier as BriefingTier) ?? "world",
         }));
-        return {
-          id: recent.id,
-          generatedAt: recent.generated_at,
-          topics,
-          totalSources: Array.isArray(recent.sources) ? recent.sources.length : 0,
-          totalTopics: recent.total_topics ?? undefined,
-          coverageWindowStart: recent.coverage_window_start ?? undefined,
-          homeCountry,
-        };
+        const hasExpectedHome = homeCountry === "global" || topics.some((t) => t.tier === "home");
+        if (hasExpectedHome) {
+          return {
+            id: recent.id,
+            generatedAt: recent.generated_at,
+            topics,
+            totalSources: Array.isArray(recent.sources) ? recent.sources.length : 0,
+            totalTopics: recent.total_topics ?? undefined,
+            coverageWindowStart: recent.coverage_window_start ?? undefined,
+            homeCountry,
+          };
+        }
+        console.warn("[briefing] cached briefing missing home tier; regenerating", recent.id);
       }
     }
 
@@ -95,11 +101,9 @@ export const fetchBriefing = createServerFn({ method: "POST" })
 
     type TaggedItem = RssItem & { _country: CountryCode };
     const fetched: TaggedItem[] = (
-      await Promise.all(
-        wantedSources.map((s) =>
-          fetchRss(s.url, s.name, s.id).then((items) =>
-            items.map((it) => ({ ...it, _country: s.country })),
-          ),
+      await mapLimit(wantedSources, RSS_FETCH_CONCURRENCY, (s) =>
+        fetchRss(s.url, s.name, s.id).then((items) =>
+          items.map((it) => ({ ...it, _country: s.country })),
         ),
       )
     ).flat();
@@ -113,9 +117,20 @@ export const fetchBriefing = createServerFn({ method: "POST" })
     });
 
     // Dedupe each pool independently so India/world stories don't merge.
+    const recentHomeItems = recentItems.filter((it) => it._country === homeCountry);
+    const homeItems = recentHomeItems.length >= HOME_MIN_ITEMS
+      ? recentHomeItems
+      : uniqueBy(
+          [
+            ...recentHomeItems,
+            ...fetched.filter((it) => it._country === homeCountry),
+          ],
+          (it) => it.link,
+        );
+
     const homePool: TaggedItem[] = homeCountry === "global"
       ? []
-      : dedupeByTitle(recentItems.filter((it) => it._country === homeCountry), 0.55);
+      : dedupeByTitle(homeItems, 0.55);
     const worldPool: TaggedItem[] = dedupeByTitle(
       recentItems.filter((it) => it._country !== homeCountry || homeCountry === "global"),
       0.55,
@@ -222,6 +237,23 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
+async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await fn(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 // ───────────────────── LLM pipeline ─────────────────────
 
 type RawCluster = { headline: string; memberIndices: number[] };
@@ -241,7 +273,7 @@ async function summarizeTiered(
   const apiKey = process.env.LOVABLE_API_KEY;
   if (!apiKey) {
     return {
-      home: [],
+      home: fallbackTopics(homeChunks.flat(), "home"),
       world: fallbackTopics(worldChunks.flat(), "world"),
       quickHits: [],
     };
@@ -304,14 +336,24 @@ Rules:
     const json = await res.json();
     const parsed = JSON.parse(json.choices?.[0]?.message?.content ?? "{}");
     if (Array.isArray(parsed.clusters)) {
-      return parsed.clusters
-        .map((c: any) => ({
-          headline: String(c.headline ?? "Untitled"),
-          memberIndices: Array.isArray(c.memberIndices)
-            ? c.memberIndices.map((n: any) => Number(n)).filter((n: number) => Number.isInteger(n) && n >= 1)
-            : [],
-        }))
-        .filter((c: RawCluster) => c.memberIndices.length > 0);
+      const used = new Set<number>();
+      const clusters: RawCluster[] = [];
+      for (const c of parsed.clusters) {
+        const memberIndices = Array.isArray(c.memberIndices)
+          ? c.memberIndices
+              .map((n: any) => Number(n))
+              .filter((n: number) => Number.isInteger(n) && n >= 1 && n <= items.length && !used.has(n))
+          : [];
+        memberIndices.forEach((n: number) => used.add(n));
+        if (memberIndices.length > 0) {
+          clusters.push({ headline: String(c.headline ?? "Untitled"), memberIndices });
+        }
+      }
+      items.forEach((it, i) => {
+        const memberIndex = i + 1;
+        if (!used.has(memberIndex)) clusters.push({ headline: it.title, memberIndices: [memberIndex] });
+      });
+      if (clusters.length > 0) return clusters;
     }
     return items.map((it, i) => ({ headline: it.title, memberIndices: [i + 1] }));
   } catch (e) {
