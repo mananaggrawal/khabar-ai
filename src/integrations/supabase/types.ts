@@ -22,6 +22,7 @@ export type Database = {
           id: string
           sources: Json
           topics: Json
+          topics_tiered: Json | null
           total_clusters_raw: number | null
           total_topics: number | null
           user_id: string
@@ -33,6 +34,7 @@ export type Database = {
           id?: string
           sources?: Json
           topics: Json
+          topics_tiered?: Json | null
           total_clusters_raw?: number | null
           total_topics?: number | null
           user_id: string
@@ -44,6 +46,7 @@ export type Database = {
           id?: string
           sources?: Json
           topics?: Json
+          topics_tiered?: Json | null
           total_clusters_raw?: number | null
           total_topics?: number | null
           user_id?: string
@@ -88,6 +91,7 @@ export type Database = {
       preferences: {
         Row: {
           categories: string[]
+          home_country: string
           timezone: string
           updated_at: string
           user_id: string
@@ -95,6 +99,7 @@ export type Database = {
         }
         Insert: {
           categories?: string[]
+          home_country?: string
           timezone?: string
           updated_at?: string
           user_id: string
@@ -102,6 +107,7 @@ export type Database = {
         }
         Update: {
           categories?: string[]
+          home_country?: string
           timezone?: string
           updated_at?: string
           user_id?: string

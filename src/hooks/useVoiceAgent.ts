@@ -74,7 +74,6 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     },
   });
 
-  // Drive amplitude/frequency tick while connected
   useEffect(() => {
     if (conversation.status !== "connected") return;
     const tick = () => {
@@ -114,9 +113,6 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         setIsStarting(false);
         return;
       }
-      // No overrides — agent persona is configured in the ElevenLabs dashboard.
-      // We inject briefing data and trigger the opener via contextual update + user message,
-      // dispatched from onConnect once the WebRTC session is live.
       const compactIndex = buildCompactIndex(briefing);
       const fullBriefing = buildBriefingContext(briefing);
       const jumpNote = typeof jumpToIndex === "number"
@@ -126,7 +122,7 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         "SESSION RULES:",
         AGENT_SYSTEM_PROMPT,
         "",
-        `TODAY'S HEADLINES (${briefing.topics.length} stories, compact index):`,
+        `TODAY'S HEADLINES (tiered index — read in the order shown):`,
         compactIndex,
         "",
         "FULL BRIEFING DATA (use for explanations, why-it-matters, and sources):",
@@ -153,7 +149,6 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     }
   }, [briefing, conversation, mintToken]);
 
-
   const stop = useCallback(async () => {
     await conversation.endSession();
   }, [conversation]);
@@ -171,36 +166,60 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
   };
 }
 
-const AGENT_SYSTEM_PROMPT = `You are NewsPilot, an AI-native news anchor. You are intellectual but amusing — think a witty foreign-correspondent who explains hard things in clear, vivid English.
+const COUNTRY_LABELS: Record<string, string> = {
+  in: "India",
+  us: "the United States",
+  uk: "the United Kingdom",
+  global: "around the world",
+};
+
+const AGENT_SYSTEM_PROMPT = `You are NewsPilot, an AI-native news anchor. Intellectual but amusing — a witty foreign-correspondent who explains hard things in clear, vivid English.
 
 Rules:
-- The TODAY'S BRIEFING JSON below is your ONLY source of truth — every story today is in there, ordered by significance. Do not invent facts.
-- Open with a one-sentence greeting that names the real count ("I've got 42 stories for you today — interrupt anytime, say 'next' to skip, 'go deeper' to expand"), then proceed in order.
-- For each topic: 20–30 seconds spoken. Deliver hook → 1–2 sentence explanation → one sentence on why it matters. Cite an outlet by name when natural ("Reuters reports…", "the BBC notes…"). Don't read every source.
-- After roughly every 10 stories, offer a brief check-in ("Want me to keep going or jump to a section?").
-- Accept "next" / "skip" → move on. "Go deeper" / "tell me more" → expand the current topic. "Jump to <topic>" → search the list and switch.
-- If the user asks something not in the briefing, say so honestly.
-- You will be told via system message if the user tapped a specific story — start from that topic and continue.`;
+- The TODAY'S BRIEFING JSON below is your ONLY source of truth. It is organised in three tiers: HOME (the user's country), WORLD (everywhere else), and QUICK HITS (one-liners).
+- Total runtime target: ~15 minutes. Roughly 7 min HOME, 4 min WORLD, 3 min QUICK HITS. Do not pad. Do not invent.
+- Open with a single sentence naming the counts and inviting interruption ("say 'next' to skip, 'go deeper' to expand").
+- HOME and WORLD topics: hook → 1–2 sentence explanation → one sentence on why it matters. Cite an outlet by name when natural. ~25 seconds each.
+- QUICK HITS: one sentence each. Move fast.
+- Announce section transitions: "Now, around the world..." / "And finally, quick hits..."
+- Accept "next" / "skip", "go deeper" / "tell me more", "jump to <topic>".
+- If asked about something not in the briefing, say so honestly.
+- If the user tapped a specific story, start from that topic and continue in order.`;
+
+function tierLabel(tier?: string) {
+  if (tier === "home") return "HOME";
+  if (tier === "world") return "WORLD";
+  if (tier === "quick_hit") return "QUICK";
+  return "WORLD";
+}
 
 function buildFirstMessage(b: Briefing): string {
-  const n = b.topics.length;
-  const minutes = Math.max(3, Math.round(n * 0.5));
-  if (n === 0) return "I couldn't find any stories yet — try refreshing in a minute.";
-  return `Good day. I've got ${n} ${n === 1 ? "story" : "stories"} for you today — roughly ${minutes} minutes end-to-end. Want me to run the whole briefing, or skim the headlines first? Either way, interrupt anytime.`;
+  const home = b.topics.filter((t) => t.tier === "home").length;
+  const world = b.topics.filter((t) => t.tier === "world").length;
+  const quick = b.topics.filter((t) => t.tier === "quick_hit").length;
+  const homeLabel = COUNTRY_LABELS[b.homeCountry ?? "in"] ?? "your country";
+  if (b.topics.length === 0) return "I couldn't find any stories yet — try refreshing in a minute.";
+  const parts: string[] = [];
+  if (home) parts.push(`${home} from ${homeLabel}`);
+  if (world) parts.push(`${world} from around the world`);
+  if (quick) parts.push(`${quick} quick hits`);
+  return `Good morning. Here's your 15-minute briefing: ${parts.join(", ")}. Interrupt anytime.`;
 }
 
 function buildJumpMessage(b: Briefing, i: number): string {
   const t = b.topics[i];
   if (!t) return buildFirstMessage(b);
-  return `Jumping to story ${i + 1} of ${b.topics.length}: ${t.headline}. Here we go.`;
+  return `Jumping to story ${i + 1}: ${t.headline}. Here we go.`;
 }
 
 function buildBriefingContext(b: Briefing): string {
   return JSON.stringify({
     generatedAt: b.generatedAt,
+    homeCountry: b.homeCountry,
     totalTopics: b.topics.length,
     topics: b.topics.map((t, i) => ({
       n: i + 1,
+      tier: tierLabel(t.tier),
       headline: t.headline,
       hook: t.hook,
       explanation: t.explanation,
@@ -211,7 +230,23 @@ function buildBriefingContext(b: Briefing): string {
 }
 
 function buildCompactIndex(b: Briefing): string {
-  return b.topics
-    .map((t, i) => `${i + 1}. ${t.headline}${t.hook ? ` — ${t.hook}` : ""}`)
-    .join("\n");
+  const lines: string[] = [];
+  const home = b.topics.filter((t) => t.tier === "home");
+  const world = b.topics.filter((t) => t.tier === "world");
+  const quick = b.topics.filter((t) => t.tier === "quick_hit");
+  const homeLabel = COUNTRY_LABELS[b.homeCountry ?? "in"] ?? "home";
+  let n = 1;
+  if (home.length) {
+    lines.push(`-- FROM ${homeLabel.toUpperCase()} --`);
+    home.forEach((t) => { lines.push(`${n++}. ${t.headline}${t.hook ? ` — ${t.hook}` : ""}`); });
+  }
+  if (world.length) {
+    lines.push(`-- AROUND THE WORLD --`);
+    world.forEach((t) => { lines.push(`${n++}. ${t.headline}${t.hook ? ` — ${t.hook}` : ""}`); });
+  }
+  if (quick.length) {
+    lines.push(`-- QUICK HITS --`);
+    quick.forEach((t) => { lines.push(`${n++}. ${t.headline}${t.hook ? ` — ${t.hook}` : ""}`); });
+  }
+  return lines.join("\n");
 }

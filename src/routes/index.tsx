@@ -11,6 +11,7 @@ import { BriefingList } from "@/components/BriefingList";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { fetchBriefing, type Briefing } from "@/lib/news/briefing.functions";
+import { countryLabel } from "@/lib/news/sources";
 import { useVoiceAgent } from "@/hooks/useVoiceAgent";
 
 export const Route = createFileRoute("/")({
@@ -132,14 +133,13 @@ function BriefingSurface() {
   }), []);
 
   const topicCount = briefing?.topics.length ?? 0;
-  const minutes = Math.max(3, Math.round(topicCount * 0.5));
   const subtitle = briefingQuery.isLoading
-    ? "Gathering every story from today…"
+    ? "Gathering today's briefing…"
     : briefingQuery.isError
     ? "Couldn't load the briefing. Tap retry."
     : connected
     ? voice.orbState === "speaking" ? "NewsPilot is speaking" : "Listening — say 'next', 'skip', or 'go deeper'"
-    : `${topicCount} ${topicCount === 1 ? "story" : "stories"} today · about ${minutes} min spoken`;
+    : `${topicCount} ${topicCount === 1 ? "story" : "stories"} today · ~15 min spoken`;
 
   return (
     <>
@@ -219,8 +219,9 @@ function BriefingSurface() {
           <div className="mt-10 w-full max-w-2xl">
             <BriefingList
               topics={briefing.topics}
+              homeLabel={countryLabel(briefing.homeCountry ?? "in")}
               onJumpTo={(i) => {
-                if (connected) return; // future: agent-side jump while connected
+                if (connected) return;
                 voice.start(i);
               }}
             />

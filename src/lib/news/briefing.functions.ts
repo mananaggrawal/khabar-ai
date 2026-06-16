@@ -2,8 +2,10 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { fetchRss, type RssItem } from "./rss";
-import { RSS_SOURCES, ALL_CATEGORIES, type Category } from "./sources";
+import { RSS_SOURCES, ALL_CATEGORIES, type Category, type CountryCode } from "./sources";
 import { dedupeByTitle } from "./cluster";
+
+export type BriefingTier = "home" | "world" | "quick_hit";
 
 export type BriefingTopic = {
   id: string;
@@ -13,6 +15,7 @@ export type BriefingTopic = {
   whyItMatters: string;
   sources: { name: string; url: string }[];
   followUps: string[];
+  tier: BriefingTier;
 };
 
 export type Briefing = {
@@ -22,12 +25,16 @@ export type Briefing = {
   totalSources: number;
   totalTopics?: number;
   coverageWindowStart?: string;
+  homeCountry?: CountryCode;
 };
 
 const CategorySchema = z.enum(ALL_CATEGORIES);
 
 const CHUNK_SIZE = 120;
-const MAX_CHUNKS = 8; // hard ceiling — never feed > 8*120 = 960 items into LLM
+const MAX_CHUNKS_PER_POOL = 4;
+
+// Per-tier caps that target a ~15 min spoken briefing (~150 wpm).
+const TIER_CAPS = { home: 8, world: 6, quick_hit: 6 } as const;
 
 export const fetchBriefing = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -41,11 +48,12 @@ export const fetchBriefing = createServerFn({ method: "POST" })
   .handler(async ({ data, context }): Promise<Briefing> => {
     const { supabase, userId } = context;
 
-    // Determine user's timezone (client-passed wins, else stored preference, else UTC)
-    const tz = data.timezone || (await loadTimezone(supabase, userId));
+    const prefs = await loadPrefs(supabase, userId);
+    const tz = data.timezone || prefs.timezone;
+    const homeCountry = prefs.homeCountry;
     const midnight = startOfLocalDayUTC(tz);
 
-    // Reuse today's briefing unless forced (keyed on calendar day in user's TZ)
+    // Reuse today's briefing unless forced
     if (!data.force) {
       const { data: recent } = await supabase
         .from("briefings")
@@ -56,33 +64,47 @@ export const fetchBriefing = createServerFn({ method: "POST" })
         .limit(1)
         .maybeSingle();
       if (recent) {
+        const topics = (recent.topics as BriefingTopic[]).map((t) => ({
+          ...t,
+          tier: (t.tier as BriefingTier) ?? "world",
+        }));
         return {
           id: recent.id,
           generatedAt: recent.generated_at,
-          topics: recent.topics as BriefingTopic[],
+          topics,
           totalSources: Array.isArray(recent.sources) ? recent.sources.length : 0,
           totalTopics: recent.total_topics ?? undefined,
           coverageWindowStart: recent.coverage_window_start ?? undefined,
+          homeCountry,
         };
       }
     }
 
     const cats: Category[] =
-      data.categories && data.categories.length > 0
-        ? data.categories
-        : await loadPreferredCategories(supabase, userId);
+      data.categories && data.categories.length > 0 ? data.categories : prefs.categories;
 
-    const wantedSources = RSS_SOURCES.filter(
-      (s) => s.category === "top" || cats.includes(s.category as Category),
-    );
+    // Partition sources by pool: home = sources matching user's country.
+    // World = global + all other countries.
+    const wantedSources = RSS_SOURCES.filter((s) => {
+      // Always include global; otherwise match country.
+      if (s.country === "global") return true;
+      if (s.country === homeCountry) return true;
+      // For the world pool, include all category-matching foreign sources.
+      return cats.includes(s.category as Category) || s.category === "top";
+    });
 
-    const fetched = (
+    type TaggedItem = RssItem & { _country: CountryCode };
+    const fetched: TaggedItem[] = (
       await Promise.all(
-        wantedSources.map((s) => fetchRss(s.url, s.name, s.id)),
+        wantedSources.map((s) =>
+          fetchRss(s.url, s.name, s.id).then((items) =>
+            items.map((it) => ({ ...it, _country: s.country })),
+          ),
+        ),
       )
     ).flat();
 
-    // Filter by local-midnight cutoff (keep items with unparseable dates)
+    // Filter by local-midnight cutoff
     const cutoff = midnight.getTime();
     const recentItems = fetched.filter((it) => {
       if (!it.pubDate) return true;
@@ -90,22 +112,37 @@ export const fetchBriefing = createServerFn({ method: "POST" })
       return Number.isNaN(t) ? true : t >= cutoff;
     });
 
-    // Strong dedupe (Jaccard on title shingles)
-    const deduped = dedupeByTitle(recentItems, 0.55);
+    // Dedupe each pool independently so India/world stories don't merge.
+    const homePool: TaggedItem[] = homeCountry === "global"
+      ? []
+      : dedupeByTitle(recentItems.filter((it) => it._country === homeCountry), 0.55);
+    const worldPool: TaggedItem[] = dedupeByTitle(
+      recentItems.filter((it) => it._country !== homeCountry || homeCountry === "global"),
+      0.55,
+    );
 
-    // Sort: prefer items with a known pubDate, newest first
-    deduped.sort((a, b) => {
+    const sortByDate = (a: RssItem, b: RssItem) => {
       const ta = a.pubDate ? Date.parse(a.pubDate) : 0;
       const tb = b.pubDate ? Date.parse(b.pubDate) : 0;
       return (tb || 0) - (ta || 0);
-    });
+    };
+    homePool.sort(sortByDate);
+    worldPool.sort(sortByDate);
 
-    const capped = deduped.slice(0, CHUNK_SIZE * MAX_CHUNKS);
-    const chunks = chunk(capped, CHUNK_SIZE);
+    const homeCapped = homePool.slice(0, CHUNK_SIZE * MAX_CHUNKS_PER_POOL);
+    const worldCapped = worldPool.slice(0, CHUNK_SIZE * MAX_CHUNKS_PER_POOL);
 
-    const topics = await summarizeAll(chunks);
+    const tiered = await summarizeTiered(
+      chunk(homeCapped, CHUNK_SIZE),
+      chunk(worldCapped, CHUNK_SIZE),
+      homeCountry,
+    );
 
-    const sourceList = capped.map((t) => ({
+    // Flatten for legacy `topics` column / consumers.
+    const topics: BriefingTopic[] = [...tiered.home, ...tiered.world, ...tiered.quickHits];
+
+    const allSourceItems = [...homeCapped, ...worldCapped];
+    const sourceList = allSourceItems.map((t) => ({
       title: t.title,
       url: t.link,
       source: t.source,
@@ -116,9 +153,10 @@ export const fetchBriefing = createServerFn({ method: "POST" })
       .insert({
         user_id: userId,
         topics: topics as any,
+        topics_tiered: tiered as any,
         sources: sourceList as any,
         total_topics: topics.length,
-        total_clusters_raw: capped.length,
+        total_clusters_raw: allSourceItems.length,
         coverage_window_start: midnight.toISOString(),
       })
       .select("id, generated_at")
@@ -135,38 +173,29 @@ export const fetchBriefing = createServerFn({ method: "POST" })
       totalSources: sourceList.length,
       totalTopics: topics.length,
       coverageWindowStart: midnight.toISOString(),
+      homeCountry,
     };
   });
 
-async function loadPreferredCategories(
+async function loadPrefs(
   supabase: { from: (t: string) => any },
   userId: string,
-): Promise<Category[]> {
+): Promise<{ categories: Category[]; timezone: string; homeCountry: CountryCode }> {
   const { data } = await supabase
     .from("preferences")
-    .select("categories")
+    .select("categories, timezone, home_country")
     .eq("user_id", userId)
     .maybeSingle();
-  const cats = (data?.categories as string[] | undefined) ?? [];
-  const valid = cats.filter((c): c is Category =>
+  const rawCats = (data?.categories as string[] | undefined) ?? [];
+  const valid = rawCats.filter((c): c is Category =>
     (ALL_CATEGORIES as readonly string[]).includes(c),
   );
-  return valid.length ? valid : ["world", "tech", "markets", "science"];
+  const cats: Category[] = valid.length ? valid : ["world", "tech", "markets", "science"];
+  const tz = (data?.timezone as string | undefined) || "UTC";
+  const home = ((data?.home_country as string | undefined) as CountryCode | undefined) || "in";
+  return { categories: cats, timezone: tz, homeCountry: home };
 }
 
-async function loadTimezone(
-  supabase: { from: (t: string) => any },
-  userId: string,
-): Promise<string> {
-  const { data } = await supabase
-    .from("preferences")
-    .select("timezone")
-    .eq("user_id", userId)
-    .maybeSingle();
-  return (data?.timezone as string | undefined) || "UTC";
-}
-
-/** Returns the UTC Date that corresponds to 00:00 of the current day in `tz`. */
 function startOfLocalDayUTC(tz: string): Date {
   try {
     const now = new Date();
@@ -178,10 +207,8 @@ function startOfLocalDayUTC(tz: string): Date {
     const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
     const y = get("year"), m = get("month"), d = get("day");
     const h = get("hour"), mi = get("minute"), s = get("second");
-    // offset (ms) of tz relative to UTC right now
     const asUTC = Date.UTC(y, m - 1, d, h, mi, s);
     const offset = asUTC - now.getTime();
-    // local midnight in UTC = UTC(y,m,d,0,0,0) - offset
     return new Date(Date.UTC(y, m - 1, d, 0, 0, 0) - offset);
   } catch {
     const n = new Date();
@@ -195,41 +222,58 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
-// ───────────────────────── LLM pipeline ─────────────────────────
+// ───────────────────── LLM pipeline ─────────────────────
 
-type RawCluster = {
-  headline: string;
-  memberIndices: number[]; // 1-based indices into the chunk's headline list
+type RawCluster = { headline: string; memberIndices: number[] };
+type ResolvedCluster = { headline: string; items: RssItem[] };
+
+type TieredResult = {
+  home: BriefingTopic[];
+  world: BriefingTopic[];
+  quickHits: BriefingTopic[];
 };
 
-async function summarizeAll(chunks: RssItem[][]): Promise<BriefingTopic[]> {
+async function summarizeTiered(
+  homeChunks: RssItem[][],
+  worldChunks: RssItem[][],
+  homeCountry: CountryCode,
+): Promise<TieredResult> {
   const apiKey = process.env.LOVABLE_API_KEY;
-  if (!apiKey || chunks.length === 0 || chunks.every((c) => c.length === 0)) {
-    return fallbackTopics(chunks.flat());
+  if (!apiKey) {
+    return {
+      home: [],
+      world: fallbackTopics(worldChunks.flat(), "world"),
+      quickHits: [],
+    };
   }
 
-  // PASS A — cluster each chunk in parallel
-  const clustersPerChunk = await Promise.all(
-    chunks.map((c) => clusterChunk(c, apiKey)),
-  );
+  const [homeClusters, worldClusters] = await Promise.all([
+    resolveClusters(homeChunks, apiKey),
+    resolveClusters(worldChunks, apiKey),
+  ]);
 
-  // Resolve cluster member items by chunk-relative indices
-  type ResolvedCluster = { headline: string; items: RssItem[] };
+  return await writeTiered(homeClusters, worldClusters, homeCountry, apiKey);
+}
+
+async function resolveClusters(chunks: RssItem[][], apiKey: string): Promise<ResolvedCluster[]> {
+  if (chunks.length === 0) return [];
+  const per = await Promise.all(chunks.map((c) => clusterChunk(c, apiKey)));
   const resolved: ResolvedCluster[] = [];
-  clustersPerChunk.forEach((clusters, ci) => {
-    const chunkItems = chunks[ci];
+  per.forEach((clusters, ci) => {
+    const items = chunks[ci];
     for (const cl of clusters) {
-      const items = cl.memberIndices
-        .map((i) => chunkItems[i - 1])
-        .filter((x): x is RssItem => !!x);
-      if (items.length > 0) resolved.push({ headline: cl.headline, items });
+      const members = cl.memberIndices.map((i) => items[i - 1]).filter((x): x is RssItem => !!x);
+      if (members.length) resolved.push({ headline: cl.headline, items: members });
     }
   });
-
-  if (resolved.length === 0) return fallbackTopics(chunks.flat());
-
-  // PASS B — merge cross-chunk duplicates + write topics
-  return await mergeAndWrite(resolved, apiKey);
+  // Sort by source diversity + size for the writer pass
+  return resolved
+    .map((c) => ({
+      c,
+      score: new Set(c.items.map((i) => i.source)).size * 2 + c.items.length,
+    }))
+    .sort((a, b) => b.score - a.score)
+    .map((x) => x.c);
 }
 
 async function clusterChunk(items: RssItem[], apiKey: string): Promise<RawCluster[]> {
@@ -243,7 +287,7 @@ async function clusterChunk(items: RssItem[], apiKey: string): Promise<RawCluste
 Rules:
 - Every headline must belong to exactly one cluster (no orphans, no duplicates).
 - Cluster aggressively: headlines about the same underlying event/story go together even if wording differs.
-- Use as many clusters as needed — do not artificially limit. Typical chunk yields 30-80 clusters.
+- Use as many clusters as needed — typical chunk yields 30-80 clusters.
 - "headline" is a clean, neutral one-liner.`;
 
   try {
@@ -256,11 +300,7 @@ Rules:
         response_format: { type: "json_object" },
       }),
     });
-    if (!res.ok) {
-      console.error("[briefing] clusterChunk failed", res.status, await res.text());
-      // Fallback: one cluster per item
-      return items.map((it, i) => ({ headline: it.title, memberIndices: [i + 1] }));
-    }
+    if (!res.ok) return items.map((it, i) => ({ headline: it.title, memberIndices: [i + 1] }));
     const json = await res.json();
     const parsed = JSON.parse(json.choices?.[0]?.message?.content ?? "{}");
     if (Array.isArray(parsed.clusters)) {
@@ -280,40 +320,79 @@ Rules:
   }
 }
 
-async function mergeAndWrite(
-  clusters: { headline: string; items: RssItem[] }[],
-  apiKey: string,
-): Promise<BriefingTopic[]> {
-  // Order clusters by source-diversity * size * recency for sane ordering
-  const scored = clusters
-    .map((c) => {
-      const uniqueSources = new Set(c.items.map((i) => i.source)).size;
-      const newest = Math.max(0, ...c.items.map((i) => i.pubDate ? Date.parse(i.pubDate) || 0 : 0));
-      return { c, score: uniqueSources * 2 + c.items.length + (newest ? 1 : 0), newest };
-    })
-    .sort((a, b) => b.score - a.score)
-    .map((x) => x.c);
+const COUNTRY_LABELS: Record<CountryCode, string> = {
+  in: "India",
+  us: "United States",
+  uk: "United Kingdom",
+  global: "Global",
+};
 
-  const list = scored
-    .map((c, i) => `${i + 1}. ${c.headline} [${c.items.length} item(s) · sources: ${unique(c.items.map((it) => it.source)).slice(0, 6).join(", ")}]`)
+async function writeTiered(
+  homeClusters: ResolvedCluster[],
+  worldClusters: ResolvedCluster[],
+  homeCountry: CountryCode,
+  apiKey: string,
+): Promise<TieredResult> {
+  // If we have nothing, return empty.
+  if (homeClusters.length === 0 && worldClusters.length === 0) {
+    return { home: [], world: [], quickHits: [] };
+  }
+
+  // If home pool is missing (e.g. user picked "global" or India RSS down),
+  // redistribute home cap into world.
+  const homeCap = homeClusters.length > 0 ? TIER_CAPS.home : 0;
+  const worldCap = TIER_CAPS.world + (homeClusters.length === 0 ? TIER_CAPS.home : 0);
+  const quickCap = TIER_CAPS.quick_hit;
+
+  const homeList = homeClusters
+    .slice(0, 40)
+    .map((c, i) => `H${i + 1}. ${c.headline} [${c.items.length} item(s) · ${unique(c.items.map((it) => it.source)).slice(0, 4).join(", ")}]`)
+    .join("\n");
+  const worldList = worldClusters
+    .slice(0, 60)
+    .map((c, i) => `W${i + 1}. ${c.headline} [${c.items.length} item(s) · ${unique(c.items.map((it) => it.source)).slice(0, 4).join(", ")}]`)
     .join("\n");
 
-  const system = `You are NewsPilot — an intellectual-but-amusing news anchor. You take a deduped list of story clusters from today and write a structured briefing covering EVERY distinct story. Output STRICT JSON only — no markdown, no commentary.`;
+  const homeLabel = COUNTRY_LABELS[homeCountry];
 
-  const user = `Today's story clusters (one per line, numbered):
+  const system = `You are NewsPilot — an intellectual-but-amusing news anchor. You build a structured, time-boxed daily briefing. Output STRICT JSON only — no markdown, no commentary.`;
 
-${list}
+  const user = `Today's story clusters.
 
-TASK:
-1. Merge any clusters that are clearly the same underlying story (cross-chunk duplicates). Use the "merge" array of source cluster numbers when you do.
-2. Write a BriefingTopic for EVERY distinct merged story. Do NOT cap the count — if there are 60 distinct stories, return 60 topics.
-3. Order topics: most globally significant / widely-covered first.
+== FROM ${homeLabel.toUpperCase()} (home) ==
+${homeList || "(none)"}
 
-For each topic write: id (kebab-slug), headline (clean one-liner), hook (one-line teaser), explanation (40-70 words plain English, what happened), whyItMatters (one sentence), followUps (2 short questions a curious reader might ask). DO NOT include sources — we'll attach them programmatically.
+== AROUND THE WORLD ==
+${worldList || "(none)"}
 
-Return: { "topics": [ { "id": "...", "headline": "...", "hook": "...", "explanation": "...", "whyItMatters": "...", "followUps": ["...","..."], "merge": [1, 7] } ] }
+TASK: Build a tiered briefing the user can hear in ~15 minutes.
 
-"merge" lists the 1-based cluster numbers (from above) that this topic represents. Every cluster number must appear in exactly one topic's merge array.`;
+Return STRICT JSON:
+{
+  "home": [ /* up to ${homeCap} topics from H-clusters; the most significant ${homeLabel} stories */ ],
+  "world": [ /* up to ${worldCap} topics from W-clusters; the most globally important non-${homeLabel} stories */ ],
+  "quickHits": [ /* up to ${quickCap} short bullets from EITHER pool — fun/curious/honorable mentions worth a single sentence */ ]
+}
+
+Each topic shape:
+{ "id": "kebab-slug",
+  "headline": "clean one-liner",
+  "hook": "one-line teaser (≤18 words)",
+  "explanation": "...",
+  "whyItMatters": "one sentence",
+  "followUps": ["q1","q2"],
+  "merge": ["H1","H4"]  /* source cluster IDs from above; use H# for home, W# for world */ }
+
+LENGTH RULES (strict — this is a 15-minute spoken brief):
+- home[i].explanation: 40–60 words. Why it matters: 1 sentence.
+- world[i].explanation: 25–35 words. Why it matters: 1 short sentence.
+- quickHits[i].explanation: empty string "". Why it matters: empty string "". The "hook" carries the whole thing.
+
+CONTENT RULES:
+- Prioritise ${homeLabel} stories first; avoid duplication between home and world (if a ${homeLabel} story has global angle, put it in home).
+- Order each tier by significance / breadth of coverage.
+- Use clean, conversational English. No filler.
+- Every cluster used must appear in exactly one topic's "merge" array. Unused clusters are fine — we are deliberately capping.`;
 
   try {
     const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
@@ -326,35 +405,74 @@ Return: { "topics": [ { "id": "...", "headline": "...", "hook": "...", "explanat
       }),
     });
     if (!res.ok) {
-      console.error("[briefing] mergeAndWrite failed", res.status, await res.text());
-      return clustersToFallbackTopics(scored);
+      console.error("[briefing] writeTiered failed", res.status, await res.text());
+      return fallbackTiered(homeClusters, worldClusters);
     }
     const json = await res.json();
     const parsed = JSON.parse(json.choices?.[0]?.message?.content ?? "{}");
-    if (!Array.isArray(parsed.topics) || parsed.topics.length === 0) {
-      return clustersToFallbackTopics(scored);
-    }
 
-    return parsed.topics.map((t: any, i: number): BriefingTopic => {
-      const mergeIdx: number[] = Array.isArray(t.merge)
-        ? t.merge.map((n: any) => Number(n)).filter((n: number) => Number.isInteger(n) && n >= 1 && n <= scored.length)
-        : [];
-      const items = mergeIdx.flatMap((n) => scored[n - 1].items);
+    const resolveMerge = (mergeIds: any): RssItem[] => {
+      if (!Array.isArray(mergeIds)) return [];
+      const items: RssItem[] = [];
+      for (const raw of mergeIds) {
+        const id = String(raw).trim();
+        const m = /^([HW])(\d+)$/.exec(id);
+        if (!m) continue;
+        const pool = m[1] === "H" ? homeClusters : worldClusters;
+        const idx = Number(m[2]) - 1;
+        if (pool[idx]) items.push(...pool[idx].items);
+      }
+      return items;
+    };
+
+    const buildTopic = (t: any, i: number, tier: BriefingTier): BriefingTopic => {
+      const items = resolveMerge(t.merge);
       const sources = uniqueBy(items.map((it) => ({ name: it.source, url: it.link })), (s) => s.url);
       return {
-        id: String(t.id ?? `topic-${i}`),
+        id: String(t.id ?? `${tier}-${i}`),
         headline: String(t.headline ?? "Untitled"),
         hook: String(t.hook ?? ""),
         explanation: String(t.explanation ?? ""),
         whyItMatters: String(t.whyItMatters ?? ""),
         sources,
         followUps: Array.isArray(t.followUps) ? t.followUps.slice(0, 4).map(String) : [],
+        tier,
       };
-    });
+    };
+
+    const home = Array.isArray(parsed.home) ? parsed.home.slice(0, homeCap).map((t: any, i: number) => buildTopic(t, i, "home")) : [];
+    const world = Array.isArray(parsed.world) ? parsed.world.slice(0, worldCap).map((t: any, i: number) => buildTopic(t, i, "world")) : [];
+    const quickHits = Array.isArray(parsed.quickHits) ? parsed.quickHits.slice(0, quickCap).map((t: any, i: number) => buildTopic(t, i, "quick_hit")) : [];
+
+    if (home.length === 0 && world.length === 0 && quickHits.length === 0) {
+      return fallbackTiered(homeClusters, worldClusters);
+    }
+    return { home, world, quickHits };
   } catch (e) {
-    console.error("[briefing] mergeAndWrite error", e);
-    return clustersToFallbackTopics(scored);
+    console.error("[briefing] writeTiered error", e);
+    return fallbackTiered(homeClusters, worldClusters);
   }
+}
+
+function fallbackTiered(home: ResolvedCluster[], world: ResolvedCluster[]): TieredResult {
+  return {
+    home: home.slice(0, TIER_CAPS.home).map((c, i) => clusterToTopic(c, `home-${i}`, "home")),
+    world: world.slice(0, TIER_CAPS.world).map((c, i) => clusterToTopic(c, `world-${i}`, "world")),
+    quickHits: world.slice(TIER_CAPS.world, TIER_CAPS.world + TIER_CAPS.quick_hit).map((c, i) => clusterToTopic(c, `qh-${i}`, "quick_hit")),
+  };
+}
+
+function clusterToTopic(c: ResolvedCluster, id: string, tier: BriefingTier): BriefingTopic {
+  return {
+    id,
+    headline: c.headline,
+    hook: "",
+    explanation: tier === "quick_hit" ? "" : "Live AI summary unavailable — tap a source for details.",
+    whyItMatters: "",
+    sources: uniqueBy(c.items.map((it) => ({ name: it.source, url: it.link })), (s) => s.url),
+    followUps: [],
+    tier,
+  };
 }
 
 function unique<T>(a: T[]): T[] { return Array.from(new Set(a)); }
@@ -368,26 +486,15 @@ function uniqueBy<T>(a: T[], key: (x: T) => string): T[] {
   return out;
 }
 
-function clustersToFallbackTopics(clusters: { headline: string; items: RssItem[] }[]): BriefingTopic[] {
-  return clusters.map((c, i) => ({
-    id: `topic-${i}`,
-    headline: c.headline,
-    hook: "",
-    explanation: "Live AI summary unavailable — showing raw cluster. Tap a source to read the original.",
-    whyItMatters: "",
-    sources: uniqueBy(c.items.map((it) => ({ name: it.source, url: it.link })), (s) => s.url),
-    followUps: [],
-  }));
-}
-
-function fallbackTopics(items: RssItem[]): BriefingTopic[] {
-  return items.slice(0, 50).map((it, i) => ({
+function fallbackTopics(items: RssItem[], tier: BriefingTier): BriefingTopic[] {
+  return items.slice(0, 20).map((it, i) => ({
     id: `topic-${i}`,
     headline: it.title,
     hook: "",
-    explanation: "Live AI summary unavailable — showing the raw headline. Tap to read the source.",
+    explanation: tier === "quick_hit" ? "" : "Live AI summary unavailable — showing the raw headline.",
     whyItMatters: "",
     sources: [{ name: it.source, url: it.link }],
     followUps: [],
+    tier,
   }));
 }
