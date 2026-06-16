@@ -219,7 +219,7 @@ function BriefingSurface() {
           <div className="mt-10 w-full max-w-2xl">
             <BriefingList
               topics={briefing.topics}
-              homeLabel={homeCountryLabel(briefing.homeCountry)}
+              homeLabel={countryLabel(briefing.homeCountry ?? "in")}
               onJumpTo={(i) => {
                 if (connected) return;
                 voice.start(i);
