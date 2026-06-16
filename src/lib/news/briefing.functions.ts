@@ -369,7 +369,7 @@ TASK: Build a tiered briefing the user can hear in ~15 minutes.
 
 Return STRICT JSON:
 {
-  "home": [ /* up to ${homeCap} topics from H-clusters; the most significant ${homeLabel} stories */ ],
+  "home": [ /* EXACTLY min(${homeCap}, available H-clusters) topics — the most significant ${homeLabel} stories. Do NOT under-fill if H-clusters exist. */ ],
   "world": [ /* up to ${worldCap} topics from W-clusters; the most globally important non-${homeLabel} stories */ ],
   "quickHits": [ /* up to ${quickCap} short bullets from EITHER pool — fun/curious/honorable mentions worth a single sentence */ ]
 }
@@ -389,6 +389,7 @@ LENGTH RULES (strict — this is a 15-minute spoken brief):
 - quickHits[i].explanation: empty string "". Why it matters: empty string "". The "hook" carries the whole thing.
 
 CONTENT RULES:
+- The "home" tier MUST be filled to ${homeCap} when ${homeCap} or more H-clusters are listed above. If fewer H-clusters exist, return one home topic per cluster — never fewer than min(${homeCap}, count of H-clusters).
 - Prioritise ${homeLabel} stories first; avoid duplication between home and world (if a ${homeLabel} story has global angle, put it in home).
 - Order each tier by significance / breadth of coverage.
 - Use clean, conversational English. No filler.
@@ -443,6 +444,21 @@ CONTENT RULES:
     const home = Array.isArray(parsed.home) ? parsed.home.slice(0, homeCap).map((t: any, i: number) => buildTopic(t, i, "home")) : [];
     const world = Array.isArray(parsed.world) ? parsed.world.slice(0, worldCap).map((t: any, i: number) => buildTopic(t, i, "world")) : [];
     const quickHits = Array.isArray(parsed.quickHits) ? parsed.quickHits.slice(0, quickCap).map((t: any, i: number) => buildTopic(t, i, "quick_hit")) : [];
+
+    // Safety pad: if the LLM under-delivered the home tier, top up from unused H-clusters
+    // so users always see every home story we have (up to the cap).
+    const targetHome = Math.min(homeCap, homeClusters.length);
+    if (home.length < targetHome) {
+      const usedUrls = new Set(home.flatMap((t: BriefingTopic) => t.sources.map((s) => s.url)));
+      for (const c of homeClusters) {
+        if (home.length >= targetHome) break;
+        const clusterUrls = c.items.map((it) => it.link);
+        if (clusterUrls.some((u) => usedUrls.has(u))) continue;
+        const padded = clusterToTopic(c, `home-pad-${home.length}`, "home");
+        home.push(padded);
+        padded.sources.forEach((s) => usedUrls.add(s.url));
+      }
+    }
 
     if (home.length === 0 && world.length === 0 && quickHits.length === 0) {
       return fallbackTiered(homeClusters, worldClusters);

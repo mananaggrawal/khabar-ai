@@ -57,21 +57,32 @@ export async function fetchRss(
   url: string,
   sourceName: string,
   sourceId: string,
-  timeoutMs = 7000,
+  timeoutMs = 15000,
 ): Promise<RssItem[]> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, {
-      signal: ctrl.signal,
-      headers: { "user-agent": "NewsPilotBot/1.0 (+https://lovable.dev)" },
-    });
-    if (!res.ok) return [];
-    const xml = await res.text();
-    return parseRss(xml, sourceName, sourceId);
-  } catch {
-    return [];
-  } finally {
-    clearTimeout(timer);
-  }
+  const attempt = async (ms: number): Promise<RssItem[]> => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ms);
+    try {
+      const res = await fetch(url, {
+        signal: ctrl.signal,
+        headers: {
+          "user-agent":
+            "Mozilla/5.0 (compatible; NewsPilotBot/1.0; +https://lovable.dev)",
+          accept: "application/rss+xml, application/atom+xml, application/xml;q=0.9, */*;q=0.8",
+        },
+      });
+      if (!res.ok) return [];
+      const xml = await res.text();
+      return parseRss(xml, sourceName, sourceId);
+    } catch {
+      return [];
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const first = await attempt(timeoutMs);
+  if (first.length > 0) return first;
+  // One quick retry on empty/failed result — many news CDNs cold-start slowly.
+  return attempt(Math.min(timeoutMs, 8000));
 }
+
