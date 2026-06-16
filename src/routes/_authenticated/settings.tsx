@@ -11,7 +11,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/settings")({
-  head: () => ({ meta: [{ title: "Settings · NewsPilot" }] }),
+  head: () => ({ meta: [{ title: "Settings · Khabar AI" }] }),
   component: SettingsPage,
 });
 
@@ -57,7 +57,7 @@ function SettingsPage() {
         <section>
           <h2 className="font-serif text-lg">Home country</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            The country NewsPilot leads with each morning. Everything else becomes “Around the world.”
+            The country Khabar AI leads with each morning. Everything else becomes “Around the world.”
           </p>
           <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
             {SUPPORTED_COUNTRIES.map((c) => {
@@ -84,7 +84,7 @@ function SettingsPage() {
         <section>
           <h2 className="font-serif text-lg">Interests</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Categories NewsPilot blends into your global briefing.
+            Categories Khabar AI blends into your global briefing.
           </p>
           <div className="mt-5 flex flex-wrap gap-2">
             {ALL_CATEGORIES.map((c) => {

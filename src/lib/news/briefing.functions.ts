@@ -397,7 +397,7 @@ async function writeTiered(
 
   const homeLabel = COUNTRY_LABELS[homeCountry];
 
-  const system = `You are NewsPilot — an intellectual-but-amusing news anchor. You build a structured, time-boxed daily briefing. Output STRICT JSON only — no markdown, no commentary.`;
+  const system = `You are Khabar AI — an intellectual-but-amusing news anchor. You build a structured, time-boxed daily briefing. Output STRICT JSON only — no markdown, no commentary.`;
 
   const user = `Today's story clusters.
 

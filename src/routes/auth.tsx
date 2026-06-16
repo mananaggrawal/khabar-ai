@@ -9,8 +9,8 @@ import { toast } from "sonner";
 export const Route = createFileRoute("/auth")({
   head: () => ({
     meta: [
-      { title: "Sign in · NewsPilot" },
-      { name: "description", content: "Sign in to NewsPilot to start your daily voice briefing." },
+      { title: "Sign in · Khabar AI" },
+      { name: "description", content: "Sign in to Khabar AI to start your daily voice briefing." },
     ],
   }),
   component: AuthPage,

@@ -67,7 +67,7 @@ export async function fetchRss(
         signal: ctrl.signal,
         headers: {
           "user-agent":
-            "Mozilla/5.0 (compatible; NewsPilotBot/1.0; +https://lovable.dev)",
+            "Mozilla/5.0 (compatible; KhabarAIBot/1.0; +https://lovable.dev)",
           accept: "application/rss+xml, application/atom+xml, application/xml;q=0.9, */*;q=0.8",
         },
       });
