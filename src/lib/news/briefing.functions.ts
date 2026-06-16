@@ -102,8 +102,8 @@ export const fetchBriefing = createServerFn({ method: "POST" })
       .from("briefings")
       .insert({
         user_id: userId,
-        topics: topics as unknown as object,
-        sources: sourceList as unknown as object,
+        topics: topics as any,
+        sources: sourceList as any,
       })
       .select("id, generated_at")
       .single();
