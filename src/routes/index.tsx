@@ -30,20 +30,20 @@ function Home() {
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
-      setSignedIn(!!data.session);
+      const isIn = !!data.session;
+      setSignedIn(isIn);
       setAuthReady(true);
+      if (!isIn) router.navigate({ to: "/auth", replace: true });
     });
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
       setSignedIn(!!session);
+      if (!session) router.navigate({ to: "/auth", replace: true });
     });
     return () => sub.subscription.unsubscribe();
-  }, []);
+  }, [router]);
 
-  if (!authReady) {
+  if (!authReady || !signedIn) {
     return <FullScreenCanvas><BootingOrb /></FullScreenCanvas>;
-  }
-  if (!signedIn) {
-    return <FullScreenCanvas><LandingHero onSignIn={() => router.navigate({ to: "/auth" })} /></FullScreenCanvas>;
   }
   return <FullScreenCanvas><BriefingSurface /></FullScreenCanvas>;
 }
