@@ -1,112 +1,72 @@
+## Goal
 
-# NewsPilot — AI-native voice news agent
+Give the user **every distinct story breaking today**, with nothing dropped. The home surface becomes a complete browsable index of clustered topics, and the voice can read all of them (not just 5–7) in a longer, structured briefing.
 
-A voice-first news companion. Open the app, hit the orb, and a real-time agent gives you today's ~5-7 global stories in an intellectual-but-amusing tone. Interrupt anytime with your voice to go deeper. Built on ElevenLabs Conversational Agents (WebRTC, barge-in) for sub-second latency.
+## What changes
 
-## Home screen — ElevenLabs "agent speaking" aesthetic
+### 1. Wider source list (`src/lib/news/sources.ts`)
+Add ~20 majors so we don't depend on Google News alone:
+- World: Reuters World (existing), BBC World (existing), AP Top (existing), Al Jazeera, Guardian World, NYT World, NPR World, France 24, Deutsche Welle
+- US/Politics: NYT HomePage, WaPo Politics, Politico, NPR Top
+- Markets: WSJ Markets, FT (Reuters Business fallback), Bloomberg (via Google News query), CNBC Top
+- Tech: HN (existing), TechCrunch, The Verge, Ars Technica, Google News Tech
+- Science: Nature News, Science Daily, Google News Science
+- Sports / Culture: Google News + ESPN, Pitchfork/Variety
+- Google News categorized queries kept as broad-net catchers
 
-The home page mirrors ElevenLabs' conversational-agent UI: dark, near-empty canvas with one large audio-reactive orb in the center. The orb is the entire interface.
+Each source already has a `category` field; no schema change.
 
-```text
-┌──────────────────────────────────────┐
-│                                       │
-│     NewsPilot                ⚙  ↩    │
-│                                       │
-│                                       │
-│                                       │
-│              ╭─────────╮              │
-│             ╱           ╲             │   ← animated blob/orb
-│            │   ●  ● ●    │            │     soft gradient, audio-reactive
-│             ╲           ╱             │     hue shifts: idle → listening → speaking
-│              ╰─────────╯              │
-│                                       │
-│         Tap to start briefing         │
-│                                       │
-│         "Today, 7 stories • 5 min"    │
-│                                       │
-│                                       │
-│         ───────  transcript  ───────  │   ← live captions while agent speaks
-│                                       │
-│         ◐  Mute     ✕  End            │
-└──────────────────────────────────────┘
-```
+### 2. "Today" = since local midnight (`briefing.functions.ts`)
+- Replace the 18-hour cutoff with a midnight boundary in the user's timezone.
+- Read timezone from `preferences` (add a `timezone` column, default `UTC`) or fall back to a request-header-derived TZ. Store on the preferences row going forward.
+- Items without a parseable `pubDate` are kept (RSS reality).
 
-Behavior:
-- **Idle**: orb breathes slowly, subtle gradient (deep ink → muted accent).
-- **Listening (user speaking)**: orb expands & cool-shifts; ring pulses with input mic amplitude.
-- **Speaking (agent)**: orb deforms with audio-reactive blobs driven by `getOutputByteFrequencyData()`; warm accent glow.
-- **Thinking**: smooth shimmer ring around the orb.
-- **Interruptible**: tap the orb or just talk — barge-in is native to the ElevenLabs agent.
-- Live transcript fades in line-by-line beneath the orb (user lines dim, agent lines bright).
-- Minimal chrome: top-right gear + history; bottom mute/end. No nav, no cards, no clutter on the home surface.
+### 3. Don't pre-cap headlines fed to the model
+- Remove the hard `slice(0, 60)`. Instead, send the full deduped set (could be 300–800 items) but in **chunks of ~120** per LLM call, then merge.
+- Dedupe before chunking using a stronger key: normalized title + first source domain + token-shingle similarity (cheap Jaccard on 3-grams). Drops near-duplicates ("Trump signs X" vs "President Trump signs X bill").
 
-Build details:
-- Orb = `<canvas>` with WebGL/2D shader-style metaballs OR a layered SVG/CSS implementation using `radial-gradient` + Motion for React for the breathing/scale, with frequency data mapped to blob radii. Start with the CSS+canvas approach (no Three.js) — keeps it light and matches the design-direction envelope.
-- Hue/scale curves driven from `useConversation()` (`isSpeaking`, `getInputVolume`, `getOutputByteFrequencyData`).
-- Typography: distinctive serif display ("NewsPilot", topic titles) + clean grotesk for transcript. Color: deep ink background, off-white text, single warm accent.
+### 4. Two-pass LLM summarization
+- **Pass A — cluster**: each chunk → list of candidate clusters with member indices. Cheap model, JSON-only.
+- **Pass B — merge & write**: feed all clusters back, ask the LLM to (a) merge clusters that are the same story across chunks, (b) write the full `BriefingTopic` (headline, hook, 60–90w explanation, why it matters, follow-ups) for **every distinct cluster — no fixed count**.
+- Each topic carries **all** source URLs in its cluster (not capped at 4). UI shows "12 sources" with expand.
+- Topics ordered by cluster size × source diversity × recency.
 
-## Rest of the app (unchanged from prior plan)
+### 5. Briefing storage (`briefings` table)
+- Keep current columns; topics array just gets longer.
+- Add `total_topics`, `total_clusters_raw`, `coverage_window_start` for transparency ("47 stories from 28 sources since midnight").
 
-- **Auth** (`/auth`): email + Google sign-in via Lovable Cloud.
-- **Onboarding**: pick interest categories (World, Tech, Markets, Science, Sports, Culture). Optional — skippable.
-- **/_authenticated/history**: list past briefings; tap to open transcript + replay key points.
-- **/_authenticated/settings**: interests, voice picker, sign-out.
+### 6. UI changes (`src/routes/index.tsx`, new `BriefingList` component)
+- Below the orb, render the full clustered list (scrollable). Each row: headline, hook, source-count chip, expand for explanation + sources.
+- Voice button still plays the full briefing; topics in voice are read in the same order as the list.
+- Add a "Jump to story" affordance — tapping a row tells the voice agent to skip to that topic (overrides via the existing agent context with the current topic index).
+- "Read 47 stories aloud (~22 min)" instead of "5 stories · 5 min".
 
-## Architecture
+### 7. Voice agent prompt (`useVoiceAgent.ts`)
+- System prompt: tell the agent it has N topics, deliver them all unless interrupted, keep each topic to ~30s spoken, and accept "next" / "skip" / "go deeper" interruptions.
+- `firstMessage` mentions the real count and offers to skim headlines first.
 
-```text
-Browser (TanStack Start + React)
-  │  WebRTC audio  ─────────────►  ElevenLabs Conversational Agent
-  │                                   │  (STT + LLM + TTS + barge-in)
-  │  client tools (function calls) ◄──┘
-  │
-  └─► TanStack server fns
-        ├─ getElevenLabsToken()      → mints WebRTC token (ELEVENLABS_API_KEY server-side)
-        ├─ fetchBriefing()           → RSS pull + cluster + summarize, returns Briefing
-        ├─ deepDive(topic, question) → targeted re-search, called as agent client tool
-        └─ Supabase (briefings, messages, preferences, profiles)
-```
+### 8. Cost / latency guardrails
+- Cache briefing window from 90 min → keep it but key it on `(user_id, date)` so the same calendar day reuses results unless `force`.
+- LLM calls run in parallel per chunk; aggregate with `Promise.all`.
+- Hard ceiling at 1000 raw items / 8 chunks per generation to avoid runaway cost; log when hit.
 
-### News pipeline
-- **Sources**: Google News RSS (top + per-topic), Reuters, AP, BBC, Hacker News. Agent can request more via `deep_dive`.
-- **`fetchBriefing`** server fn:
-  1. Parallel RSS fetch (last ~12h).
-  2. Dedupe by title similarity, cluster into 5-7 topics.
-  3. Single batched call to Lovable AI (`google/gemini-3-flash-preview`) → for each cluster: hook, 60-90 word plain-English explanation, "why it matters", sources, suggested follow-ups.
-  4. Persist as `Briefing` row.
+## Open items I'd handle inline (no further questions)
+- Use Gemini Flash for clustering (cheap), Gemini Pro / GPT-4o-mini for the merge+write pass.
+- For sources that block server-side fetch (rare with RSS), silently drop and log.
 
-### Voice layer
-- One ElevenLabs Conversational Agent configured with:
-  - **System prompt**: intellectual-but-amusing news anchor; plain English; cite sources by name; never invent; ask clarifying questions when ambiguous; offer to resume the brief after a deep dive.
-  - **First message** overridden per session with today's briefing JSON injected as context.
-  - **Client tools**: `deep_dive(topic, question)`, `skip_to_topic(index)`, `end_briefing()`.
-  - VAD + interruption enabled.
-- WebRTC token minted server-side; client uses `@elevenlabs/react` `useConversation`.
-- Transcript streamed into Supabase `messages` per briefing.
+## Technical details
 
-### Data model (Lovable Cloud)
-- `profiles` (id → auth.users, display_name)
-- `preferences` (user_id, categories text[], voice_id)
-- `briefings` (id, user_id, generated_at, topics jsonb, sources jsonb)
-- `messages` (id, briefing_id, user_id, role, content, created_at)
-- RLS per-user on all four.
+**Files touched**
+- `src/lib/news/sources.ts` — expand registry to ~30 feeds
+- `src/lib/news/rss.ts` — no change (already tolerant)
+- `src/lib/news/briefing.functions.ts` — rewrite the pipeline: midnight cutoff, stronger dedupe, two-pass LLM, uncapped topics
+- `src/lib/news/cluster.ts` *(new)* — Jaccard-shingle helper for dedupe/cluster scoring
+- `src/components/BriefingList.tsx` *(new)* — expandable topic list
+- `src/routes/index.tsx` — render list under the orb, update subtitle/CTA copy
+- `src/hooks/useVoiceAgent.ts` — updated system prompt + first message
+- Migration: add `timezone TEXT DEFAULT 'UTC'` to `preferences`; add `total_topics INT`, `coverage_window_start TIMESTAMPTZ` to `briefings`
 
-### Latency targets
-- Briefing generation: < 6s (parallel RSS + one batched LLM call).
-- Voice round-trip: < 800ms (WebRTC + ElevenLabs Turbo).
-- Mid-conversation `deep_dive`: < 3s.
-
-## Stack
-TanStack Start • Lovable Cloud (Supabase auth + Postgres) • Lovable AI Gateway (Gemini 3 Flash) • ElevenLabs Conversational Agent + `@elevenlabs/react` • Motion for React.
-
-## Build order
-1. Enable Lovable Cloud; schema + RLS; auth (email + Google).
-2. Connect ElevenLabs; I'll provide the exact agent config (system prompt + client-tool JSON) for you to paste into the ElevenLabs dashboard, then save the agent ID as a secret.
-3. Server fns: news pipeline + briefing storage + token minting.
-4. Home screen: audio-reactive orb + transcript + `useConversation` wiring.
-5. History + settings + onboarding.
-6. Polish pass.
-
-## What I'll need from you mid-build
-- A moment to create the agent in your ElevenLabs account (config provided, ~2 min).
-- Pick a default voice — suggested **Brian** (`nPczCjzI2devNBz1zQrb`), warm and anchor-like.
+**Out of scope (call out if you want them)**
+- Per-region / per-language editions
+- Push notifications when major news breaks mid-day
+- User-tunable density slider ("show me 10 vs 50 stories")
