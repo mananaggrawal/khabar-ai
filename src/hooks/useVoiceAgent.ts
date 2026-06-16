@@ -27,6 +27,7 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
   const freqRef = useRef<Uint8Array | null>(null);
   const rafRef = useRef<number | null>(null);
   const briefingIdRef = useRef<string | null>(null);
+  const pendingKickoffRef = useRef<{ context: string; opener: string } | null>(null);
 
   useEffect(() => { briefingIdRef.current = briefing?.id ?? null; }, [briefing]);
 
@@ -34,12 +35,26 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
   const persistMessage = useServerFn(saveMessage);
 
   const conversation = useConversation({
-    onConnect: () => console.log("[voice] connected"),
+    onConnect: () => {
+      console.log("[voice] connected");
+      const kickoff = pendingKickoffRef.current;
+      pendingKickoffRef.current = null;
+      if (!kickoff) return;
+      try {
+        conversation.sendContextualUpdate?.(kickoff.context);
+        conversation.sendUserMessage?.(kickoff.opener);
+      } catch (e) {
+        console.warn("[voice] kickoff failed", e);
+      }
+    },
     onDisconnect: () => {
       setAmplitude(0);
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     },
-    onError: (err) => console.error("[voice] error", err),
+    onError: (err: any) => {
+      console.error("[voice] error", err);
+      setConfigError("upstream_error");
+    },
     onMessage: (msg: any) => {
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const bid = briefingIdRef.current;
