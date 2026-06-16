@@ -16,6 +16,12 @@ export type BriefingTopic = {
   sources: { name: string; url: string }[];
   followUps: string[];
   tier: BriefingTier;
+  // Enrichment pack (optional — populated by enrichTopics after scrape)
+  deepBrief?: string;
+  background?: string;
+  keyFacts?: string[];
+  qa?: { q: string; a: string }[];
+  articleExcerpts?: { source: string; url: string; excerpt: string }[];
 };
 
 export type Briefing = {
