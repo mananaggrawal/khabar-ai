@@ -138,7 +138,7 @@ function BriefingSurface() {
     : briefingQuery.isError
     ? "Couldn't load the briefing. Tap retry."
     : connected
-    ? voice.orbState === "speaking" ? "NewsPilot is speaking" : "Listening — say 'next', 'skip', or 'go deeper'"
+    ? "On air — say 'next', 'skip', or 'go deeper' anytime"
     : `${topicCount} ${topicCount === 1 ? "story" : "stories"} today · ~15 min spoken`;
 
   return (
