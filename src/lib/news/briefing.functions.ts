@@ -449,7 +449,7 @@ CONTENT RULES:
     // so users always see every home story we have (up to the cap).
     const targetHome = Math.min(homeCap, homeClusters.length);
     if (home.length < targetHome) {
-      const usedUrls = new Set(home.flatMap((t) => t.sources.map((s) => s.url)));
+      const usedUrls = new Set(home.flatMap((t: BriefingTopic) => t.sources.map((s) => s.url)));
       for (const c of homeClusters) {
         if (home.length >= targetHome) break;
         const clusterUrls = c.items.map((it) => it.link);
