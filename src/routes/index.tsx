@@ -7,6 +7,7 @@ import { History, MicOff, Mic, Settings, X, Loader2, AlertTriangle } from "lucid
 import { ConversationProvider } from "@elevenlabs/react";
 
 import { VoiceOrb } from "@/components/VoiceOrb";
+import { BriefingList } from "@/components/BriefingList";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { fetchBriefing, type Briefing } from "@/lib/news/briefing.functions";
@@ -107,15 +108,18 @@ function LandingHero({ onSignIn }: { onSignIn: () => void }) {
 
 function BriefingSurface() {
   const fetchFn = useServerFn(fetchBriefing);
+  const tz = useMemo(() => {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch { return "UTC"; }
+  }, []);
   const briefingQuery = useQuery({
-    queryKey: ["briefing"],
-    queryFn: () => fetchFn({ data: {} }),
+    queryKey: ["briefing", tz],
+    queryFn: () => fetchFn({ data: { timezone: tz } }),
     staleTime: 60 * 60 * 1000,
     retry: 1,
   });
   const refresh = useMutation({
-    mutationFn: () => fetchFn({ data: { force: true } }),
-    onSuccess: (data) => briefingQuery.refetch(),
+    mutationFn: () => fetchFn({ data: { force: true, timezone: tz } }),
+    onSuccess: () => briefingQuery.refetch(),
   });
 
   const briefing: Briefing | null = briefingQuery.data ?? null;
@@ -128,20 +132,20 @@ function BriefingSurface() {
   }), []);
 
   const topicCount = briefing?.topics.length ?? 0;
-  const minutes = Math.max(3, topicCount);
+  const minutes = Math.max(3, Math.round(topicCount * 0.5));
   const subtitle = briefingQuery.isLoading
-    ? "Gathering the day's stories…"
+    ? "Gathering every story from today…"
     : briefingQuery.isError
     ? "Couldn't load the briefing. Tap retry."
     : connected
-    ? voice.orbState === "speaking" ? "NewsPilot is speaking" : "Listening — talk anytime"
-    : `${topicCount} ${topicCount === 1 ? "story" : "stories"} · about ${minutes} min`;
+    ? voice.orbState === "speaking" ? "NewsPilot is speaking" : "Listening — say 'next', 'skip', or 'go deeper'"
+    : `${topicCount} ${topicCount === 1 ? "story" : "stories"} today · about ${minutes} min spoken`;
 
   return (
     <>
       <TopBar />
-      <main className="flex flex-1 flex-col items-center justify-between px-6 pb-8">
-        <div className="flex flex-1 flex-col items-center justify-center gap-8">
+      <main className="flex flex-1 flex-col items-center px-6 pb-8">
+        <div className="flex w-full flex-col items-center gap-6 pt-2">
           <div className="text-center text-xs uppercase tracking-[0.25em] text-muted-foreground">
             {dateLabel}
           </div>
@@ -150,7 +154,7 @@ function BriefingSurface() {
             state={voice.orbState}
             amplitude={voice.amplitude}
             frequencyData={voice.frequencyData}
-            size={300}
+            size={220}
             onClick={() => {
               if (briefingQuery.isError) { refresh.mutate(); return; }
               if (!briefing) return;
@@ -160,7 +164,7 @@ function BriefingSurface() {
 
           <div className="flex min-h-[3rem] flex-col items-center gap-2 text-center">
             <p className="font-serif text-2xl tracking-tight">
-              {connected ? "NewsPilot" : "Tap to start briefing"}
+              {connected ? "NewsPilot" : briefing ? "Tap to play the full briefing" : "NewsPilot"}
             </p>
             <p className="text-sm text-muted-foreground">{subtitle}</p>
             {voice.configError && (
@@ -172,44 +176,56 @@ function BriefingSurface() {
               </p>
             )}
           </div>
-        </div>
 
-        <Transcript lines={voice.transcript} />
+          <Transcript lines={voice.transcript} />
 
-        <div className="mt-6 flex items-center gap-3">
-          {connected ? (
-            <>
+          <div className="flex items-center gap-3">
+            {connected ? (
+              <>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setMuted((m) => !m)}
+                  className="rounded-full text-muted-foreground hover:text-foreground"
+                >
+                  {muted ? <MicOff className="size-4" /> : <Mic className="size-4" />}
+                  {muted ? "Muted" : "Mic on"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => voice.stop()}
+                  className="rounded-full text-muted-foreground hover:text-foreground"
+                >
+                  <X className="size-4" /> End
+                </Button>
+              </>
+            ) : (
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => setMuted((m) => !m)}
+                onClick={() => refresh.mutate()}
+                disabled={refresh.isPending || briefingQuery.isLoading}
                 className="rounded-full text-muted-foreground hover:text-foreground"
               >
-                {muted ? <MicOff className="size-4" /> : <Mic className="size-4" />}
-                {muted ? "Muted" : "Mic on"}
+                {refresh.isPending && <Loader2 className="size-4 animate-spin" />}
+                Refresh briefing
               </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => voice.stop()}
-                className="rounded-full text-muted-foreground hover:text-foreground"
-              >
-                <X className="size-4" /> End
-              </Button>
-            </>
-          ) : (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => refresh.mutate()}
-              disabled={refresh.isPending || briefingQuery.isLoading}
-              className="rounded-full text-muted-foreground hover:text-foreground"
-            >
-              {refresh.isPending && <Loader2 className="size-4 animate-spin" />}
-              Refresh briefing
-            </Button>
-          )}
+            )}
+          </div>
         </div>
+
+        {briefing && briefing.topics.length > 0 && (
+          <div className="mt-10 w-full max-w-2xl">
+            <BriefingList
+              topics={briefing.topics}
+              onJumpTo={(i) => {
+                if (connected) return; // future: agent-side jump while connected
+                voice.start(i);
+              }}
+            />
+          </div>
+        )}
       </main>
     </>
   );

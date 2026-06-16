@@ -16,27 +16,36 @@ export type Database = {
     Tables: {
       briefings: {
         Row: {
+          coverage_window_start: string | null
           created_at: string
           generated_at: string
           id: string
           sources: Json
           topics: Json
+          total_clusters_raw: number | null
+          total_topics: number | null
           user_id: string
         }
         Insert: {
+          coverage_window_start?: string | null
           created_at?: string
           generated_at?: string
           id?: string
           sources?: Json
           topics: Json
+          total_clusters_raw?: number | null
+          total_topics?: number | null
           user_id: string
         }
         Update: {
+          coverage_window_start?: string | null
           created_at?: string
           generated_at?: string
           id?: string
           sources?: Json
           topics?: Json
+          total_clusters_raw?: number | null
+          total_topics?: number | null
           user_id?: string
         }
         Relationships: []
@@ -79,18 +88,21 @@ export type Database = {
       preferences: {
         Row: {
           categories: string[]
+          timezone: string
           updated_at: string
           user_id: string
           voice_id: string
         }
         Insert: {
           categories?: string[]
+          timezone?: string
           updated_at?: string
           user_id: string
           voice_id?: string
         }
         Update: {
           categories?: string[]
+          timezone?: string
           updated_at?: string
           user_id?: string
           voice_id?: string
