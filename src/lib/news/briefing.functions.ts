@@ -83,7 +83,9 @@ export const fetchBriefing = createServerFn({ method: "POST" })
           tier: (t.tier as BriefingTier) ?? "world",
         }));
         const hasExpectedHome = homeCountry === "global" || topics.some((t) => t.tier === "home");
-        if (hasExpectedHome) {
+        const firstNonQuick = topics.find((t) => t.tier !== "quick_hit");
+        const hasEnrichment = !!firstNonQuick?.deepBrief;
+        if (hasExpectedHome && hasEnrichment) {
           return {
             id: recent.id,
             generatedAt: recent.generated_at,
@@ -94,7 +96,8 @@ export const fetchBriefing = createServerFn({ method: "POST" })
             homeCountry,
           };
         }
-        console.warn("[briefing] cached briefing missing home tier; regenerating", recent.id);
+        if (!hasExpectedHome) console.warn("[briefing] cached briefing missing home tier; regenerating", recent.id);
+        else console.warn("[briefing] cached briefing missing enrichment; regenerating", recent.id);
       }
     }
 
