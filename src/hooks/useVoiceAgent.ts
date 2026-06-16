@@ -102,9 +102,11 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
       const firstMessage = typeof jumpToIndex === "number"
         ? buildJumpMessage(briefing, jumpToIndex)
         : buildFirstMessage(briefing);
-      const briefingContext = buildBriefingContext(briefing);
+      // Keep prompt SMALL — large overrides cause WebRTC 1006 close.
+      // Push the full briefing via contextual update after connect.
+      const compactIndex = buildCompactIndex(briefing);
       const startNote = typeof jumpToIndex === "number"
-        ? `\n\nUSER TAPPED STORY #${jumpToIndex + 1}. Start there and continue from that point unless interrupted.`
+        ? `\n\nUSER TAPPED STORY #${jumpToIndex + 1}. Start there.`
         : "";
       await conversation.startSession({
         conversationToken: tokenRes.token,
@@ -112,10 +114,21 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         overrides: {
           agent: {
             firstMessage,
-            prompt: { prompt: AGENT_SYSTEM_PROMPT + "\n\nTODAY'S BRIEFING JSON:\n" + briefingContext + startNote },
+            prompt: { prompt: AGENT_SYSTEM_PROMPT + "\n\nTODAY'S HEADLINES (compact index):\n" + compactIndex + startNote },
           },
         },
       } as any);
+      // After connect, ship the full briefing as context (no size pressure on prompt limit).
+      const full = buildBriefingContext(briefing);
+      setTimeout(() => {
+        try {
+          conversation.sendContextualUpdate?.(
+            "FULL BRIEFING DATA (use this for explanations, why-it-matters, and sources):\n" + full,
+          );
+        } catch (e) {
+          console.warn("[voice] contextual update failed", e);
+        }
+      }, 600);
     } catch (e) {
       console.error("[voice] start failed", e);
       setConfigError("upstream_error");
@@ -123,6 +136,7 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
       setIsStarting(false);
     }
   }, [briefing, conversation, mintToken]);
+
 
   const stop = useCallback(async () => {
     await conversation.endSession();
