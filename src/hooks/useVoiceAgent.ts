@@ -159,6 +159,12 @@ function buildFirstMessage(b: Briefing): string {
   return `Good day. I've got ${n} ${n === 1 ? "story" : "stories"} for you today — roughly ${minutes} minutes end-to-end. Want me to run the whole briefing, or skim the headlines first? Either way, interrupt anytime.`;
 }
 
+function buildJumpMessage(b: Briefing, i: number): string {
+  const t = b.topics[i];
+  if (!t) return buildFirstMessage(b);
+  return `Jumping to story ${i + 1} of ${b.topics.length}: ${t.headline}. Here we go.`;
+}
+
 function buildBriefingContext(b: Briefing): string {
   return JSON.stringify({
     generatedAt: b.generatedAt,
