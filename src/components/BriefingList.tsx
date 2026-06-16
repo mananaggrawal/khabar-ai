@@ -27,10 +27,17 @@ export function BriefingList({ topics, onJumpTo, activeIndex }: Props) {
               isActive ? "ring-1 ring-primary/40" : ""
             }`}
           >
-            <button
-              type="button"
+            <div
+              role="button"
+              tabIndex={0}
               onClick={() => setOpenId(isOpen ? null : t.id)}
-              className="flex w-full items-start gap-3 px-4 py-3 text-left"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setOpenId(isOpen ? null : t.id);
+                }
+              }}
+              className="flex w-full cursor-pointer items-start gap-3 px-4 py-3 text-left"
             >
               <span className="mt-1 w-6 shrink-0 text-xs tabular-nums text-muted-foreground">
                 {String(i + 1).padStart(2, "0")}
@@ -46,6 +53,7 @@ export function BriefingList({ topics, onJumpTo, activeIndex }: Props) {
                   <span>{t.sources.length} {t.sources.length === 1 ? "source" : "sources"}</span>
                   {onJumpTo && (
                     <button
+                      type="button"
                       onClick={(e) => { e.stopPropagation(); onJumpTo(i); }}
                       className="inline-flex items-center gap-1 rounded-full bg-white/5 px-2 py-0.5 hover:bg-white/10 hover:text-foreground"
                     >
@@ -59,7 +67,7 @@ export function BriefingList({ topics, onJumpTo, activeIndex }: Props) {
                   isOpen ? "rotate-180" : ""
                 }`}
               />
-            </button>
+            </div>
             <AnimatePresence initial={false}>
               {isOpen && (
                 <motion.div
