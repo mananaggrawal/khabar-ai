@@ -168,6 +168,17 @@ export const fetchBriefing = createServerFn({ method: "POST" })
       homeCountry,
     );
 
+    // Enrich main topics (home + world) with deep article context so the agent
+    // can answer follow-ups without saying "I don't know". Quick hits skipped.
+    const apiKeyForEnrich = process.env.LOVABLE_API_KEY;
+    const firecrawlKey = process.env.FIRECRAWL_API_KEY;
+    if (apiKeyForEnrich && firecrawlKey) {
+      const enrichable = [...tiered.home, ...tiered.world];
+      await enrichTopics(enrichable, apiKeyForEnrich, firecrawlKey);
+    } else {
+      console.warn("[briefing] enrichment skipped — missing FIRECRAWL_API_KEY or LOVABLE_API_KEY");
+    }
+
     // Flatten for legacy `topics` column / consumers.
     const topics: BriefingTopic[] = [...tiered.home, ...tiered.world, ...tiered.quickHits];
 
