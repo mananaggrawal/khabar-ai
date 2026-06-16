@@ -3,6 +3,7 @@ import { useConversation } from "@elevenlabs/react";
 import { useServerFn } from "@tanstack/react-start";
 import { getElevenLabsToken } from "@/lib/voice/elevenlabs.functions";
 import { saveMessage } from "@/lib/voice/messages.functions";
+import { searchTopicLive } from "@/lib/news/search.functions";
 import type { Briefing } from "@/lib/news/briefing.functions";
 import type { OrbState } from "@/components/VoiceOrb";
 
@@ -27,14 +28,55 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
   const freqRef = useRef<Uint8Array | null>(null);
   const rafRef = useRef<number | null>(null);
   const briefingIdRef = useRef<string | null>(null);
+  const briefingRef = useRef<Briefing | null>(null);
   const pendingKickoffRef = useRef<{ context: string; opener: string } | null>(null);
 
-  useEffect(() => { briefingIdRef.current = briefing?.id ?? null; }, [briefing]);
+  useEffect(() => {
+    briefingIdRef.current = briefing?.id ?? null;
+    briefingRef.current = briefing;
+  }, [briefing]);
 
   const mintToken = useServerFn(getElevenLabsToken);
   const persistMessage = useServerFn(saveMessage);
+  const liveSearch = useServerFn(searchTopicLive);
 
   const conversation = useConversation({
+    clientTools: {
+      // The agent calls this when the briefing pack doesn't cover a follow-up.
+      // Register a matching tool on the ElevenLabs agent dashboard:
+      //   name: searchTopic
+      //   params: topicId (string), query (string)
+      searchTopic: async (params: { topicId?: string; query?: string }) => {
+        const b = briefingRef.current;
+        const q = (params?.query ?? "").trim();
+        if (!b || !q) return "No active briefing or empty query.";
+        const topic =
+          b.topics.find((t) => t.id === params?.topicId) ??
+          b.topics[0];
+        const headline = topic?.headline ?? "today's news";
+        // Surface a small "looking it up" line in the transcript so the user
+        // sees the agent is going to the web.
+        setTranscript((t) => [
+          ...t,
+          {
+            id: `${Date.now()}-search`,
+            role: "agent",
+            text: `🔎 Looking that up — "${q}"`,
+            at: Date.now(),
+          },
+        ]);
+        try {
+          const res = await liveSearch({ data: { headline, query: q } });
+          if (!res.ok || !res.answer) return res.answer || "No fresh sources found.";
+          return res.sourceName
+            ? `${res.answer} (Source: ${res.sourceName})`
+            : res.answer;
+        } catch (e) {
+          console.error("[voice] searchTopic failed", e);
+          return "I couldn't reach the web just now.";
+        }
+      },
+    },
     onConnect: () => {
       console.log("[voice] connected");
       const kickoff = pendingKickoffRef.current;
@@ -195,16 +237,24 @@ const COUNTRY_LABELS: Record<string, string> = {
 const AGENT_SYSTEM_PROMPT = `You are Khabar AI, an AI-native news anchor. Intellectual but warm and conversational — like a well-read friend catching you up over chai. Speak slowly, casually, with natural pauses. Avoid stiff broadcaster cadence; use everyday words.
 
 Rules:
-- The TODAY'S BRIEFING JSON below is your ONLY source of truth. It is organised in three tiers: HOME (the user's country), WORLD (everywhere else), and QUICK HITS (one-liners).
+- The TODAY'S BRIEFING JSON below is your ONLY source of truth for the spoken brief. It is organised in three tiers: HOME (the user's country), WORLD (everywhere else), and QUICK HITS (one-liners).
 - Total runtime target: ~15 minutes. Roughly 7 min HOME, 4 min WORLD, 3 min QUICK HITS. Do not pad. Do not invent.
 - Open EXACTLY with: "Welcome to Khabar AI. We'll catch you up on what's happening and why it matters." Then in one short, casual sentence tell them what's in today's briefing and that they can interrupt anytime ("say 'next' to skip, 'go deeper' if you want more").
+- For the spoken briefing, use each topic's "hook", "explanation", and "whyItMatters" fields.
 - HOME and WORLD topics: hook → 1–2 sentence explanation → one sentence on why it matters. Cite an outlet by name when natural. ~25 seconds each. Speak slowly and naturally.
 - QUICK HITS: one sentence each. Move fast but still casual.
 - Announce section transitions casually: "Alright, now around the world…" / "And finally, the quick hits…"
 - Accept "next" / "skip", "go deeper" / "tell me more", "jump to <topic>".
-- If asked about something not in the briefing, say so honestly.
 - If the user tapped a specific story, start from that topic and continue in order.
-- If RESUMING a previous session, do NOT replay the welcome — just say something brief like "Picking up where we left off" and continue from the next story.`;
+- If RESUMING a previous session, do NOT replay the welcome — just say something brief like "Picking up where we left off" and continue from the next story.
+
+ANSWERING FOLLOW-UP QUESTIONS (very important):
+- Each topic in the briefing JSON also carries a REFERENCE PACK: "deepBrief" (longer narrative), "background" (history/context), "keyFacts" (numbers, names, dates, direct quotes), "qa" (pre-answered likely questions), and "articleExcerpts" (raw passages from the original sources). When the user asks for more detail, "go deeper", "who said that", "how much", "what happened before", etc., draw your answer from THIS PACK first — it is grounded in the actual articles.
+- "go deeper" / "tell me more" → expand using deepBrief + 1-2 keyFacts, in a natural conversational way (don't read the JSON).
+- Specific factual questions → answer from keyFacts or qa when possible; cite the source name.
+- If the pack truly doesn't cover the question, CALL THE "searchTopic" TOOL with { topicId: <current topic id>, query: <user's question> } to fetch a fresh answer from the live web. Say something brief like "let me look that up" before calling. Use the tool's returned text as your answer and cite the source it gives you.
+- NEVER say "I don't have that information" or "I don't know" as a final answer. Either answer from the pack, or call searchTopic, or honestly say "let me check" and then call searchTopic.
+- For questions completely unrelated to today's news, you may answer briefly from general knowledge, but prefer searchTopic for anything time-sensitive.`;
 
 function tierLabel(tier?: string) {
   if (tier === "home") return "HOME";
@@ -285,15 +335,31 @@ function buildBriefingContext(b: Briefing): string {
     generatedAt: b.generatedAt,
     homeCountry: b.homeCountry,
     totalTopics: b.topics.length,
-    topics: b.topics.map((t, i) => ({
-      n: i + 1,
-      tier: tierLabel(t.tier),
-      headline: t.headline,
-      hook: t.hook,
-      explanation: t.explanation,
-      whyItMatters: t.whyItMatters,
-      sources: t.sources.slice(0, 6).map((s) => s.name),
-    })),
+    topics: b.topics.map((t, i) => {
+      const base: Record<string, unknown> = {
+        n: i + 1,
+        id: t.id,
+        tier: tierLabel(t.tier),
+        headline: t.headline,
+        hook: t.hook,
+        explanation: t.explanation,
+        whyItMatters: t.whyItMatters,
+        sources: t.sources.slice(0, 6).map((s) => s.name),
+      };
+      if (t.tier !== "quick_hit") {
+        if (t.deepBrief) base.deepBrief = t.deepBrief;
+        if (t.background) base.background = t.background;
+        if (t.keyFacts?.length) base.keyFacts = t.keyFacts;
+        if (t.qa?.length) base.qa = t.qa;
+        if (t.articleExcerpts?.length) {
+          base.articleExcerpts = t.articleExcerpts.map((e) => ({
+            source: e.source,
+            excerpt: e.excerpt.slice(0, 600),
+          }));
+        }
+      }
+      return base;
+    }),
   });
 }
 

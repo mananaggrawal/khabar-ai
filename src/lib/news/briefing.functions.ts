@@ -16,6 +16,12 @@ export type BriefingTopic = {
   sources: { name: string; url: string }[];
   followUps: string[];
   tier: BriefingTier;
+  // Enrichment pack (optional — populated by enrichTopics after scrape)
+  deepBrief?: string;
+  background?: string;
+  keyFacts?: string[];
+  qa?: { q: string; a: string }[];
+  articleExcerpts?: { source: string; url: string; excerpt: string }[];
 };
 
 export type Briefing = {
@@ -37,6 +43,12 @@ const HOME_MIN_ITEMS = 24;
 
 // Per-tier caps that target a ~15 min spoken briefing (~150 wpm).
 const TIER_CAPS = { home: 8, world: 6, quick_hit: 6 } as const;
+
+// Enrichment guardrails
+const ENRICH_CONCURRENCY = 4;
+const ENRICH_SOURCES_PER_TOPIC = 3;
+const FIRECRAWL_SCRAPE_TIMEOUT_MS = 12000;
+const FIRECRAWL_BASE = "https://api.firecrawl.dev/v2";
 
 export const fetchBriefing = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -71,7 +83,9 @@ export const fetchBriefing = createServerFn({ method: "POST" })
           tier: (t.tier as BriefingTier) ?? "world",
         }));
         const hasExpectedHome = homeCountry === "global" || topics.some((t) => t.tier === "home");
-        if (hasExpectedHome) {
+        const firstNonQuick = topics.find((t) => t.tier !== "quick_hit");
+        const hasEnrichment = !!firstNonQuick?.deepBrief;
+        if (hasExpectedHome && hasEnrichment) {
           return {
             id: recent.id,
             generatedAt: recent.generated_at,
@@ -82,7 +96,8 @@ export const fetchBriefing = createServerFn({ method: "POST" })
             homeCountry,
           };
         }
-        console.warn("[briefing] cached briefing missing home tier; regenerating", recent.id);
+        if (!hasExpectedHome) console.warn("[briefing] cached briefing missing home tier; regenerating", recent.id);
+        else console.warn("[briefing] cached briefing missing enrichment; regenerating", recent.id);
       }
     }
 
@@ -152,6 +167,17 @@ export const fetchBriefing = createServerFn({ method: "POST" })
       chunk(worldCapped, CHUNK_SIZE),
       homeCountry,
     );
+
+    // Enrich main topics (home + world) with deep article context so the agent
+    // can answer follow-ups without saying "I don't know". Quick hits skipped.
+    const apiKeyForEnrich = process.env.LOVABLE_API_KEY;
+    const firecrawlKey = process.env.FIRECRAWL_API_KEY;
+    if (apiKeyForEnrich && firecrawlKey) {
+      const enrichable = [...tiered.home, ...tiered.world];
+      await enrichTopics(enrichable, apiKeyForEnrich, firecrawlKey);
+    } else {
+      console.warn("[briefing] enrichment skipped — missing FIRECRAWL_API_KEY or LOVABLE_API_KEY");
+    }
 
     // Flatten for legacy `topics` column / consumers.
     const topics: BriefingTopic[] = [...tiered.home, ...tiered.world, ...tiered.quickHits];
@@ -555,4 +581,139 @@ function fallbackTopics(items: RssItem[], tier: BriefingTier): BriefingTopic[] {
     followUps: [],
     tier,
   }));
+}
+
+// ───────────────────── Topic enrichment (Firecrawl + LLM) ─────────────────────
+
+type FirecrawlScrape = { url: string; source: string; markdown: string };
+
+async function firecrawlScrape(
+  url: string,
+  source: string,
+  firecrawlKey: string,
+): Promise<FirecrawlScrape | null> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), FIRECRAWL_SCRAPE_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${FIRECRAWL_BASE}/scrape`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${firecrawlKey}`,
+      },
+      body: JSON.stringify({
+        url,
+        formats: ["markdown"],
+        onlyMainContent: true,
+        waitFor: 0,
+      }),
+      signal: ctrl.signal,
+    });
+    if (!res.ok) {
+      if (res.status === 402) console.warn("[enrich] firecrawl credits exhausted");
+      return null;
+    }
+    const json: any = await res.json();
+    const md: string | undefined = json?.data?.markdown ?? json?.markdown;
+    if (!md || typeof md !== "string") return null;
+    // Cap to keep prompt small
+    return { url, source, markdown: md.slice(0, 8000) };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function enrichOneTopic(
+  topic: BriefingTopic,
+  lovableKey: string,
+  firecrawlKey: string,
+): Promise<void> {
+  const sources = topic.sources.slice(0, ENRICH_SOURCES_PER_TOPIC);
+  if (sources.length === 0) return;
+
+  const scrapes = (
+    await Promise.all(sources.map((s) => firecrawlScrape(s.url, s.name, firecrawlKey)))
+  ).filter((x): x is FirecrawlScrape => !!x);
+
+  if (scrapes.length === 0) return;
+
+  const articleBlock = scrapes
+    .map((s, i) => `=== ARTICLE ${i + 1} — ${s.source} (${s.url}) ===\n${s.markdown}`)
+    .join("\n\n");
+
+  const system = `You build reference packs for a voice news agent. The agent reads the pack to answer user follow-up questions about a story. Output STRICT JSON only — no markdown, no commentary.`;
+
+  const user = `STORY: ${topic.headline}
+HOOK: ${topic.hook}
+CURRENT SHORT SUMMARY: ${topic.explanation}
+
+SOURCE ARTICLES:
+${articleBlock}
+
+TASK: Build a comprehensive reference pack the agent can use to answer ANY plausible follow-up question about this story.
+
+Return STRICT JSON:
+{
+  "deepBrief": "~250-350 word narrative explanation. Cover: what happened, who's involved, when/where, the mechanism or details, current state. Conversational tone, no headers, no bullets.",
+  "background": "~80-150 words on history, prior events, why this story exists now. Plain prose.",
+  "keyFacts": [ "exact numbers, names, dates, dollar amounts, percentages, direct quotes (with attribution) — one fact per array entry. 6-12 entries." ],
+  "qa": [
+    { "q": "natural follow-up question a listener might ask", "a": "concise grounded answer, 1-3 sentences, citing the source name when relevant" }
+  ]
+}
+
+RULES:
+- Generate 4-6 Q&A pairs covering the most likely follow-ups: who/what/when/where/why/how, financial impact, reactions, what's next.
+- Every fact and answer MUST be grounded in the source articles above. If something isn't in the articles, OMIT it — do not invent.
+- Quotes go in keyFacts with attribution, e.g. '"We will respond firmly" — Modi, addressing parliament'.
+- Keep deepBrief and answers in clean, conversational English suitable for a voice agent to read aloud verbatim.`;
+
+  try {
+    const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${lovableKey}` },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [{ role: "system", content: system }, { role: "user", content: user }],
+        response_format: { type: "json_object" },
+      }),
+    });
+    if (!res.ok) {
+      console.error("[enrich] LLM call failed", res.status, await res.text());
+      return;
+    }
+    const json = await res.json();
+    const parsed = JSON.parse(json.choices?.[0]?.message?.content ?? "{}");
+
+    if (typeof parsed.deepBrief === "string") topic.deepBrief = parsed.deepBrief;
+    if (typeof parsed.background === "string") topic.background = parsed.background;
+    if (Array.isArray(parsed.keyFacts)) {
+      topic.keyFacts = parsed.keyFacts.slice(0, 14).map((f: any) => String(f)).filter(Boolean);
+    }
+    if (Array.isArray(parsed.qa)) {
+      topic.qa = parsed.qa
+        .slice(0, 8)
+        .map((p: any) => ({ q: String(p?.q ?? ""), a: String(p?.a ?? "") }))
+        .filter((p: { q: string; a: string }) => p.q && p.a);
+    }
+    topic.articleExcerpts = scrapes.map((s) => ({
+      source: s.source,
+      url: s.url,
+      excerpt: s.markdown.slice(0, 800),
+    }));
+  } catch (e) {
+    console.error("[enrich] error for topic", topic.id, e);
+  }
+}
+
+async function enrichTopics(
+  topics: BriefingTopic[],
+  lovableKey: string,
+  firecrawlKey: string,
+): Promise<void> {
+  await mapLimit(topics, ENRICH_CONCURRENCY, (t) =>
+    enrichOneTopic(t, lovableKey, firecrawlKey),
+  );
 }
