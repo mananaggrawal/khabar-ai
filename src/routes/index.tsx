@@ -17,9 +17,9 @@ import { useVoiceAgent } from "@/hooks/useVoiceAgent";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "NewsPilot — Today's news, spoken." },
+      { title: "Khabar AI — Today's news, spoken." },
       { name: "description", content: "An AI-native voice agent that hears, learns, and discusses the day's global news with you. Tap once to listen." },
-      { property: "og:title", content: "NewsPilot — Today's news, spoken." },
+      { property: "og:title", content: "Khabar AI — Today's news, spoken." },
       { property: "og:description", content: "Voice-first daily news briefing. Interrupt anytime to go deeper." },
     ],
   }),
@@ -164,7 +164,7 @@ function BriefingSurface() {
 
           <div className="flex min-h-[3rem] flex-col items-center gap-2 text-center">
             <p className="font-serif text-2xl tracking-tight">
-              {connected ? "NewsPilot" : briefing ? "Tap to play the full briefing" : "NewsPilot"}
+              {connected ? "Khabar AI" : briefing ? "Tap to play the full briefing" : "Khabar AI"}
             </p>
             <p className="text-sm text-muted-foreground">{subtitle}</p>
             {voice.configError && (
@@ -236,7 +236,7 @@ function TopBar({ minimal }: { minimal?: boolean } = {}) {
   return (
     <header className="flex items-center justify-between px-6 pt-6">
       <Link to="/" className="font-serif text-xl tracking-tight">
-        News<span className="italic text-primary">Pilot</span>
+        Khabar <span className="italic text-primary">AI</span>
       </Link>
       {!minimal && (
         <div className="flex items-center gap-1">
