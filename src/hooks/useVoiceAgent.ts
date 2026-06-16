@@ -335,15 +335,31 @@ function buildBriefingContext(b: Briefing): string {
     generatedAt: b.generatedAt,
     homeCountry: b.homeCountry,
     totalTopics: b.topics.length,
-    topics: b.topics.map((t, i) => ({
-      n: i + 1,
-      tier: tierLabel(t.tier),
-      headline: t.headline,
-      hook: t.hook,
-      explanation: t.explanation,
-      whyItMatters: t.whyItMatters,
-      sources: t.sources.slice(0, 6).map((s) => s.name),
-    })),
+    topics: b.topics.map((t, i) => {
+      const base: Record<string, unknown> = {
+        n: i + 1,
+        id: t.id,
+        tier: tierLabel(t.tier),
+        headline: t.headline,
+        hook: t.hook,
+        explanation: t.explanation,
+        whyItMatters: t.whyItMatters,
+        sources: t.sources.slice(0, 6).map((s) => s.name),
+      };
+      if (t.tier !== "quick_hit") {
+        if (t.deepBrief) base.deepBrief = t.deepBrief;
+        if (t.background) base.background = t.background;
+        if (t.keyFacts?.length) base.keyFacts = t.keyFacts;
+        if (t.qa?.length) base.qa = t.qa;
+        if (t.articleExcerpts?.length) {
+          base.articleExcerpts = t.articleExcerpts.map((e) => ({
+            source: e.source,
+            excerpt: e.excerpt.slice(0, 600),
+          }));
+        }
+      }
+      return base;
+    }),
   });
 }
 
