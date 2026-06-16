@@ -193,3 +193,9 @@ function buildBriefingContext(b: Briefing): string {
     })),
   });
 }
+
+function buildCompactIndex(b: Briefing): string {
+  return b.topics
+    .map((t, i) => `${i + 1}. ${t.headline}${t.hook ? ` — ${t.hook}` : ""}`)
+    .join("\n");
+}
