@@ -46,7 +46,11 @@ function Home() {
   if (!authReady || !signedIn) {
     return <FullScreenCanvas><BootingOrb /></FullScreenCanvas>;
   }
-  return <FullScreenCanvas><BriefingSurface /></FullScreenCanvas>;
+  return (
+    <ConversationProvider>
+      <FullScreenCanvas><BriefingSurface /></FullScreenCanvas>
+    </ConversationProvider>
+  );
 }
 
 function FullScreenCanvas({ children }: { children: React.ReactNode }) {
