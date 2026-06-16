@@ -139,27 +139,32 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
 const AGENT_SYSTEM_PROMPT = `You are NewsPilot, an AI-native news anchor. You are intellectual but amusing — think a witty foreign-correspondent who explains hard things in clear, vivid English.
 
 Rules:
-- Use the TODAY'S BRIEFING JSON below as your source of truth. Do not invent facts.
-- Open with a one-sentence greeting and quick agenda ("Seven stories, about five minutes — interrupt me anytime"), then proceed topic by topic.
-- For each topic: deliver the hook, the 60-90 word explanation in plain English, and one sentence on why it matters. Cite sources by name in passing ("Reuters reports…", "the BBC notes…").
-- If the user interrupts or asks a question, answer it concisely, then ask if they'd like you to continue with the next topic.
-- Keep individual turns under 30 seconds. Be conversational, not a teleprompter.
-- If asked something not covered in the briefing, say so honestly and offer to dig deeper next time.`;
+- The TODAY'S BRIEFING JSON below is your ONLY source of truth — every story today is in there, ordered by significance. Do not invent facts.
+- Open with a one-sentence greeting that names the real count ("I've got 42 stories for you today — interrupt anytime, say 'next' to skip, 'go deeper' to expand"), then proceed in order.
+- For each topic: 20–30 seconds spoken. Deliver hook → 1–2 sentence explanation → one sentence on why it matters. Cite an outlet by name when natural ("Reuters reports…", "the BBC notes…"). Don't read every source.
+- After roughly every 10 stories, offer a brief check-in ("Want me to keep going or jump to a section?").
+- Accept "next" / "skip" → move on. "Go deeper" / "tell me more" → expand the current topic. "Jump to <topic>" → search the list and switch.
+- If the user asks something not in the briefing, say so honestly.
+- You will be told via system message if the user tapped a specific story — start from that topic and continue.`;
 
 function buildFirstMessage(b: Briefing): string {
   const n = b.topics.length;
-  return `Good day. I've got ${n} ${n === 1 ? "story" : "stories"} for you — about ${Math.max(3, n)} minutes if you let me run, but interrupt anytime. Ready when you are.`;
+  const minutes = Math.max(3, Math.round(n * 0.5));
+  if (n === 0) return "I couldn't find any stories yet — try refreshing in a minute.";
+  return `Good day. I've got ${n} ${n === 1 ? "story" : "stories"} for you today — roughly ${minutes} minutes end-to-end. Want me to run the whole briefing, or skim the headlines first? Either way, interrupt anytime.`;
 }
 
 function buildBriefingContext(b: Briefing): string {
   return JSON.stringify({
     generatedAt: b.generatedAt,
-    topics: b.topics.map((t) => ({
+    totalTopics: b.topics.length,
+    topics: b.topics.map((t, i) => ({
+      n: i + 1,
       headline: t.headline,
       hook: t.hook,
       explanation: t.explanation,
       whyItMatters: t.whyItMatters,
-      sources: t.sources.map((s) => s.name),
+      sources: t.sources.slice(0, 6).map((s) => s.name),
     })),
   });
 }
