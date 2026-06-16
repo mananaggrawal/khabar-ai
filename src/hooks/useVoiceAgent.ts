@@ -113,10 +113,27 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         setIsStarting(false);
         return;
       }
+
+      // Resume: if no explicit jump, see if we already covered some topics in
+      // a previous session for this briefing (in-memory transcript or
+      // localStorage). Pick up from the next uncovered topic.
+      let resumeIndex: number | undefined;
+      let isResume = false;
+      if (typeof jumpToIndex !== "number") {
+        const covered = computeCoveredIndex(briefing, transcript, briefing.id);
+        if (covered >= 0 && covered < briefing.topics.length - 1) {
+          resumeIndex = covered + 1;
+          isResume = true;
+        }
+      }
+      const effectiveJump = typeof jumpToIndex === "number" ? jumpToIndex : resumeIndex;
+
       const compactIndex = buildCompactIndex(briefing);
       const fullBriefing = buildBriefingContext(briefing);
-      const jumpNote = typeof jumpToIndex === "number"
-        ? `\n\nThe user tapped story #${jumpToIndex + 1}. Begin there and continue in order.`
+      const jumpNote = isResume && typeof effectiveJump === "number"
+        ? `\n\nRESUMING a previous session. The user already heard stories 1 through ${effectiveJump}. Pick up at story #${effectiveJump + 1} and continue in order. Do NOT repeat the full intro — open with a brief "Picking up where we left off" line, then go.`
+        : typeof effectiveJump === "number"
+        ? `\n\nThe user tapped story #${effectiveJump + 1}. Begin there and continue in order.`
         : "";
       const context = [
         "SESSION RULES:",
@@ -129,8 +146,10 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         fullBriefing,
         jumpNote,
       ].join("\n");
-      const opener = typeof jumpToIndex === "number"
-        ? buildJumpMessage(briefing, jumpToIndex)
+      const opener = isResume && typeof effectiveJump === "number"
+        ? buildResumeMessage(briefing, effectiveJump)
+        : typeof effectiveJump === "number"
+        ? buildJumpMessage(briefing, effectiveJump)
         : buildFirstMessage(briefing);
       pendingKickoffRef.current = {
         context,
@@ -147,7 +166,7 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     } finally {
       setIsStarting(false);
     }
-  }, [briefing, conversation, mintToken]);
+  }, [briefing, conversation, mintToken, transcript]);
 
   const stop = useCallback(async () => {
     await conversation.endSession();
