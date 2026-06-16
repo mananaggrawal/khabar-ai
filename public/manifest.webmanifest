@@ -1,6 +1,6 @@
 {
-  "name": "NewsPilot",
-  "short_name": "NewsPilot",
+  "name": "Khabar AI",
+  "short_name": "Khabar AI",
   "description": "Today's news, spoken. A voice-first AI briefing on global affairs.",
   "start_url": "/",
   "scope": "/",

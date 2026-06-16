@@ -9,8 +9,8 @@ import { toast } from "sonner";
 export const Route = createFileRoute("/auth")({
   head: () => ({
     meta: [
-      { title: "Sign in · NewsPilot" },
-      { name: "description", content: "Sign in to NewsPilot to start your daily voice briefing." },
+      { title: "Sign in · Khabar AI" },
+      { name: "description", content: "Sign in to Khabar AI to start your daily voice briefing." },
     ],
   }),
   component: AuthPage,
@@ -55,7 +55,7 @@ function AuthPage() {
         <VoiceOrb state="idle" size={160} />
         <div className="text-center">
           <h1 className="font-serif text-5xl tracking-tight">
-            News<span className="italic text-primary">Pilot</span>
+            Khabar <span className="italic text-primary">AI</span>
           </h1>
           <p className="mt-3 text-sm text-muted-foreground">
             Today's news, spoken. Sign in to start.

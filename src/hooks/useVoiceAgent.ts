@@ -113,10 +113,27 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         setIsStarting(false);
         return;
       }
+
+      // Resume: if no explicit jump, see if we already covered some topics in
+      // a previous session for this briefing (in-memory transcript or
+      // localStorage). Pick up from the next uncovered topic.
+      let resumeIndex: number | undefined;
+      let isResume = false;
+      if (typeof jumpToIndex !== "number") {
+        const covered = computeCoveredIndex(briefing, transcript, briefing.id);
+        if (covered >= 0 && covered < briefing.topics.length - 1) {
+          resumeIndex = covered + 1;
+          isResume = true;
+        }
+      }
+      const effectiveJump = typeof jumpToIndex === "number" ? jumpToIndex : resumeIndex;
+
       const compactIndex = buildCompactIndex(briefing);
       const fullBriefing = buildBriefingContext(briefing);
-      const jumpNote = typeof jumpToIndex === "number"
-        ? `\n\nThe user tapped story #${jumpToIndex + 1}. Begin there and continue in order.`
+      const jumpNote = isResume && typeof effectiveJump === "number"
+        ? `\n\nRESUMING a previous session. The user already heard stories 1 through ${effectiveJump}. Pick up at story #${effectiveJump + 1} and continue in order. Do NOT repeat the full intro — open with a brief "Picking up where we left off" line, then go.`
+        : typeof effectiveJump === "number"
+        ? `\n\nThe user tapped story #${effectiveJump + 1}. Begin there and continue in order.`
         : "";
       const context = [
         "SESSION RULES:",
@@ -129,8 +146,10 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         fullBriefing,
         jumpNote,
       ].join("\n");
-      const opener = typeof jumpToIndex === "number"
-        ? buildJumpMessage(briefing, jumpToIndex)
+      const opener = isResume && typeof effectiveJump === "number"
+        ? buildResumeMessage(briefing, effectiveJump)
+        : typeof effectiveJump === "number"
+        ? buildJumpMessage(briefing, effectiveJump)
         : buildFirstMessage(briefing);
       pendingKickoffRef.current = {
         context,
@@ -147,7 +166,7 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     } finally {
       setIsStarting(false);
     }
-  }, [briefing, conversation, mintToken]);
+  }, [briefing, conversation, mintToken, transcript]);
 
   const stop = useCallback(async () => {
     await conversation.endSession();
@@ -173,18 +192,19 @@ const COUNTRY_LABELS: Record<string, string> = {
   global: "around the world",
 };
 
-const AGENT_SYSTEM_PROMPT = `You are NewsPilot, an AI-native news anchor. Intellectual but amusing — a witty foreign-correspondent who explains hard things in clear, vivid English.
+const AGENT_SYSTEM_PROMPT = `You are Khabar AI, an AI-native news anchor. Intellectual but warm and conversational — like a well-read friend catching you up over chai. Speak slowly, casually, with natural pauses. Avoid stiff broadcaster cadence; use everyday words.
 
 Rules:
 - The TODAY'S BRIEFING JSON below is your ONLY source of truth. It is organised in three tiers: HOME (the user's country), WORLD (everywhere else), and QUICK HITS (one-liners).
 - Total runtime target: ~15 minutes. Roughly 7 min HOME, 4 min WORLD, 3 min QUICK HITS. Do not pad. Do not invent.
-- Open with a single sentence naming the counts and inviting interruption ("say 'next' to skip, 'go deeper' to expand").
-- HOME and WORLD topics: hook → 1–2 sentence explanation → one sentence on why it matters. Cite an outlet by name when natural. ~25 seconds each.
-- QUICK HITS: one sentence each. Move fast.
-- Announce section transitions: "Now, around the world..." / "And finally, quick hits..."
+- Open EXACTLY with: "Welcome to Khabar AI. We'll catch you up on what's happening and why it matters." Then in one short, casual sentence tell them what's in today's briefing and that they can interrupt anytime ("say 'next' to skip, 'go deeper' if you want more").
+- HOME and WORLD topics: hook → 1–2 sentence explanation → one sentence on why it matters. Cite an outlet by name when natural. ~25 seconds each. Speak slowly and naturally.
+- QUICK HITS: one sentence each. Move fast but still casual.
+- Announce section transitions casually: "Alright, now around the world…" / "And finally, the quick hits…"
 - Accept "next" / "skip", "go deeper" / "tell me more", "jump to <topic>".
 - If asked about something not in the briefing, say so honestly.
-- If the user tapped a specific story, start from that topic and continue in order.`;
+- If the user tapped a specific story, start from that topic and continue in order.
+- If RESUMING a previous session, do NOT replay the welcome — just say something brief like "Picking up where we left off" and continue from the next story.`;
 
 function tierLabel(tier?: string) {
   if (tier === "home") return "HOME";
@@ -198,18 +218,66 @@ function buildFirstMessage(b: Briefing): string {
   const world = b.topics.filter((t) => t.tier === "world").length;
   const quick = b.topics.filter((t) => t.tier === "quick_hit").length;
   const homeLabel = COUNTRY_LABELS[b.homeCountry ?? "in"] ?? "your country";
-  if (b.topics.length === 0) return "I couldn't find any stories yet — try refreshing in a minute.";
+  if (b.topics.length === 0) return "Welcome to Khabar AI. I couldn't find any stories yet — try refreshing in a minute.";
   const parts: string[] = [];
   if (home) parts.push(`${home} from ${homeLabel}`);
   if (world) parts.push(`${world} from around the world`);
   if (quick) parts.push(`${quick} quick hits`);
-  return `Good morning. Here's your 15-minute briefing: ${parts.join(", ")}. Interrupt anytime.`;
+  return `Welcome to Khabar AI. We'll catch you up on what's happening and why it matters. Today we've got ${parts.join(", ")} — interrupt anytime.`;
 }
 
 function buildJumpMessage(b: Briefing, i: number): string {
   const t = b.topics[i];
   if (!t) return buildFirstMessage(b);
   return `Jumping to story ${i + 1}: ${t.headline}. Here we go.`;
+}
+
+function buildResumeMessage(b: Briefing, i: number): string {
+  const t = b.topics[i];
+  if (!t) return buildFirstMessage(b);
+  return `Picking up where we left off — story ${i + 1}: ${t.headline}.`;
+}
+
+const PROGRESS_KEY = "khabar.progress";
+
+function loadProgress(briefingId: string): number {
+  if (typeof window === "undefined") return -1;
+  try {
+    const raw = window.localStorage.getItem(PROGRESS_KEY);
+    if (!raw) return -1;
+    const obj = JSON.parse(raw) as { id?: string; covered?: number };
+    return obj.id === briefingId && typeof obj.covered === "number" ? obj.covered : -1;
+  } catch { return -1; }
+}
+
+function saveProgress(briefingId: string, covered: number) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(PROGRESS_KEY, JSON.stringify({ id: briefingId, covered }));
+  } catch { /* ignore */ }
+}
+
+function normalize(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function computeCoveredIndex(
+  b: Briefing,
+  transcript: TranscriptLine[],
+  briefingId: string,
+): number {
+  let covered = loadProgress(briefingId);
+  const agentText = transcript.filter((t) => t.role === "agent").map((t) => normalize(t.text)).join(" \n ");
+  if (agentText) {
+    b.topics.forEach((topic, idx) => {
+      const key = normalize(topic.headline).slice(0, 40);
+      if (key.length >= 8 && agentText.includes(key)) {
+        if (idx > covered) covered = idx;
+      }
+    });
+    saveProgress(briefingId, covered);
+  }
+  return covered;
 }
 
 function buildBriefingContext(b: Briefing): string {

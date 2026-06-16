@@ -6,7 +6,7 @@ import { listBriefings } from "@/lib/voice/messages.functions";
 import type { BriefingTopic } from "@/lib/news/briefing.functions";
 
 export const Route = createFileRoute("/_authenticated/history")({
-  head: () => ({ meta: [{ title: "History · NewsPilot" }] }),
+  head: () => ({ meta: [{ title: "History · Khabar AI" }] }),
   component: HistoryPage,
 });
 
