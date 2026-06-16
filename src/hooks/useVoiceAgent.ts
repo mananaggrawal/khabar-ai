@@ -3,7 +3,8 @@ import { useConversation } from "@elevenlabs/react";
 import { useServerFn } from "@tanstack/react-start";
 import { getElevenLabsToken } from "@/lib/voice/elevenlabs.functions";
 import { saveMessage } from "@/lib/voice/messages.functions";
-import type { Briefing } from "@/lib/news/briefing.functions";
+import { searchTopicLive } from "@/lib/news/search.functions";
+import type { Briefing, BriefingTopic } from "@/lib/news/briefing.functions";
 import type { OrbState } from "@/components/VoiceOrb";
 
 export type TranscriptLine = {
