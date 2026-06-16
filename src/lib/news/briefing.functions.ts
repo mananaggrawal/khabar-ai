@@ -93,8 +93,15 @@ export const fetchBriefing = createServerFn({ method: "POST" })
       return cats.includes(s.category as Category) || s.category === "top";
     });
 
-    const fetched = (
-      await Promise.all(wantedSources.map((s) => fetchRss(s.url, s.name, s.id).then((items) => items.map((it) => ({ ...it, _country: s.country })))))
+    type TaggedItem = RssItem & { _country: CountryCode };
+    const fetched: TaggedItem[] = (
+      await Promise.all(
+        wantedSources.map((s) =>
+          fetchRss(s.url, s.name, s.id).then((items) =>
+            items.map((it) => ({ ...it, _country: s.country })),
+          ),
+        ),
+      )
     ).flat();
 
     // Filter by local-midnight cutoff
@@ -106,10 +113,10 @@ export const fetchBriefing = createServerFn({ method: "POST" })
     });
 
     // Dedupe each pool independently so India/world stories don't merge.
-    const homePool = homeCountry === "global"
+    const homePool: TaggedItem[] = homeCountry === "global"
       ? []
       : dedupeByTitle(recentItems.filter((it) => it._country === homeCountry), 0.55);
-    const worldPool = dedupeByTitle(
+    const worldPool: TaggedItem[] = dedupeByTitle(
       recentItems.filter((it) => it._country !== homeCountry || homeCountry === "global"),
       0.55,
     );
