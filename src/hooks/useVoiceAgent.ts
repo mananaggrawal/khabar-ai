@@ -114,39 +114,40 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         setIsStarting(false);
         return;
       }
-      const firstMessage = typeof jumpToIndex === "number"
+      // No overrides — agent persona is configured in the ElevenLabs dashboard.
+      // We inject briefing data and trigger the opener via contextual update + user message,
+      // dispatched from onConnect once the WebRTC session is live.
+      const compactIndex = buildCompactIndex(briefing);
+      const fullBriefing = buildBriefingContext(briefing);
+      const jumpNote = typeof jumpToIndex === "number"
+        ? `\n\nThe user tapped story #${jumpToIndex + 1}. Begin there and continue in order.`
+        : "";
+      const context = [
+        "SESSION RULES:",
+        AGENT_SYSTEM_PROMPT,
+        "",
+        `TODAY'S HEADLINES (${briefing.topics.length} stories, compact index):`,
+        compactIndex,
+        "",
+        "FULL BRIEFING DATA (use for explanations, why-it-matters, and sources):",
+        fullBriefing,
+        jumpNote,
+      ].join("\n");
+      const opener = typeof jumpToIndex === "number"
         ? buildJumpMessage(briefing, jumpToIndex)
         : buildFirstMessage(briefing);
-      // Keep prompt SMALL — large overrides cause WebRTC 1006 close.
-      // Push the full briefing via contextual update after connect.
-      const compactIndex = buildCompactIndex(briefing);
-      const startNote = typeof jumpToIndex === "number"
-        ? `\n\nUSER TAPPED STORY #${jumpToIndex + 1}. Start there.`
-        : "";
+      pendingKickoffRef.current = {
+        context,
+        opener: `Please begin the briefing now. Start with: "${opener}"`,
+      };
       await conversation.startSession({
         conversationToken: tokenRes.token,
         connectionType: "webrtc",
-        overrides: {
-          agent: {
-            firstMessage,
-            prompt: { prompt: AGENT_SYSTEM_PROMPT + "\n\nTODAY'S HEADLINES (compact index):\n" + compactIndex + startNote },
-          },
-        },
       } as any);
-      // After connect, ship the full briefing as context (no size pressure on prompt limit).
-      const full = buildBriefingContext(briefing);
-      setTimeout(() => {
-        try {
-          conversation.sendContextualUpdate?.(
-            "FULL BRIEFING DATA (use this for explanations, why-it-matters, and sources):\n" + full,
-          );
-        } catch (e) {
-          console.warn("[voice] contextual update failed", e);
-        }
-      }, 600);
     } catch (e) {
       console.error("[voice] start failed", e);
       setConfigError("upstream_error");
+      pendingKickoffRef.current = null;
     } finally {
       setIsStarting(false);
     }
