@@ -218,8 +218,9 @@ function BriefingSurface() {
           <div className="mt-10 w-full max-w-2xl">
             <BriefingList
               topics={briefing.topics}
+              homeLabel={homeCountryLabel(briefing.homeCountry)}
               onJumpTo={(i) => {
-                if (connected) return; // future: agent-side jump while connected
+                if (connected) return;
                 voice.start(i);
               }}
             />
