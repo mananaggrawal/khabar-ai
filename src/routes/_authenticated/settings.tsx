@@ -3,7 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { ArrowLeft } from "lucide-react";
 import { getPreferences, savePreferences } from "@/lib/voice/messages.functions";
-import { ALL_CATEGORIES } from "@/lib/news/sources";
+import { ALL_CATEGORIES, SUPPORTED_COUNTRIES, type CountryCode } from "@/lib/news/sources";
 import { Button } from "@/components/ui/button";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -21,13 +21,16 @@ function SettingsPage() {
   const saveFn = useServerFn(savePreferences);
   const q = useQuery({ queryKey: ["prefs"], queryFn: () => getFn({ data: undefined as never }) });
   const [selected, setSelected] = useState<string[]>([]);
+  const [home, setHome] = useState<CountryCode>("in");
 
   useEffect(() => {
     if (q.data?.categories) setSelected(q.data.categories);
+    if (q.data?.home_country) setHome(q.data.home_country);
   }, [q.data]);
 
   const m = useMutation({
-    mutationFn: (cats: string[]) => saveFn({ data: { categories: cats } }),
+    mutationFn: (payload: { categories: string[]; home_country: CountryCode }) =>
+      saveFn({ data: payload }),
     onSuccess: () => toast.success("Preferences saved"),
     onError: (e: any) => toast.error(e?.message ?? "Save failed"),
   });
@@ -51,6 +54,33 @@ function SettingsPage() {
       </header>
 
       <main className="mx-auto max-w-2xl space-y-10 px-6 py-10">
+        <section>
+          <h2 className="font-serif text-lg">Home country</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            The country NewsPilot leads with each morning. Everything else becomes “Around the world.”
+          </p>
+          <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {SUPPORTED_COUNTRIES.map((c) => {
+              const on = home === c.code;
+              return (
+                <button
+                  key={c.code}
+                  onClick={() => setHome(c.code)}
+                  className={cn(
+                    "flex flex-col items-center gap-1 rounded-2xl border px-3 py-3 text-sm transition-colors",
+                    on
+                      ? "border-primary/60 bg-primary/15 text-foreground"
+                      : "border-white/10 text-muted-foreground hover:border-white/20 hover:text-foreground",
+                  )}
+                >
+                  <span className="text-2xl leading-none">{c.flag}</span>
+                  <span className="text-xs">{c.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
         <section>
           <h2 className="font-serif text-lg">Interests</h2>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -78,7 +108,7 @@ function SettingsPage() {
           <Button
             className="mt-6 rounded-full"
             disabled={selected.length === 0 || m.isPending}
-            onClick={() => m.mutate(selected)}
+            onClick={() => m.mutate({ categories: selected, home_country: home })}
           >
             {m.isPending ? "Saving…" : "Save preferences"}
           </Button>
