@@ -44,6 +44,12 @@ const HOME_MIN_ITEMS = 24;
 // Per-tier caps that target a ~15 min spoken briefing (~150 wpm).
 const TIER_CAPS = { home: 8, world: 6, quick_hit: 6 } as const;
 
+// Enrichment guardrails
+const ENRICH_CONCURRENCY = 4;
+const ENRICH_SOURCES_PER_TOPIC = 3;
+const FIRECRAWL_SCRAPE_TIMEOUT_MS = 12000;
+const FIRECRAWL_BASE = "https://api.firecrawl.dev/v2";
+
 export const fetchBriefing = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator(
