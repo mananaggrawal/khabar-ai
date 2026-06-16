@@ -132,14 +132,13 @@ function BriefingSurface() {
   }), []);
 
   const topicCount = briefing?.topics.length ?? 0;
-  const minutes = Math.max(3, Math.round(topicCount * 0.5));
   const subtitle = briefingQuery.isLoading
-    ? "Gathering every story from today…"
+    ? "Gathering today's briefing…"
     : briefingQuery.isError
     ? "Couldn't load the briefing. Tap retry."
     : connected
     ? voice.orbState === "speaking" ? "NewsPilot is speaking" : "Listening — say 'next', 'skip', or 'go deeper'"
-    : `${topicCount} ${topicCount === 1 ? "story" : "stories"} today · about ${minutes} min spoken`;
+    : `${topicCount} ${topicCount === 1 ? "story" : "stories"} today · ~15 min spoken`;
 
   return (
     <>
