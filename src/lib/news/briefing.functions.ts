@@ -445,6 +445,21 @@ CONTENT RULES:
     const world = Array.isArray(parsed.world) ? parsed.world.slice(0, worldCap).map((t: any, i: number) => buildTopic(t, i, "world")) : [];
     const quickHits = Array.isArray(parsed.quickHits) ? parsed.quickHits.slice(0, quickCap).map((t: any, i: number) => buildTopic(t, i, "quick_hit")) : [];
 
+    // Safety pad: if the LLM under-delivered the home tier, top up from unused H-clusters
+    // so users always see every home story we have (up to the cap).
+    const targetHome = Math.min(homeCap, homeClusters.length);
+    if (home.length < targetHome) {
+      const usedUrls = new Set(home.flatMap((t) => t.sources.map((s) => s.url)));
+      for (const c of homeClusters) {
+        if (home.length >= targetHome) break;
+        const clusterUrls = c.items.map((it) => it.link);
+        if (clusterUrls.some((u) => usedUrls.has(u))) continue;
+        const padded = clusterToTopic(c, `home-pad-${home.length}`, "home");
+        home.push(padded);
+        padded.sources.forEach((s) => usedUrls.add(s.url));
+      }
+    }
+
     if (home.length === 0 && world.length === 0 && quickHits.length === 0) {
       return fallbackTiered(homeClusters, worldClusters);
     }
