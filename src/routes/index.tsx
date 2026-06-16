@@ -172,7 +172,7 @@ function BriefingSurface() {
                 <AlertTriangle className="size-3.5" />
                 {voice.configError === "missing_api_key" || voice.configError === "missing_agent_id"
                   ? "Voice not configured yet — add ElevenLabs keys to enable."
-                  : "Couldn't reach the voice agent. Try again."}
+                  : "Agent rejected the session. Make sure the ElevenLabs agent exists and is published."}
               </p>
             )}
           </div>
