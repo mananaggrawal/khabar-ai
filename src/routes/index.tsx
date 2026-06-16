@@ -11,6 +11,7 @@ import { BriefingList } from "@/components/BriefingList";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { fetchBriefing, type Briefing } from "@/lib/news/briefing.functions";
+import { countryLabel } from "@/lib/news/sources";
 import { useVoiceAgent } from "@/hooks/useVoiceAgent";
 
 export const Route = createFileRoute("/")({
