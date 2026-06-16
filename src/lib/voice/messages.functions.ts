@@ -75,7 +75,7 @@ export const savePreferences = createServerFn({ method: "POST" })
       .eq("user_id", context.userId)
       .maybeSingle();
 
-    const payload: Record<string, unknown> = {
+    const payload = {
       user_id: context.userId,
       categories: data.categories ?? existing?.categories ?? DEFAULT_PREFS.categories,
       voice_id: data.voice_id ?? existing?.voice_id ?? DEFAULT_PREFS.voice_id,
