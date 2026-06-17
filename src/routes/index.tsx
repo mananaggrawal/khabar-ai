@@ -241,7 +241,10 @@ function BriefingSurface() {
 
 function TopBar({ minimal }: { minimal?: boolean } = {}) {
   return (
-    <header className="flex items-center justify-between px-6 pt-6">
+    <header
+      className="flex items-center justify-between px-6 pt-6"
+      style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 3.5rem)" }}
+    >
       <Link to="/" className="font-serif text-xl tracking-tight">
         Khabar <span className="italic text-primary">AI</span>
       </Link>
