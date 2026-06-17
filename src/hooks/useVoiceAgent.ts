@@ -14,7 +14,8 @@ export type TranscriptLine = {
   at: number;
 };
 
-export type VoiceConfigError = "missing_api_key" | "missing_agent_id" | "upstream_error" | null;
+export type VoiceConfigError = "missing_api_key" | "missing_agent_id" | "upstream_error" | "disconnected_early" | null;
+export type VoiceErrorDetail = { reason: VoiceConfigError; detail?: string } | null;
 
 interface UseVoiceAgentOpts {
   briefing: Briefing | null;
