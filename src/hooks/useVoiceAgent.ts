@@ -29,7 +29,7 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
   const rafRef = useRef<number | null>(null);
   const briefingIdRef = useRef<string | null>(null);
   const briefingRef = useRef<Briefing | null>(null);
-  const pendingKickoffRef = useRef<{ context: string; opener: string } | null>(null);
+  const pendingKickoffRef = useRef<{ parts: string[]; opener: string } | null>(null);
 
   useEffect(() => {
     briefingIdRef.current = briefing?.id ?? null;
