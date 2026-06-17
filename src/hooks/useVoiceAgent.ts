@@ -391,7 +391,7 @@ function buildFirstMessage(b: Briefing): string {
   if (world) parts.push(`${world} from around the world`);
   if (quick) parts.push(`${quick} quick hits`);
   const greeting = isIndia ? "Namaste, and welcome to Khabar AI" : "Hey, welcome to Khabar AI";
-  return `${greeting} — your daily catch-up on what's happening and why it matters. Today we've got ${parts.join(", ")} — about fifteen minutes in all. Jump in anytime: say 'next' to skip, 'go deeper' for more, or name a story to jump to. Alright, let's get into it.`;
+  return `${greeting} — your daily catch-up on what's happening and why it matters.`;
 }
 
 function buildJumpMessage(b: Briefing, i: number): string {
