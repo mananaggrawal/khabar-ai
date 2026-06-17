@@ -3,7 +3,7 @@ import { useConversation } from "@elevenlabs/react";
 import { useServerFn } from "@tanstack/react-start";
 import { getElevenLabsToken } from "@/lib/voice/elevenlabs.functions";
 import { saveMessage } from "@/lib/voice/messages.functions";
-import { searchTopicLive } from "@/lib/news/search.functions";
+
 import type { Briefing } from "@/lib/news/briefing.functions";
 import type { OrbState } from "@/components/VoiceOrb";
 
@@ -38,45 +38,8 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
 
   const mintToken = useServerFn(getElevenLabsToken);
   const persistMessage = useServerFn(saveMessage);
-  const liveSearch = useServerFn(searchTopicLive);
 
   const conversation = useConversation({
-    clientTools: {
-      // The agent calls this when the briefing pack doesn't cover a follow-up.
-      // Register a matching tool on the ElevenLabs agent dashboard:
-      //   name: searchTopic
-      //   params: topicId (string), query (string)
-      searchTopic: async (params: { topicId?: string; query?: string }) => {
-        const b = briefingRef.current;
-        const q = (params?.query ?? "").trim();
-        if (!b || !q) return "No active briefing or empty query.";
-        const topic =
-          b.topics.find((t) => t.id === params?.topicId) ??
-          b.topics[0];
-        const headline = topic?.headline ?? "today's news";
-        // Surface a small "looking it up" line in the transcript so the user
-        // sees the agent is going to the web.
-        setTranscript((t) => [
-          ...t,
-          {
-            id: `${Date.now()}-search`,
-            role: "agent",
-            text: `🔎 Looking that up — "${q}"`,
-            at: Date.now(),
-          },
-        ]);
-        try {
-          const res = await liveSearch({ data: { headline, query: q } });
-          if (!res.ok || !res.answer) return res.answer || "No fresh sources found.";
-          return res.sourceName
-            ? `${res.answer} (Source: ${res.sourceName})`
-            : res.answer;
-        } catch (e) {
-          console.error("[voice] searchTopic failed", e);
-          return "I couldn't reach the web just now.";
-        }
-      },
-    },
     onConnect: () => {
       console.log("[voice] connected");
       const kickoff = pendingKickoffRef.current;
