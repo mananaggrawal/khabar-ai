@@ -451,9 +451,20 @@ function buildAutoStartPrompt(isResume: boolean, effectiveJump?: number): string
 }
 
 function shouldHideTranscriptLine(role: "user" | "agent", text: string): boolean {
-  if (role !== "user") return false;
   const normalized = text.toLowerCase().replace(/[^a-z0-9_ ]/g, " ").replace(/\s+/g, " ").trim();
   if (!normalized) return true;
+  if (role === "agent") {
+    // Hide the spoken greeting / welcome line from the on-screen transcript.
+    if (
+      normalized.includes("welcome to khabar ai") ||
+      normalized.includes("daily catch up on what s happening") ||
+      normalized.startsWith("namaste and welcome") ||
+      normalized.startsWith("hey welcome to khabar")
+    ) {
+      return true;
+    }
+    return false;
+  }
   return normalized.startsWith(AUTO_START_PREFIX.toLowerCase()) || normalized === "you can start";
 }
 
