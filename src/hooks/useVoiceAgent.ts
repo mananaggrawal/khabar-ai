@@ -178,6 +178,81 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     }
   }, [briefing, conversation, mintToken, reportError]);
 
+  // Silence watchdog: if the agent stops producing audio mid-briefing for
+  // longer than SILENCE_MS, end and restart the session so it resumes
+  // speaking. Capped at MAX_RESTARTS to avoid loops.
+  const SILENCE_MS = 8000;
+  const MAX_RESTARTS = 2;
+  useEffect(() => {
+    if (conversation.status !== "connected") {
+      if (watchdogRef.current) {
+        clearInterval(watchdogRef.current);
+        watchdogRef.current = null;
+      }
+      return;
+    }
+    restartAttemptsRef.current = 0;
+    watchdogRef.current = setInterval(async () => {
+      if (restartingRef.current) return;
+      if (!agentSpokeRef.current) return; // intro hasn't started yet
+      if (conversation.isSpeaking) {
+        lastAgentAudioAtRef.current = Date.now();
+        return;
+      }
+      const silentFor = Date.now() - lastAgentAudioAtRef.current;
+      if (silentFor < SILENCE_MS) return;
+      if (restartAttemptsRef.current >= MAX_RESTARTS) return;
+      restartingRef.current = true;
+      restartAttemptsRef.current += 1;
+      console.warn(`[voice] watchdog: silent ${Math.round(silentFor / 1000)}s — restarting session (attempt ${restartAttemptsRef.current}/${MAX_RESTARTS})`);
+      try {
+        await conversation.endSession();
+      } catch (e) {
+        console.warn("[voice] watchdog endSession failed", e);
+      }
+      // small pause before reconnecting
+      await new Promise((r) => setTimeout(r, 400));
+      try {
+        await start();
+      } catch (e) {
+        console.error("[voice] watchdog restart failed", e);
+      } finally {
+        restartingRef.current = false;
+      }
+    }, 1500);
+    return () => {
+      if (watchdogRef.current) {
+        clearInterval(watchdogRef.current);
+        watchdogRef.current = null;
+      }
+    };
+  }, [conversation.status, conversation, start]);
+
+  const stop = useCallback(async () => {
+    restartAttemptsRef.current = MAX_RESTARTS; // disable watchdog restart on manual stop
+    await conversation.endSession();
+  }, [conversation]);
+    try {
+      await navigator.mediaDevices.getUserMedia({ audio: true });
+      const tokenRes = await mintToken({ data: undefined as never });
+      if (!tokenRes.ok) {
+        reportError(tokenRes.reason, (tokenRes as any).detail);
+        setIsStarting(false);
+        return;
+      }
+
+      await conversation.startSession({
+        conversationToken: tokenRes.token,
+        connectionType: "webrtc",
+      } as any);
+    } catch (e) {
+      console.error("[voice] start failed", e);
+      reportError("upstream_error", String((e as any)?.message ?? e));
+    } finally {
+      setIsStarting(false);
+    }
+  }, [briefing, conversation, mintToken, reportError]);
+
   const stop = useCallback(async () => {
     await conversation.endSession();
   }, [conversation]);
