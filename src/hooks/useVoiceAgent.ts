@@ -416,12 +416,14 @@ function tierLabel(tier?: string) {
 }
 
 function buildFirstMessage(b: Briefing): string {
+  const isIndia = (b.homeCountry ?? "in") === "in";
   if (b.topics.length === 0) {
-    return "I couldn't pull any stories just yet — give it a minute and try again.";
+    return isIndia
+      ? "Namaste, and welcome to Khabar AI. I couldn't pull any stories just yet — give it a minute and try again."
+      : "Hey, welcome to Khabar AI. I couldn't pull any stories just yet — give it a minute and try again.";
   }
-  // No separate greeting. The agent begins the monologue directly from story 1
-  // via the auto-start prompt, so the first message is intentionally empty.
-  return "";
+  const greeting = isIndia ? "Namaste, and welcome to Khabar AI" : "Hey, welcome to Khabar AI";
+  return `${greeting} — your daily catch-up on what's happening and why it matters.`;
 }
 
 function buildJumpMessage(b: Briefing, i: number): string {
