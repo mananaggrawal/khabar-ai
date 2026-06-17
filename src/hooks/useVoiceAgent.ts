@@ -370,6 +370,29 @@ function computeCoveredIndex(
   return covered;
 }
 
+function buildSlimBriefingContext(b: Briefing): string {
+  // Slim payload for the live data-channel push: headline + hook +
+  // explanation + whyItMatters + sources. Reference packs (deepBrief, qa,
+  // keyFacts, articleExcerpts) are intentionally omitted — they bloat the
+  // payload past WebRTC data-channel safe limits and the agent rarely needs
+  // them for the initial read-through. Follow-ups can be answered from the
+  // system prompt + headline context.
+  return JSON.stringify({
+    homeCountry: b.homeCountry,
+    totalTopics: b.topics.length,
+    topics: b.topics.map((t, i) => ({
+      n: i + 1,
+      tier: tierLabel(t.tier),
+      headline: t.headline,
+      hook: t.hook,
+      explanation: (t.explanation ?? "").slice(0, 400),
+      whyItMatters: (t.whyItMatters ?? "").slice(0, 300),
+      sources: t.sources.slice(0, 3).map((s) => s.name),
+      ...(t.tier !== "quick_hit" && t.keyFacts?.length ? { keyFacts: t.keyFacts.slice(0, 4) } : {}),
+    })),
+  });
+}
+
 function buildBriefingContext(b: Briefing): string {
   return JSON.stringify({
     generatedAt: b.generatedAt,
