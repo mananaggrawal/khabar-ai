@@ -57,7 +57,9 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
           }
         });
         console.log("[voice] sent context", kickoff.parts.length, "chunks,", totalBytes, "bytes");
-        conversation.sendUserMessage?.(kickoff.opener);
+        // NOTE: the opener is delivered via overrides.agent.firstMessage on
+        // startSession — do NOT also sendUserMessage here, or the agent will
+        // greet twice (its first_message + a response to our prompt).
       } catch (e) {
         console.warn("[voice] kickoff failed", e);
       }
@@ -182,11 +184,17 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         : buildFirstMessage(briefing);
       pendingKickoffRef.current = {
         parts: splitForContextChannel(context),
-        opener: `Please begin the briefing now. Start with: "${opener}"`,
+        opener,
       };
       await conversation.startSession({
         conversationToken: tokenRes.token,
         connectionType: "webrtc",
+        overrides: {
+          agent: {
+            firstMessage: opener,
+            prompt: { prompt: AGENT_SYSTEM_PROMPT },
+          },
+        },
       } as any);
     } catch (e) {
       console.error("[voice] start failed", e);
