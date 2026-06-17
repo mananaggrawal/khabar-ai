@@ -213,52 +213,13 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         return;
       }
 
-      let resumeIndex: number | undefined;
-      let isResume = false;
-      if (typeof jumpToIndex !== "number") {
-        const covered = computeCoveredIndex(briefing, transcript, briefing.id);
-        if (covered >= 0 && covered < briefing.topics.length - 1) {
-          resumeIndex = covered + 1;
-          isResume = true;
-        }
-      }
-      const effectiveJump = typeof jumpToIndex === "number" ? jumpToIndex : resumeIndex;
-
-      const sessionPrompt = buildSessionPrompt(briefing, effectiveJump, isResume);
-      const jumpNote = isResume && typeof effectiveJump === "number"
-        ? `\n\nRESUMING a previous session. The user already heard stories 1 through ${effectiveJump}. Pick up at story #${effectiveJump + 1} and continue in order. Do NOT repeat the full intro — open with a brief "Picking up where we left off" line, then go.`
-        : typeof effectiveJump === "number"
-        ? `\n\nThe user tapped story #${effectiveJump + 1}. Begin there and continue in order.`
-        : "";
-      const opener = isResume && typeof effectiveJump === "number"
-        ? buildResumeMessage(briefing, effectiveJump)
-        : typeof effectiveJump === "number"
-        ? buildJumpMessage(briefing, effectiveJump)
-        : buildFirstMessage(briefing);
-      autoStartPromptRef.current = buildAutoStartPrompt(isResume, effectiveJump);
-      autoStartSentRef.current = false;
-      pendingKickoffRef.current = {
-        // Do not push briefing context after connect. Even 20–25KB contextual
-        // updates can close ElevenLabs' WebRTC room before first audio. The
-        // compact briefing is included in the session prompt override instead.
-        parts: [],
-        opener,
-      };
       await conversation.startSession({
         conversationToken: tokenRes.token,
         connectionType: "webrtc",
-        overrides: {
-          agent: {
-            firstMessage: opener,
-            prompt: { prompt: `${sessionPrompt}${jumpNote}` },
-            language: "en",
-          },
-        },
       } as any);
     } catch (e) {
       console.error("[voice] start failed", e);
       setConfigError("upstream_error");
-      pendingKickoffRef.current = null;
     } finally {
       setIsStarting(false);
     }
