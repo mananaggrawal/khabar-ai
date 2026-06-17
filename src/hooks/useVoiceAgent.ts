@@ -32,6 +32,9 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
   const briefingIdRef = useRef<string | null>(null);
   const briefingRef = useRef<Briefing | null>(null);
   const pendingKickoffRef = useRef<{ parts: string[]; opener: string } | null>(null);
+  const autoStartPromptRef = useRef<string | null>(null);
+  const autoStartSentRef = useRef(false);
+  const autoStartTimerRef = useRef<number | null>(null);
   const agentSpokeRef = useRef(false);
   const connectedAtRef = useRef<number>(0);
   const lastSdkErrorRef = useRef<string | null>(null);
@@ -63,6 +66,7 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     return () => {
       window.removeEventListener("unhandledrejection", onUnhandled);
       window.removeEventListener("error", onWindowError);
+      if (autoStartTimerRef.current) window.clearTimeout(autoStartTimerRef.current);
     };
   }, [reportError]);
 
@@ -75,6 +79,19 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
       agentSpokeRef.current = false;
       lastSdkErrorRef.current = null;
       connectedAtRef.current = Date.now();
+      autoStartSentRef.current = false;
+      if (autoStartTimerRef.current) window.clearTimeout(autoStartTimerRef.current);
+      autoStartTimerRef.current = window.setTimeout(() => {
+        const prompt = autoStartPromptRef.current;
+        if (!prompt || autoStartSentRef.current) return;
+        autoStartSentRef.current = true;
+        try {
+          conversation.sendUserMessage(prompt);
+        } catch (e) {
+          autoStartSentRef.current = false;
+          console.warn("[voice] auto-start prompt failed", e);
+        }
+      }, 1800);
       const kickoff = pendingKickoffRef.current;
       pendingKickoffRef.current = null;
       if (!kickoff || kickoff.parts.length === 0) return;
@@ -109,6 +126,9 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     onDisconnect: (details: any) => {
       setAmplitude(0);
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      if (autoStartTimerRef.current) window.clearTimeout(autoStartTimerRef.current);
+      autoStartTimerRef.current = null;
+      autoStartPromptRef.current = null;
       if (details?.reason === "user") {
         connectedAtRef.current = 0;
         return;
@@ -143,6 +163,20 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     },
     onModeChange: ({ mode }: any) => {
       if (mode === "speaking") agentSpokeRef.current = true;
+      if (mode === "listening" && autoStartPromptRef.current && !autoStartSentRef.current) {
+        if (autoStartTimerRef.current) window.clearTimeout(autoStartTimerRef.current);
+        autoStartTimerRef.current = window.setTimeout(() => {
+          const prompt = autoStartPromptRef.current;
+          if (!prompt || autoStartSentRef.current) return;
+          autoStartSentRef.current = true;
+          try {
+            conversation.sendUserMessage(prompt);
+          } catch (e) {
+            autoStartSentRef.current = false;
+            console.warn("[voice] auto-start prompt failed", e);
+          }
+        }, 250);
+      }
     },
     onAudio: () => {
       agentSpokeRef.current = true;
@@ -166,6 +200,7 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         const role = msg.role === "agent" || msg.source === "ai" ? "agent" : "user";
         const text = msg.message.trim();
         if (!text) return;
+        if (shouldHideTranscriptLine(role, text)) return;
         if (role === "agent") agentSpokeRef.current = true;
         setTranscript((t) => [...t, { id, role, text, at: Date.now() }]);
         if (bid) persistMessage({ data: { briefingId: bid, role, content: text } }).catch(console.error);
@@ -181,6 +216,7 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
       if (msg.type === "user_transcript") {
         const text = msg.user_transcription_event?.user_transcript ?? "";
         if (text) {
+          if (shouldHideTranscriptLine("user", text)) return;
           setTranscript((t) => [...t, { id, role: "user", text, at: Date.now() }]);
           if (bid) persistMessage({ data: { briefingId: bid, role: "user", content: text } }).catch(console.error);
         }
@@ -259,6 +295,8 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         : typeof effectiveJump === "number"
         ? buildJumpMessage(briefing, effectiveJump)
         : buildFirstMessage(briefing);
+      autoStartPromptRef.current = buildAutoStartPrompt(isResume, effectiveJump);
+      autoStartSentRef.current = false;
       pendingKickoffRef.current = {
         // Do not push briefing context after connect. Even 20–25KB contextual
         // updates can close ElevenLabs' WebRTC room before first audio. The
@@ -317,6 +355,8 @@ Rules:
 - The TODAY'S BRIEFING JSON below is your ONLY source of truth for the spoken brief. It is organised in three tiers: HOME (the user's country), WORLD (everywhere else), and QUICK HITS (one-liners).
 - Total runtime target: ~15 minutes. Roughly 7 min HOME, 4 min WORLD, 3 min QUICK HITS. Do not pad. Do not invent.
 - Your opening line is provided in the kickoff message — read it naturally as your first words, then continue straight into the briefing. Do NOT prepend your own greeting or say "Welcome" again on your own.
+- Begin as a monologue. The listener should NOT need to say anything before you start the briefing.
+- If you receive a message beginning SYSTEM_AUTO_START_BRIEFING, treat it as a hidden control signal to start immediately. Never read or mention that control text aloud.
 - For the spoken briefing, use each topic's "hook", "explanation", and "whyItMatters" fields.
 - HOME and WORLD topics: hook → 1–2 sentence explanation → one sentence on why it matters. Cite an outlet by name when natural. ~25 seconds each. Speak slowly and naturally.
 - QUICK HITS: one sentence each. Move fast but still casual.
@@ -404,6 +444,25 @@ function buildResumeMessage(b: Briefing, i: number): string {
   const t = b.topics[i];
   if (!t) return buildFirstMessage(b);
   return `Picking up where we left off — story ${i + 1}: ${t.headline}.`;
+}
+
+const AUTO_START_PREFIX = "SYSTEM_AUTO_START_BRIEFING";
+
+function buildAutoStartPrompt(isResume: boolean, effectiveJump?: number): string {
+  if (isResume && typeof effectiveJump === "number") {
+    return `${AUTO_START_PREFIX}: Start speaking now as a continuous news monologue from story ${effectiveJump + 1}. Do not wait for the listener and do not ask a question.`;
+  }
+  if (typeof effectiveJump === "number") {
+    return `${AUTO_START_PREFIX}: Start speaking now as a continuous news monologue from story ${effectiveJump + 1}. Do not wait for the listener and do not ask a question.`;
+  }
+  return `${AUTO_START_PREFIX}: Start speaking now as a continuous news monologue from the first story. Do not wait for the listener and do not ask a question.`;
+}
+
+function shouldHideTranscriptLine(role: "user" | "agent", text: string): boolean {
+  if (role !== "user") return false;
+  const normalized = text.toLowerCase().replace(/[^a-z0-9_ ]/g, " ").replace(/\s+/g, " ").trim();
+  if (!normalized) return true;
+  return normalized.startsWith(AUTO_START_PREFIX.toLowerCase()) || normalized === "you can start";
 }
 
 const PROGRESS_KEY = "khabar.progress";
