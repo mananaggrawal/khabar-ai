@@ -232,30 +232,6 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     restartAttemptsRef.current = MAX_RESTARTS; // disable watchdog restart on manual stop
     await conversation.endSession();
   }, [conversation]);
-    try {
-      await navigator.mediaDevices.getUserMedia({ audio: true });
-      const tokenRes = await mintToken({ data: undefined as never });
-      if (!tokenRes.ok) {
-        reportError(tokenRes.reason, (tokenRes as any).detail);
-        setIsStarting(false);
-        return;
-      }
-
-      await conversation.startSession({
-        conversationToken: tokenRes.token,
-        connectionType: "webrtc",
-      } as any);
-    } catch (e) {
-      console.error("[voice] start failed", e);
-      reportError("upstream_error", String((e as any)?.message ?? e));
-    } finally {
-      setIsStarting(false);
-    }
-  }, [briefing, conversation, mintToken, reportError]);
-
-  const stop = useCallback(async () => {
-    await conversation.endSession();
-  }, [conversation]);
 
   return {
     orbState,
