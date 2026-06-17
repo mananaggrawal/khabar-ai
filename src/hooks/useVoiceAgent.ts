@@ -58,6 +58,7 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     onConnect: () => {
       console.log("[voice] connected");
       agentSpokeRef.current = false;
+      lastAgentAudioAtRef.current = Date.now();
       setConfigError(null);
       setErrorDetail(null);
     },
@@ -66,10 +67,6 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     },
     onError: (err: unknown) => {
-      // ElevenLabs SDK occasionally emits malformed error events where
-      // `error_event` is undefined. Swallow those quietly — surfacing them
-      // as "Agent rejected the session" is misleading because the session
-      // actually proceeds. Only surface clear, descriptive errors.
       const detail =
         typeof err === "string"
           ? err
@@ -83,10 +80,14 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
       reportError("upstream_error", String(detail));
     },
     onModeChange: ({ mode }: any) => {
-      if (mode === "speaking") agentSpokeRef.current = true;
+      if (mode === "speaking") {
+        agentSpokeRef.current = true;
+        lastAgentAudioAtRef.current = Date.now();
+      }
     },
     onAudio: () => {
       agentSpokeRef.current = true;
+      lastAgentAudioAtRef.current = Date.now();
     },
     onMessage: (msg: any) => {
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -97,7 +98,10 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         const text = msg.message.trim();
         if (!text) return;
         if (shouldHideTranscriptLine(role, text)) return;
-        if (role === "agent") agentSpokeRef.current = true;
+        if (role === "agent") {
+          agentSpokeRef.current = true;
+          lastAgentAudioAtRef.current = Date.now();
+        }
         setTranscript((t) => [...t, { id, role, text, at: Date.now() }]);
         if (bid) persistMessage({ data: { briefingId: bid, role, content: text } }).catch(console.error);
         return;
@@ -113,6 +117,7 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         const text = msg.agent_response_event?.agent_response ?? "";
         if (text) {
           agentSpokeRef.current = true;
+          lastAgentAudioAtRef.current = Date.now();
           setTranscript((t) => [...t, { id, role: "agent", text, at: Date.now() }]);
           if (bid) persistMessage({ data: { briefingId: bid, role: "agent", content: text } }).catch(console.error);
         }
