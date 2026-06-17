@@ -239,13 +239,19 @@ function buildFirstMessage(b: Briefing): string {
   const home = b.topics.filter((t) => t.tier === "home").length;
   const world = b.topics.filter((t) => t.tier === "world").length;
   const quick = b.topics.filter((t) => t.tier === "quick_hit").length;
-  const homeLabel = COUNTRY_LABELS[b.homeCountry ?? "in"] ?? "your country";
-  if (b.topics.length === 0) return "Welcome to Khabar AI. I couldn't find any stories yet — try refreshing in a minute.";
+  const isIndia = (b.homeCountry ?? "in") === "in";
+  if (b.topics.length === 0) {
+    return isIndia
+      ? "Namaste, and welcome to Khabar AI. I couldn't pull any stories just yet — give it a minute and try again."
+      : "Hey, welcome to Khabar AI. I couldn't pull any stories just yet — give it a minute and try again.";
+  }
+  const homeLabel = isIndia ? "from India" : `from ${COUNTRY_LABELS[b.homeCountry ?? "in"] ?? "home"}`;
   const parts: string[] = [];
-  if (home) parts.push(`${home} from ${homeLabel}`);
+  if (home) parts.push(`${home} ${homeLabel}`);
   if (world) parts.push(`${world} from around the world`);
   if (quick) parts.push(`${quick} quick hits`);
-  return `Welcome to Khabar AI. We'll catch you up on what's happening and why it matters. Today we've got ${parts.join(", ")} — interrupt anytime.`;
+  const greeting = isIndia ? "Namaste, and welcome to Khabar AI" : "Hey, welcome to Khabar AI";
+  return `${greeting} — your daily catch-up on what's happening and why it matters. Today we've got ${parts.join(", ")} — about fifteen minutes in all. Jump in anytime: say 'next' to skip, 'go deeper' for more, or name a story to jump to. Alright, let's get into it.`;
 }
 
 function buildJumpMessage(b: Briefing, i: number): string {
