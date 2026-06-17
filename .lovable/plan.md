@@ -1,39 +1,22 @@
-## Fix double "Welcome" + improve intro + Indian accent
+## Two fixes in `src/hooks/useVoiceAgent.ts`
 
-### 1. Double "Welcome" — root cause
-Two places both say "Welcome to Khabar AI":
-- `AGENT_SYSTEM_PROMPT` instructs: *Open EXACTLY with "Welcome to Khabar AI…"*
-- `buildFirstMessage()` returns a string starting with "Welcome to Khabar AI…", which is then sent as `Please begin the briefing now. Start with: "<opener>"`.
+### 1. Never show "YOU · …" in the transcript
+Right now `shouldHideTranscriptLine` only hides specific user phrases (the auto-start prompt). The user wants **all** user lines hidden from the UI.
 
-The agent obeys both → says Welcome, then the opener (which also starts with Welcome).
+- Change `shouldHideTranscriptLine` so any `role === "user"` line returns `true` (hidden).
+- Keep server-side persistence of user messages (the `persistMessage` call) so history/coverage logic still works — the hide check only gates the on-screen `setTranscript` push.
 
-**Fix:** make the opener the single source of truth. In `AGENT_SYSTEM_PROMPT`, replace the "Open EXACTLY with…" rule with: *"Your opening line is provided in the kickoff message — read it naturally, then continue. Do NOT prepend your own greeting."* Keep `buildFirstMessage()` as the one that produces the welcome.
+### 2. Agent must start the briefing on its own
+Today the auto-start path:
+- Sends `firstMessage: opener` via `startSession`. If the ElevenLabs dashboard override is off, the agent never speaks it.
+- 1.8s after connect, fires a single `sendUserMessage(prompt)` — but only if `isSpeaking` is false and the agent hasn't spoken. If the kickoff context (heavy, ~30KB, sent over ~paced 350ms chunks for several seconds) is still streaming, the agent often stays idle waiting and the one-shot prompt arrives before context is fully delivered, so the agent doesn't actually start.
 
-### 2. Improve the intro
-Rewrite `buildFirstMessage()` to be warmer, more conversational, India-flavoured, and clearer about controls. New shape (still one short paragraph):
+Make the trigger fire **after** the context chunks finish, and retry if the agent stays silent:
 
-> "Namaste, and welcome to Khabar AI — your daily catch-up on what's happening and why it matters. Today we've got {N from India}, {M from around the world}, and {K quick hits} — about fifteen minutes in all. Jump in anytime: say 'next' to skip, 'go deeper' for more, or name a story to jump to. Let's get into it."
+- Move the auto-start prompt send to the end of the kickoff-chunks async block (right after the final `sendContextualUpdate` + a short drain delay), instead of a fixed 1.8s timer racing the chunks.
+- Add a short retry: if `agentSpokeRef.current` is still false ~2.5s after the first prompt, re-send the auto-start prompt once. Cap at 2 sends total to avoid loops.
+- Keep the existing `onModeChange` listening-mode fallback for cases where the agent connects without a kickoff (resume on same briefing).
+- The auto-start prompt text already instructs "no greeting, continue as monologue", so the agent will begin the first story immediately.
 
-- Uses "Namaste" only when `homeCountry === "in"`; otherwise a neutral "Hey, welcome to Khabar AI…".
-- Keeps the dynamic counts.
-- Mentions runtime + the three voice commands explicitly (matches what the system prompt already promises).
-- Empty-briefing branch stays.
-
-### 3. Indian accent
-The accent is determined by the **ElevenLabs voice**, not the prompt. Two ways to set it:
-
-**A. Agent dashboard (recommended, zero code):** in the ElevenLabs agent settings, change the voice to an Indian-English voice (e.g. "Monika Sogam – Indian English", "Niraj – Hindi-English", or any Indian voice from the Voice Library). This is the cleanest fix and sticks across sessions.
-
-**B. Per-session override in code:** pass `overrides.tts.voiceId` to `useConversation`. Requires "Voice ID" override to be enabled in the agent dashboard, and we need the specific voice ID to hardcode.
-
-I'll proceed with **A** by default (no code change for the voice) and additionally add a light prompt nudge: *"Speak in natural Indian English — warm, unhurried, with Indian pronunciations of names and places."* This won't change the accent of the synthesised voice but helps with name pronunciation and pacing.
-
-If you'd rather I wire option B, give me the voice ID and I'll set it via `overrides.tts.voiceId`.
-
-### Files touched
-- `src/hooks/useVoiceAgent.ts` — edit `AGENT_SYSTEM_PROMPT` (remove "Open EXACTLY with", add "Speak in natural Indian English"); rewrite `buildFirstMessage()`.
-
-### Verification
-- Start a fresh session → agent says "Namaste, and welcome to Khabar AI…" exactly once, no second "Welcome".
-- Console still shows `[voice] sent context N chunks, … bytes`.
-- If you switch the dashboard voice to an Indian one, the accent updates on the next session.
+### Out of scope
+No backend, ElevenLabs dashboard, or UI component changes — only the hook's transcript filter and auto-start sequencing.
