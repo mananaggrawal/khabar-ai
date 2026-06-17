@@ -31,10 +31,6 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
   const rafRef = useRef<number | null>(null);
   const briefingIdRef = useRef<string | null>(null);
   const briefingRef = useRef<Briefing | null>(null);
-  const pendingKickoffRef = useRef<{ parts: string[]; opener: string } | null>(null);
-  const autoStartPromptRef = useRef<string | null>(null);
-  const autoStartSentRef = useRef(false);
-  const autoStartTimerRef = useRef<number | null>(null);
   const agentSpokeRef = useRef(false);
   const connectedAtRef = useRef<number>(0);
   const lastSdkErrorRef = useRef<string | null>(null);
@@ -66,7 +62,6 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     return () => {
       window.removeEventListener("unhandledrejection", onUnhandled);
       window.removeEventListener("error", onWindowError);
-      if (autoStartTimerRef.current) window.clearTimeout(autoStartTimerRef.current);
     };
   }, [reportError]);
 
@@ -79,75 +74,10 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
       agentSpokeRef.current = false;
       lastSdkErrorRef.current = null;
       connectedAtRef.current = Date.now();
-      autoStartSentRef.current = false;
-      if (autoStartTimerRef.current) window.clearTimeout(autoStartTimerRef.current);
-      const fireAutoStart = (reason: string) => {
-        const prompt = autoStartPromptRef.current;
-        if (!prompt || autoStartSentRef.current || agentSpokeRef.current || conversation.isSpeaking) return;
-        autoStartSentRef.current = true;
-        try {
-          console.log("[voice] auto-start fire:", reason);
-          conversation.sendUserMessage(prompt);
-          // Retry once if the agent stays silent.
-          window.setTimeout(() => {
-            if (!agentSpokeRef.current && !conversation.isSpeaking && autoStartPromptRef.current) {
-              try {
-                console.log("[voice] auto-start retry");
-                conversation.sendUserMessage(autoStartPromptRef.current);
-              } catch (e) {
-                console.warn("[voice] auto-start retry failed", e);
-              }
-            }
-          }, 2500);
-        } catch (e) {
-          autoStartSentRef.current = false;
-          console.warn("[voice] auto-start prompt failed", e);
-        }
-      };
-      const kickoff = pendingKickoffRef.current;
-      pendingKickoffRef.current = null;
-      if (!kickoff || kickoff.parts.length === 0) {
-        // No kickoff context to send — fire auto-start shortly after connect.
-        autoStartTimerRef.current = window.setTimeout(() => fireAutoStart("no-kickoff"), 1800);
-        return;
-      }
-      // Send chunks paced — blasting >30KB synchronously over the WebRTC
-      // data channel right after connect overflows the channel buffer and
-      // tears the session down with code 1006.
-      (async () => {
-        try {
-          // Let the SDK finish its initiation packet before we publish our own
-          // context. Sending immediately after onConnect can race LiveKit's data
-          // channel and close the room before the first audio packet arrives.
-          await new Promise((r) => setTimeout(r, 1200));
-          let totalBytes = 0;
-          for (let i = 0; i < kickoff.parts.length; i++) {
-            const part = kickoff.parts[i];
-            const labeled = `BRIEFING CONTEXT PART ${i + 1}/${kickoff.parts.length}:\n${part}`;
-            try {
-              conversation.sendContextualUpdate?.(labeled);
-              totalBytes += new TextEncoder().encode(labeled).length;
-            } catch (e) {
-              console.warn("[voice] context chunk failed", i + 1, e);
-            }
-            // Yield between chunks so the data channel can drain.
-            await new Promise((r) => setTimeout(r, 350));
-          }
-          console.log("[voice] sent context", kickoff.parts.length, "chunks,", totalBytes, "bytes");
-          // Give the channel a beat to drain, then kick the agent off.
-          await new Promise((r) => setTimeout(r, 400));
-          fireAutoStart("post-kickoff");
-        } catch (e) {
-          console.warn("[voice] kickoff failed", e);
-        }
-      })();
     },
     onDisconnect: (details: any) => {
       setAmplitude(0);
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      if (autoStartTimerRef.current) window.clearTimeout(autoStartTimerRef.current);
-      autoStartTimerRef.current = null;
-      autoStartPromptRef.current = null;
       if (details?.reason === "user") {
         connectedAtRef.current = 0;
         return;
@@ -278,52 +208,13 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         return;
       }
 
-      let resumeIndex: number | undefined;
-      let isResume = false;
-      if (typeof jumpToIndex !== "number") {
-        const covered = computeCoveredIndex(briefing, transcript, briefing.id);
-        if (covered >= 0 && covered < briefing.topics.length - 1) {
-          resumeIndex = covered + 1;
-          isResume = true;
-        }
-      }
-      const effectiveJump = typeof jumpToIndex === "number" ? jumpToIndex : resumeIndex;
-
-      const sessionPrompt = buildSessionPrompt(briefing, effectiveJump, isResume);
-      const jumpNote = isResume && typeof effectiveJump === "number"
-        ? `\n\nRESUMING a previous session. The user already heard stories 1 through ${effectiveJump}. Pick up at story #${effectiveJump + 1} and continue in order. Do NOT repeat the full intro — open with a brief "Picking up where we left off" line, then go.`
-        : typeof effectiveJump === "number"
-        ? `\n\nThe user tapped story #${effectiveJump + 1}. Begin there and continue in order.`
-        : "";
-      const opener = isResume && typeof effectiveJump === "number"
-        ? buildResumeMessage(briefing, effectiveJump)
-        : typeof effectiveJump === "number"
-        ? buildJumpMessage(briefing, effectiveJump)
-        : buildFirstMessage(briefing);
-      autoStartPromptRef.current = buildAutoStartPrompt(isResume, effectiveJump);
-      autoStartSentRef.current = false;
-      pendingKickoffRef.current = {
-        // Do not push briefing context after connect. Even 20–25KB contextual
-        // updates can close ElevenLabs' WebRTC room before first audio. The
-        // compact briefing is included in the session prompt override instead.
-        parts: [],
-        opener,
-      };
       await conversation.startSession({
         conversationToken: tokenRes.token,
         connectionType: "webrtc",
-        overrides: {
-          agent: {
-            firstMessage: opener,
-            prompt: { prompt: `${sessionPrompt}${jumpNote}` },
-            language: "en",
-          },
-        },
       } as any);
     } catch (e) {
       console.error("[voice] start failed", e);
       setConfigError("upstream_error");
-      pendingKickoffRef.current = null;
     } finally {
       setIsStarting(false);
     }
