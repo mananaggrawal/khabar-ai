@@ -31,10 +31,6 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
   const rafRef = useRef<number | null>(null);
   const briefingIdRef = useRef<string | null>(null);
   const briefingRef = useRef<Briefing | null>(null);
-  const pendingKickoffRef = useRef<{ parts: string[]; opener: string } | null>(null);
-  const autoStartPromptRef = useRef<string | null>(null);
-  const autoStartSentRef = useRef(false);
-  const autoStartTimerRef = useRef<number | null>(null);
   const agentSpokeRef = useRef(false);
   const connectedAtRef = useRef<number>(0);
   const lastSdkErrorRef = useRef<string | null>(null);
