@@ -66,6 +66,7 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     return () => {
       window.removeEventListener("unhandledrejection", onUnhandled);
       window.removeEventListener("error", onWindowError);
+      if (autoStartTimerRef.current) window.clearTimeout(autoStartTimerRef.current);
     };
   }, [reportError]);
 
@@ -294,6 +295,8 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         : typeof effectiveJump === "number"
         ? buildJumpMessage(briefing, effectiveJump)
         : buildFirstMessage(briefing);
+      autoStartPromptRef.current = buildAutoStartPrompt(isResume, effectiveJump);
+      autoStartSentRef.current = false;
       pendingKickoffRef.current = {
         // Do not push briefing context after connect. Even 20–25KB contextual
         // updates can close ElevenLabs' WebRTC room before first audio. The
@@ -439,6 +442,24 @@ function buildResumeMessage(b: Briefing, i: number): string {
   const t = b.topics[i];
   if (!t) return buildFirstMessage(b);
   return `Picking up where we left off — story ${i + 1}: ${t.headline}.`;
+}
+
+const AUTO_START_PREFIX = "SYSTEM_AUTO_START_BRIEFING";
+
+function buildAutoStartPrompt(isResume: boolean, effectiveJump?: number): string {
+  if (isResume && typeof effectiveJump === "number") {
+    return `${AUTO_START_PREFIX}: Start speaking now as a continuous news monologue from story ${effectiveJump + 1}. Do not wait for the listener and do not ask a question.`;
+  }
+  if (typeof effectiveJump === "number") {
+    return `${AUTO_START_PREFIX}: Start speaking now as a continuous news monologue from story ${effectiveJump + 1}. Do not wait for the listener and do not ask a question.`;
+  }
+  return `${AUTO_START_PREFIX}: Start speaking now as a continuous news monologue from the first story. Do not wait for the listener and do not ask a question.`;
+}
+
+function shouldHideTranscriptLine(role: "user" | "agent", text: string): boolean {
+  if (role !== "user") return false;
+  const normalized = text.toLowerCase().replace(/[^a-z0-9_ ]/g, " ").replace(/\s+/g, " ").trim();
+  return normalized.startsWith(AUTO_START_PREFIX.toLowerCase()) || normalized === "you can start";
 }
 
 const PROGRESS_KEY = "khabar.progress";
