@@ -184,11 +184,17 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         : buildFirstMessage(briefing);
       pendingKickoffRef.current = {
         parts: splitForContextChannel(context),
-        opener: `Please begin the briefing now. Start with: "${opener}"`,
+        opener,
       };
       await conversation.startSession({
         conversationToken: tokenRes.token,
         connectionType: "webrtc",
+        overrides: {
+          agent: {
+            firstMessage: opener,
+            prompt: { prompt: AGENT_SYSTEM_PROMPT },
+          },
+        },
       } as any);
     } catch (e) {
       console.error("[voice] start failed", e);
