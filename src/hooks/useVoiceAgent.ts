@@ -36,6 +36,10 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
   const rafRef = useRef<number | null>(null);
   const briefingIdRef = useRef<string | null>(null);
   const agentSpokeRef = useRef(false);
+  const lastAgentAudioAtRef = useRef<number>(0);
+  const watchdogRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const restartAttemptsRef = useRef(0);
+  const restartingRef = useRef(false);
 
   useEffect(() => {
     briefingIdRef.current = briefing?.id ?? null;
