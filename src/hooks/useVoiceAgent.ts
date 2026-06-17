@@ -32,6 +32,9 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
   const briefingIdRef = useRef<string | null>(null);
   const briefingRef = useRef<Briefing | null>(null);
   const pendingKickoffRef = useRef<{ parts: string[]; opener: string } | null>(null);
+  const autoStartPromptRef = useRef<string | null>(null);
+  const autoStartSentRef = useRef(false);
+  const autoStartTimerRef = useRef<number | null>(null);
   const agentSpokeRef = useRef(false);
   const connectedAtRef = useRef<number>(0);
   const lastSdkErrorRef = useRef<string | null>(null);
@@ -75,6 +78,19 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
       agentSpokeRef.current = false;
       lastSdkErrorRef.current = null;
       connectedAtRef.current = Date.now();
+      autoStartSentRef.current = false;
+      if (autoStartTimerRef.current) window.clearTimeout(autoStartTimerRef.current);
+      autoStartTimerRef.current = window.setTimeout(() => {
+        const prompt = autoStartPromptRef.current;
+        if (!prompt || autoStartSentRef.current) return;
+        autoStartSentRef.current = true;
+        try {
+          conversation.sendUserMessage(prompt);
+        } catch (e) {
+          autoStartSentRef.current = false;
+          console.warn("[voice] auto-start prompt failed", e);
+        }
+      }, 8500);
       const kickoff = pendingKickoffRef.current;
       pendingKickoffRef.current = null;
       if (!kickoff || kickoff.parts.length === 0) return;
@@ -109,6 +125,9 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     onDisconnect: (details: any) => {
       setAmplitude(0);
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      if (autoStartTimerRef.current) window.clearTimeout(autoStartTimerRef.current);
+      autoStartTimerRef.current = null;
+      autoStartPromptRef.current = null;
       if (details?.reason === "user") {
         connectedAtRef.current = 0;
         return;
@@ -143,6 +162,20 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     },
     onModeChange: ({ mode }: any) => {
       if (mode === "speaking") agentSpokeRef.current = true;
+      if (mode === "listening" && autoStartPromptRef.current && !autoStartSentRef.current) {
+        if (autoStartTimerRef.current) window.clearTimeout(autoStartTimerRef.current);
+        autoStartTimerRef.current = window.setTimeout(() => {
+          const prompt = autoStartPromptRef.current;
+          if (!prompt || autoStartSentRef.current) return;
+          autoStartSentRef.current = true;
+          try {
+            conversation.sendUserMessage(prompt);
+          } catch (e) {
+            autoStartSentRef.current = false;
+            console.warn("[voice] auto-start prompt failed", e);
+          }
+        }, 250);
+      }
     },
     onAudio: () => {
       agentSpokeRef.current = true;
@@ -166,6 +199,7 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         const role = msg.role === "agent" || msg.source === "ai" ? "agent" : "user";
         const text = msg.message.trim();
         if (!text) return;
+        if (shouldHideTranscriptLine(role, text)) return;
         if (role === "agent") agentSpokeRef.current = true;
         setTranscript((t) => [...t, { id, role, text, at: Date.now() }]);
         if (bid) persistMessage({ data: { briefingId: bid, role, content: text } }).catch(console.error);
@@ -181,6 +215,7 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
       if (msg.type === "user_transcript") {
         const text = msg.user_transcription_event?.user_transcript ?? "";
         if (text) {
+          if (shouldHideTranscriptLine("user", text)) return;
           setTranscript((t) => [...t, { id, role: "user", text, at: Date.now() }]);
           if (bid) persistMessage({ data: { briefingId: bid, role: "user", content: text } }).catch(console.error);
         }
