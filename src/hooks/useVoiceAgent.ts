@@ -356,3 +356,40 @@ function buildCompactIndex(b: Briefing): string {
   }
   return lines.join("\n");
 }
+
+// WebRTC data channel cap is 65535 bytes per message. Leave headroom for
+// framing + our "PART x/N" label, then split on safe boundaries.
+function splitForContextChannel(text: string, maxBytes = 55000): string[] {
+  const enc = new TextEncoder();
+  if (enc.encode(text).length <= maxBytes) return [text];
+
+  // Prefer splitting on topic-object boundaries inside the JSON payload,
+  // falling back to newlines, then hard char chunks.
+  const candidates = text.includes("},{")
+    ? text.split(/(?<=\},)(?=\{)/)
+    : text.split(/\n/);
+
+  const parts: string[] = [];
+  let buf = "";
+  const flush = () => { if (buf) { parts.push(buf); buf = ""; } };
+
+  for (const seg of candidates) {
+    const piece = buf ? buf + (text.includes("},{") ? "" : "\n") + seg : seg;
+    if (enc.encode(piece).length <= maxBytes) {
+      buf = piece;
+    } else {
+      flush();
+      if (enc.encode(seg).length <= maxBytes) {
+        buf = seg;
+      } else {
+        // Segment itself too big — hard slice by chars (approx, safe upper bound).
+        const step = Math.floor(maxBytes / 2);
+        for (let i = 0; i < seg.length; i += step) {
+          parts.push(seg.slice(i, i + step));
+        }
+      }
+    }
+  }
+  flush();
+  return parts;
+}
