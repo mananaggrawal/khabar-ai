@@ -57,7 +57,9 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
           }
         });
         console.log("[voice] sent context", kickoff.parts.length, "chunks,", totalBytes, "bytes");
-        conversation.sendUserMessage?.(kickoff.opener);
+        // NOTE: the opener is delivered via overrides.agent.firstMessage on
+        // startSession — do NOT also sendUserMessage here, or the agent will
+        // greet twice (its first_message + a response to our prompt).
       } catch (e) {
         console.warn("[voice] kickoff failed", e);
       }
