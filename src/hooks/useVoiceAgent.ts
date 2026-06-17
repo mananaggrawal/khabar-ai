@@ -256,6 +256,7 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     transcript,
     status: conversation.status,
     configError,
+    errorDetail,
     isStarting,
     start,
     stop,
