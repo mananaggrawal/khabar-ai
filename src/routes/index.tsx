@@ -168,12 +168,19 @@ function BriefingSurface() {
             </p>
             <p className="text-sm text-muted-foreground">{subtitle}</p>
             {voice.configError && (
-              <p className="mt-1 flex items-center gap-1.5 text-xs text-amber-400/90">
-                <AlertTriangle className="size-3.5" />
-                {voice.configError === "missing_api_key" || voice.configError === "missing_agent_id"
-                  ? "Voice not configured yet — add ElevenLabs keys to enable."
-                  : "Agent rejected the session. Make sure the ElevenLabs agent exists and is published."}
-              </p>
+              <div className="mt-1 flex max-w-md flex-col items-center gap-1 text-xs text-amber-400/90">
+                <p className="flex items-center gap-1.5">
+                  <AlertTriangle className="size-3.5" />
+                  {voice.configError === "missing_api_key" || voice.configError === "missing_agent_id"
+                    ? "Voice not configured yet — add ElevenLabs keys to enable."
+                    : voice.configError === "disconnected_early"
+                    ? "Agent connected but never spoke."
+                    : "Agent rejected the session."}
+                </p>
+                {voice.errorDetail && (
+                  <p className="text-[11px] leading-snug text-amber-300/70">{voice.errorDetail}</p>
+                )}
+              </div>
             )}
           </div>
 
