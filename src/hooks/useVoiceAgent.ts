@@ -34,6 +34,7 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
   const pendingKickoffRef = useRef<{ parts: string[]; opener: string } | null>(null);
   const agentSpokeRef = useRef(false);
   const connectedAtRef = useRef<number>(0);
+  const lastSdkErrorRef = useRef<string | null>(null);
 
   useEffect(() => {
     briefingIdRef.current = briefing?.id ?? null;
@@ -46,6 +47,25 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     if (detail) setErrorDetail(detail);
   }, []);
 
+  useEffect(() => {
+    const captureSdkCrash = (raw: unknown) => {
+      const detail = raw instanceof Error ? raw.message : String(raw);
+      if (!/error_type|ElevenLabs|LiveKit|voice|conversation/i.test(detail)) return;
+      reportError(
+        "upstream_error",
+        `Voice SDK runtime error: ${detail}. If this repeats, the agent is returning an invalid error packet before audio starts.`,
+      );
+    };
+    const onUnhandled = (event: PromiseRejectionEvent) => captureSdkCrash(event.reason);
+    const onWindowError = (event: ErrorEvent) => captureSdkCrash(event.error ?? event.message);
+    window.addEventListener("unhandledrejection", onUnhandled);
+    window.addEventListener("error", onWindowError);
+    return () => {
+      window.removeEventListener("unhandledrejection", onUnhandled);
+      window.removeEventListener("error", onWindowError);
+    };
+  }, [reportError]);
+
   const mintToken = useServerFn(getElevenLabsToken);
   const persistMessage = useServerFn(saveMessage);
 
@@ -53,15 +73,20 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     onConnect: () => {
       console.log("[voice] connected");
       agentSpokeRef.current = false;
+      lastSdkErrorRef.current = null;
       connectedAtRef.current = Date.now();
       const kickoff = pendingKickoffRef.current;
       pendingKickoffRef.current = null;
-      if (!kickoff) return;
+      if (!kickoff || kickoff.parts.length === 0) return;
       // Send chunks paced — blasting >30KB synchronously over the WebRTC
       // data channel right after connect overflows the channel buffer and
       // tears the session down with code 1006.
       (async () => {
         try {
+          // Let the SDK finish its initiation packet before we publish our own
+          // context. Sending immediately after onConnect can race LiveKit's data
+          // channel and close the room before the first audio packet arrives.
+          await new Promise((r) => setTimeout(r, 1200));
           let totalBytes = 0;
           for (let i = 0; i < kickoff.parts.length; i++) {
             const part = kickoff.parts[i];
@@ -81,39 +106,75 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         }
       })();
     },
-    onDisconnect: () => {
+    onDisconnect: (details: any) => {
       setAmplitude(0);
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      if (details?.reason === "user") {
+        connectedAtRef.current = 0;
+        return;
+      }
       // If we connected but the agent never produced a single response,
-      // surface that — the most common cause is the agent's "first message"
-      // / "prompt" override being disabled in the ElevenLabs dashboard, or
-      // the context push tearing the WebRTC channel down.
+      // surface that with the SDK disconnect detail and our last SDK error.
       if (connectedAtRef.current && !agentSpokeRef.current) {
         const elapsed = Date.now() - connectedAtRef.current;
+        const sdkDetail = lastSdkErrorRef.current ? ` Last SDK error: ${lastSdkErrorRef.current}` : "";
+        const disconnectDetail = formatDisconnectDetails(details);
         reportError(
           "disconnected_early",
           `Session ended after ${Math.round(elapsed / 100) / 10}s without the agent speaking. ` +
-            `Likely causes: (1) the agent's "First message" or "System prompt" override is disabled in the ElevenLabs dashboard (Security → Overrides), ` +
-            `(2) the agent is paused/unpublished, or (3) the briefing context payload was rejected.`,
+            `${disconnectDetail} ` +
+            `No live context packet is sent after connect now, so if this repeats check that the agent is published and that First message/System prompt overrides are enabled.` +
+            sdkDetail,
         );
       }
       connectedAtRef.current = 0;
     },
-    onError: (err: any) => {
+    onError: (err: any, context?: any) => {
       // ElevenLabs SDK sometimes passes a raw event, sometimes an object.
       const detail =
         typeof err === "string"
           ? err
           : err?.message ?? err?.reason ?? err?.error ?? (() => { try { return JSON.stringify(err); } catch { return String(err); } })();
-      console.error("[voice] error", err);
+      const contextDetail = context ? safeJson(context).slice(0, 500) : "";
+      const fullDetail = contextDetail ? `${detail} — ${contextDetail}` : detail;
+      lastSdkErrorRef.current = fullDetail;
+      console.error("[voice] error", err, context);
       reportError("upstream_error", detail);
+    },
+    onModeChange: ({ mode }: any) => {
+      if (mode === "speaking") agentSpokeRef.current = true;
+    },
+    onAudio: () => {
+      agentSpokeRef.current = true;
+    },
+    onDebug: (info: any) => {
+      if (info?.type === "send_message_error") {
+        const detail = `Failed sending a voice data-channel message: ${safeJson(info.message?.error ?? info).slice(0, 350)}`;
+        lastSdkErrorRef.current = detail;
+        reportError("upstream_error", detail);
+      } else {
+        console.debug("[voice] debug", info);
+      }
     },
     onMessage: (msg: any) => {
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const bid = briefingIdRef.current;
+      // Current @elevenlabs/react emits normalized messages:
+      // { role: "user" | "agent", message: string }. Keep the raw-event
+      // branches below as a fallback for older SDK payloads.
+      if (typeof msg?.message === "string" && (msg?.role || msg?.source)) {
+        const role = msg.role === "agent" || msg.source === "ai" ? "agent" : "user";
+        const text = msg.message.trim();
+        if (!text) return;
+        if (role === "agent") agentSpokeRef.current = true;
+        setTranscript((t) => [...t, { id, role, text, at: Date.now() }]);
+        if (bid) persistMessage({ data: { briefingId: bid, role, content: text } }).catch(console.error);
+        if (role === "agent" && bid) markProgressFromAgentText(briefingRef.current, bid, text);
+        return;
+      }
       // Capture any server-side error events the SDK forwards.
       if (msg?.type && /error/i.test(msg.type)) {
-        const detail = msg?.error?.message ?? msg?.message ?? JSON.stringify(msg).slice(0, 400);
+        const detail = msg?.error_event?.message ?? msg?.error?.message ?? msg?.message ?? JSON.stringify(msg).slice(0, 400);
         reportError("upstream_error", `Agent error (${msg.type}): ${detail}`);
         return;
       }
@@ -129,18 +190,7 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
           agentSpokeRef.current = true;
           setTranscript((t) => [...t, { id, role: "agent", text, at: Date.now() }]);
           if (bid) persistMessage({ data: { briefingId: bid, role: "agent", content: text } }).catch(console.error);
-          const b = briefingRef.current;
-          if (b && bid) {
-            const norm = normalize(text);
-            let covered = loadProgress(bid);
-            b.topics.forEach((topic, idx) => {
-              const key = normalize(topic.headline).slice(0, 40);
-              if (key.length >= 8 && norm.includes(key) && idx > covered) {
-                covered = idx;
-              }
-            });
-            saveProgress(bid, covered);
-          }
+          if (bid) markProgressFromAgentText(briefingRef.current, bid, text);
         }
       }
     },
@@ -198,32 +248,22 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
       }
       const effectiveJump = typeof jumpToIndex === "number" ? jumpToIndex : resumeIndex;
 
-      const compactIndex = buildCompactIndex(briefing);
-      const slimBriefing = buildSlimBriefingContext(briefing);
+      const sessionPrompt = buildSessionPrompt(briefing, effectiveJump, isResume);
       const jumpNote = isResume && typeof effectiveJump === "number"
         ? `\n\nRESUMING a previous session. The user already heard stories 1 through ${effectiveJump}. Pick up at story #${effectiveJump + 1} and continue in order. Do NOT repeat the full intro — open with a brief "Picking up where we left off" line, then go.`
         : typeof effectiveJump === "number"
         ? `\n\nThe user tapped story #${effectiveJump + 1}. Begin there and continue in order.`
         : "";
-      // Keep the live context push small — large payloads (>30KB) over the
-      // WebRTC data channel cause 1006 disconnects. The system prompt is
-      // already delivered via overrides.agent.prompt; we only need to push
-      // today's headlines + slim per-topic data here.
-      const context = [
-        `TODAY'S HEADLINES (tiered index — read in the order shown):`,
-        compactIndex,
-        "",
-        "BRIEFING DATA (use for explanations, why-it-matters, and sources):",
-        slimBriefing,
-        jumpNote,
-      ].join("\n");
       const opener = isResume && typeof effectiveJump === "number"
         ? buildResumeMessage(briefing, effectiveJump)
         : typeof effectiveJump === "number"
         ? buildJumpMessage(briefing, effectiveJump)
         : buildFirstMessage(briefing);
       pendingKickoffRef.current = {
-        parts: splitForContextChannel(context),
+        // Do not push briefing context after connect. Even 20–25KB contextual
+        // updates can close ElevenLabs' WebRTC room before first audio. The
+        // compact briefing is included in the session prompt override instead.
+        parts: [],
         opener,
       };
       await conversation.startSession({
@@ -232,7 +272,8 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         overrides: {
           agent: {
             firstMessage: opener,
-            prompt: { prompt: AGENT_SYSTEM_PROMPT },
+            prompt: { prompt: `${sessionPrompt}${jumpNote}` },
+            language: "en",
           },
         },
       } as any);
@@ -290,6 +331,42 @@ ANSWERING FOLLOW-UP QUESTIONS (very important):
 - Specific factual questions → answer from keyFacts or qa when possible; cite the source name.
 - If the pack truly doesn't cover a very specific detail, do NOT say "I don't know". Instead, answer with what the pack DOES cover (the broader context, the key facts you have, the angle the sources took) and offer to dig deeper in tomorrow's briefing — e.g. "the reporting I have focuses on X and Y; I'll flag Z for tomorrow's update."
 - For questions completely unrelated to today's news, you may answer briefly from general knowledge, then steer back to the briefing.`;
+
+function buildSessionPrompt(b: Briefing, effectiveJump?: number, isResume = false): string {
+  const startLine = isResume && typeof effectiveJump === "number"
+    ? `Start at story ${effectiveJump + 1}. The listener already heard everything before it. Do not repeat the welcome.`
+    : typeof effectiveJump === "number"
+    ? `Start at story ${effectiveJump + 1}. The listener tapped that story.`
+    : "Start with the provided first message, then continue through the briefing in order.";
+  return [
+    AGENT_SYSTEM_PROMPT,
+    "",
+    startLine,
+    "",
+    "TODAY'S BRIEFING — use only this compact source. Read HOME first, then WORLD, then QUICK HITS:",
+    buildPromptBriefingContext(b),
+  ].join("\n");
+}
+
+function buildPromptBriefingContext(b: Briefing): string {
+  const lines: string[] = [`Home country: ${COUNTRY_LABELS[b.homeCountry ?? "in"] ?? "India"}`];
+  b.topics.forEach((t, i) => {
+    const tier = tierLabel(t.tier);
+    const source = t.sources[0]?.name ? ` Source: ${t.sources[0].name}.` : "";
+    const hook = compactSentence(t.hook, 170);
+    const explain = compactSentence(t.explanation, t.tier === "quick_hit" ? 150 : 230);
+    const why = t.tier === "quick_hit" ? "" : ` Why it matters: ${compactSentence(t.whyItMatters, 150)}`;
+    lines.push(`${i + 1}. [${tier}] ${t.headline}. ${hook} ${explain}${why}${source}`.replace(/\s+/g, " ").trim());
+  });
+  return lines.join("\n");
+}
+
+function compactSentence(value: string | undefined, max: number): string {
+  const clean = (value ?? "").replace(/\s+/g, " ").trim();
+  if (clean.length <= max) return clean;
+  const clipped = clean.slice(0, max);
+  return `${clipped.slice(0, Math.max(0, clipped.lastIndexOf(" ")))}…`;
+}
 
 function tierLabel(tier?: string) {
   if (tier === "home") return "HOME";
@@ -350,6 +427,36 @@ function saveProgress(briefingId: string, covered: number) {
 
 function normalize(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function safeJson(value: unknown): string {
+  try { return JSON.stringify(value); } catch { return String(value); }
+}
+
+function formatDisconnectDetails(details: any): string {
+  if (!details) return "No disconnect details were provided by the voice SDK.";
+  const bits = [
+    details.reason ? `reason=${details.reason}` : "",
+    details.message ? `message=${details.message}` : "",
+    details.closeCode ? `closeCode=${details.closeCode}` : "",
+    details.closeReason ? `closeReason=${details.closeReason}` : "",
+    details.context?.type ? `context=${details.context.type}` : "",
+    details.context?.reason ? `contextReason=${details.context.reason}` : "",
+  ].filter(Boolean).join(", ");
+  return bits ? `Voice SDK disconnect detail: ${bits}.` : "The voice SDK disconnected without a specific reason.";
+}
+
+function markProgressFromAgentText(b: Briefing | null, briefingId: string, text: string) {
+  if (!b) return;
+  const norm = normalize(text);
+  let covered = loadProgress(briefingId);
+  b.topics.forEach((topic, idx) => {
+    const key = normalize(topic.headline).slice(0, 40);
+    if (key.length >= 8 && norm.includes(key) && idx > covered) {
+      covered = idx;
+    }
+  });
+  saveProgress(briefingId, covered);
 }
 
 function computeCoveredIndex(
