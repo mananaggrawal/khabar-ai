@@ -46,7 +46,17 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
       pendingKickoffRef.current = null;
       if (!kickoff) return;
       try {
-        conversation.sendContextualUpdate?.(kickoff.context);
+        let totalBytes = 0;
+        kickoff.parts.forEach((part, i) => {
+          const labeled = `BRIEFING CONTEXT PART ${i + 1}/${kickoff.parts.length}:\n${part}`;
+          try {
+            conversation.sendContextualUpdate?.(labeled);
+            totalBytes += new TextEncoder().encode(labeled).length;
+          } catch (e) {
+            console.warn("[voice] context chunk failed", i + 1, e);
+          }
+        });
+        console.log("[voice] sent context", kickoff.parts.length, "chunks,", totalBytes, "bytes");
         conversation.sendUserMessage?.(kickoff.opener);
       } catch (e) {
         console.warn("[voice] kickoff failed", e);
