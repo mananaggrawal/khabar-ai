@@ -81,27 +81,36 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
       connectedAtRef.current = Date.now();
       autoStartSentRef.current = false;
       if (autoStartTimerRef.current) window.clearTimeout(autoStartTimerRef.current);
-      autoStartTimerRef.current = window.setTimeout(() => {
+      const fireAutoStart = (reason: string) => {
         const prompt = autoStartPromptRef.current;
-        if (
-          !prompt ||
-          autoStartSentRef.current ||
-          agentSpokeRef.current ||
-          conversation.isSpeaking
-        ) {
-          return;
-        }
+        if (!prompt || autoStartSentRef.current || agentSpokeRef.current || conversation.isSpeaking) return;
         autoStartSentRef.current = true;
         try {
+          console.log("[voice] auto-start fire:", reason);
           conversation.sendUserMessage(prompt);
+          // Retry once if the agent stays silent.
+          window.setTimeout(() => {
+            if (!agentSpokeRef.current && !conversation.isSpeaking && autoStartPromptRef.current) {
+              try {
+                console.log("[voice] auto-start retry");
+                conversation.sendUserMessage(autoStartPromptRef.current);
+              } catch (e) {
+                console.warn("[voice] auto-start retry failed", e);
+              }
+            }
+          }, 2500);
         } catch (e) {
           autoStartSentRef.current = false;
           console.warn("[voice] auto-start prompt failed", e);
         }
-      }, 1800);
+      };
       const kickoff = pendingKickoffRef.current;
       pendingKickoffRef.current = null;
-      if (!kickoff || kickoff.parts.length === 0) return;
+      if (!kickoff || kickoff.parts.length === 0) {
+        // No kickoff context to send — fire auto-start shortly after connect.
+        autoStartTimerRef.current = window.setTimeout(() => fireAutoStart("no-kickoff"), 1800);
+        return;
+      }
       // Send chunks paced — blasting >30KB synchronously over the WebRTC
       // data channel right after connect overflows the channel buffer and
       // tears the session down with code 1006.
@@ -125,6 +134,9 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
             await new Promise((r) => setTimeout(r, 350));
           }
           console.log("[voice] sent context", kickoff.parts.length, "chunks,", totalBytes, "bytes");
+          // Give the channel a beat to drain, then kick the agent off.
+          await new Promise((r) => setTimeout(r, 400));
+          fireAutoStart("post-kickoff");
         } catch (e) {
           console.warn("[voice] kickoff failed", e);
         }
