@@ -14,7 +14,8 @@ export type TranscriptLine = {
   at: number;
 };
 
-export type VoiceConfigError = "missing_api_key" | "missing_agent_id" | "upstream_error" | null;
+export type VoiceConfigError = "missing_api_key" | "missing_agent_id" | "upstream_error" | "disconnected_early" | null;
+export type VoiceErrorDetail = { reason: VoiceConfigError; detail?: string } | null;
 
 interface UseVoiceAgentOpts {
   briefing: Briefing | null;
@@ -23,6 +24,7 @@ interface UseVoiceAgentOpts {
 export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
   const [transcript, setTranscript] = useState<TranscriptLine[]>([]);
   const [configError, setConfigError] = useState<VoiceConfigError>(null);
+  const [errorDetail, setErrorDetail] = useState<string | null>(null);
   const [amplitude, setAmplitude] = useState(0);
   const [isStarting, setIsStarting] = useState(false);
   const freqRef = useRef<Uint8Array | null>(null);
@@ -30,11 +32,19 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
   const briefingIdRef = useRef<string | null>(null);
   const briefingRef = useRef<Briefing | null>(null);
   const pendingKickoffRef = useRef<{ parts: string[]; opener: string } | null>(null);
+  const agentSpokeRef = useRef(false);
+  const connectedAtRef = useRef<number>(0);
 
   useEffect(() => {
     briefingIdRef.current = briefing?.id ?? null;
     briefingRef.current = briefing;
   }, [briefing]);
+
+  const reportError = useCallback((reason: VoiceConfigError, detail?: string) => {
+    console.error("[voice] error surfaced:", reason, detail);
+    setConfigError(reason);
+    if (detail) setErrorDetail(detail);
+  }, []);
 
   const mintToken = useServerFn(getElevenLabsToken);
   const persistMessage = useServerFn(saveMessage);
@@ -42,39 +52,71 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
   const conversation = useConversation({
     onConnect: () => {
       console.log("[voice] connected");
+      agentSpokeRef.current = false;
+      connectedAtRef.current = Date.now();
       const kickoff = pendingKickoffRef.current;
       pendingKickoffRef.current = null;
       if (!kickoff) return;
-      try {
-        let totalBytes = 0;
-        kickoff.parts.forEach((part, i) => {
-          const labeled = `BRIEFING CONTEXT PART ${i + 1}/${kickoff.parts.length}:\n${part}`;
-          try {
-            conversation.sendContextualUpdate?.(labeled);
-            totalBytes += new TextEncoder().encode(labeled).length;
-          } catch (e) {
-            console.warn("[voice] context chunk failed", i + 1, e);
+      // Send chunks paced — blasting >30KB synchronously over the WebRTC
+      // data channel right after connect overflows the channel buffer and
+      // tears the session down with code 1006.
+      (async () => {
+        try {
+          let totalBytes = 0;
+          for (let i = 0; i < kickoff.parts.length; i++) {
+            const part = kickoff.parts[i];
+            const labeled = `BRIEFING CONTEXT PART ${i + 1}/${kickoff.parts.length}:\n${part}`;
+            try {
+              conversation.sendContextualUpdate?.(labeled);
+              totalBytes += new TextEncoder().encode(labeled).length;
+            } catch (e) {
+              console.warn("[voice] context chunk failed", i + 1, e);
+            }
+            // Yield between chunks so the data channel can drain.
+            await new Promise((r) => setTimeout(r, 350));
           }
-        });
-        console.log("[voice] sent context", kickoff.parts.length, "chunks,", totalBytes, "bytes");
-        // NOTE: the opener is delivered via overrides.agent.firstMessage on
-        // startSession — do NOT also sendUserMessage here, or the agent will
-        // greet twice (its first_message + a response to our prompt).
-      } catch (e) {
-        console.warn("[voice] kickoff failed", e);
-      }
+          console.log("[voice] sent context", kickoff.parts.length, "chunks,", totalBytes, "bytes");
+        } catch (e) {
+          console.warn("[voice] kickoff failed", e);
+        }
+      })();
     },
     onDisconnect: () => {
       setAmplitude(0);
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      // If we connected but the agent never produced a single response,
+      // surface that — the most common cause is the agent's "first message"
+      // / "prompt" override being disabled in the ElevenLabs dashboard, or
+      // the context push tearing the WebRTC channel down.
+      if (connectedAtRef.current && !agentSpokeRef.current) {
+        const elapsed = Date.now() - connectedAtRef.current;
+        reportError(
+          "disconnected_early",
+          `Session ended after ${Math.round(elapsed / 100) / 10}s without the agent speaking. ` +
+            `Likely causes: (1) the agent's "First message" or "System prompt" override is disabled in the ElevenLabs dashboard (Security → Overrides), ` +
+            `(2) the agent is paused/unpublished, or (3) the briefing context payload was rejected.`,
+        );
+      }
+      connectedAtRef.current = 0;
     },
     onError: (err: any) => {
+      // ElevenLabs SDK sometimes passes a raw event, sometimes an object.
+      const detail =
+        typeof err === "string"
+          ? err
+          : err?.message ?? err?.reason ?? err?.error ?? (() => { try { return JSON.stringify(err); } catch { return String(err); } })();
       console.error("[voice] error", err);
-      setConfigError("upstream_error");
+      reportError("upstream_error", detail);
     },
     onMessage: (msg: any) => {
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const bid = briefingIdRef.current;
+      // Capture any server-side error events the SDK forwards.
+      if (msg?.type && /error/i.test(msg.type)) {
+        const detail = msg?.error?.message ?? msg?.message ?? JSON.stringify(msg).slice(0, 400);
+        reportError("upstream_error", `Agent error (${msg.type}): ${detail}`);
+        return;
+      }
       if (msg.type === "user_transcript") {
         const text = msg.user_transcription_event?.user_transcript ?? "";
         if (text) {
@@ -84,10 +126,9 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
       } else if (msg.type === "agent_response") {
         const text = msg.agent_response_event?.agent_response ?? "";
         if (text) {
+          agentSpokeRef.current = true;
           setTranscript((t) => [...t, { id, role: "agent", text, at: Date.now() }]);
           if (bid) persistMessage({ data: { briefingId: bid, role: "agent", content: text } }).catch(console.error);
-          // Live progress: mark topics as covered as the agent speaks them,
-          // so a session ended mid-briefing resumes at the next story.
           const b = briefingRef.current;
           if (b && bid) {
             const norm = normalize(text);
@@ -136,18 +177,16 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     if (!briefing) return;
     setIsStarting(true);
     setConfigError(null);
+    setErrorDetail(null);
     try {
       await navigator.mediaDevices.getUserMedia({ audio: true });
       const tokenRes = await mintToken({ data: undefined as never });
       if (!tokenRes.ok) {
-        setConfigError(tokenRes.reason);
+        reportError(tokenRes.reason, (tokenRes as any).detail);
         setIsStarting(false);
         return;
       }
 
-      // Resume: if no explicit jump, see if we already covered some topics in
-      // a previous session for this briefing (in-memory transcript or
-      // localStorage). Pick up from the next uncovered topic.
       let resumeIndex: number | undefined;
       let isResume = false;
       if (typeof jumpToIndex !== "number") {
@@ -160,21 +199,22 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
       const effectiveJump = typeof jumpToIndex === "number" ? jumpToIndex : resumeIndex;
 
       const compactIndex = buildCompactIndex(briefing);
-      const fullBriefing = buildBriefingContext(briefing);
+      const slimBriefing = buildSlimBriefingContext(briefing);
       const jumpNote = isResume && typeof effectiveJump === "number"
         ? `\n\nRESUMING a previous session. The user already heard stories 1 through ${effectiveJump}. Pick up at story #${effectiveJump + 1} and continue in order. Do NOT repeat the full intro — open with a brief "Picking up where we left off" line, then go.`
         : typeof effectiveJump === "number"
         ? `\n\nThe user tapped story #${effectiveJump + 1}. Begin there and continue in order.`
         : "";
+      // Keep the live context push small — large payloads (>30KB) over the
+      // WebRTC data channel cause 1006 disconnects. The system prompt is
+      // already delivered via overrides.agent.prompt; we only need to push
+      // today's headlines + slim per-topic data here.
       const context = [
-        "SESSION RULES:",
-        AGENT_SYSTEM_PROMPT,
-        "",
         `TODAY'S HEADLINES (tiered index — read in the order shown):`,
         compactIndex,
         "",
-        "FULL BRIEFING DATA (use for explanations, why-it-matters, and sources):",
-        fullBriefing,
+        "BRIEFING DATA (use for explanations, why-it-matters, and sources):",
+        slimBriefing,
         jumpNote,
       ].join("\n");
       const opener = isResume && typeof effectiveJump === "number"
@@ -216,6 +256,7 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     transcript,
     status: conversation.status,
     configError,
+    errorDetail,
     isStarting,
     start,
     stop,
@@ -328,6 +369,29 @@ function computeCoveredIndex(
     saveProgress(briefingId, covered);
   }
   return covered;
+}
+
+function buildSlimBriefingContext(b: Briefing): string {
+  // Slim payload for the live data-channel push: headline + hook +
+  // explanation + whyItMatters + sources. Reference packs (deepBrief, qa,
+  // keyFacts, articleExcerpts) are intentionally omitted — they bloat the
+  // payload past WebRTC data-channel safe limits and the agent rarely needs
+  // them for the initial read-through. Follow-ups can be answered from the
+  // system prompt + headline context.
+  return JSON.stringify({
+    homeCountry: b.homeCountry,
+    totalTopics: b.topics.length,
+    topics: b.topics.map((t, i) => ({
+      n: i + 1,
+      tier: tierLabel(t.tier),
+      headline: t.headline,
+      hook: t.hook,
+      explanation: (t.explanation ?? "").slice(0, 400),
+      whyItMatters: (t.whyItMatters ?? "").slice(0, 300),
+      sources: t.sources.slice(0, 3).map((s) => s.name),
+      ...(t.tier !== "quick_hit" && t.keyFacts?.length ? { keyFacts: t.keyFacts.slice(0, 4) } : {}),
+    })),
+  });
 }
 
 function buildBriefingContext(b: Briefing): string {
