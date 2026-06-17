@@ -83,9 +83,6 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     onDisconnect: (details: any) => {
       setAmplitude(0);
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      if (autoStartTimerRef.current) window.clearTimeout(autoStartTimerRef.current);
-      autoStartTimerRef.current = null;
-      autoStartPromptRef.current = null;
       if (details?.reason === "user") {
         connectedAtRef.current = 0;
         return;
