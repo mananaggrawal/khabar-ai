@@ -3,7 +3,7 @@ import { useConversation } from "@elevenlabs/react";
 import { useServerFn } from "@tanstack/react-start";
 import { getElevenLabsToken } from "@/lib/voice/elevenlabs.functions";
 import { saveMessage } from "@/lib/voice/messages.functions";
-import { searchTopicLive } from "@/lib/news/search.functions";
+
 import type { Briefing } from "@/lib/news/briefing.functions";
 import type { OrbState } from "@/components/VoiceOrb";
 
@@ -38,45 +38,8 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
 
   const mintToken = useServerFn(getElevenLabsToken);
   const persistMessage = useServerFn(saveMessage);
-  const liveSearch = useServerFn(searchTopicLive);
 
   const conversation = useConversation({
-    clientTools: {
-      // The agent calls this when the briefing pack doesn't cover a follow-up.
-      // Register a matching tool on the ElevenLabs agent dashboard:
-      //   name: searchTopic
-      //   params: topicId (string), query (string)
-      searchTopic: async (params: { topicId?: string; query?: string }) => {
-        const b = briefingRef.current;
-        const q = (params?.query ?? "").trim();
-        if (!b || !q) return "No active briefing or empty query.";
-        const topic =
-          b.topics.find((t) => t.id === params?.topicId) ??
-          b.topics[0];
-        const headline = topic?.headline ?? "today's news";
-        // Surface a small "looking it up" line in the transcript so the user
-        // sees the agent is going to the web.
-        setTranscript((t) => [
-          ...t,
-          {
-            id: `${Date.now()}-search`,
-            role: "agent",
-            text: `🔎 Looking that up — "${q}"`,
-            at: Date.now(),
-          },
-        ]);
-        try {
-          const res = await liveSearch({ data: { headline, query: q } });
-          if (!res.ok || !res.answer) return res.answer || "No fresh sources found.";
-          return res.sourceName
-            ? `${res.answer} (Source: ${res.sourceName})`
-            : res.answer;
-        } catch (e) {
-          console.error("[voice] searchTopic failed", e);
-          return "I couldn't reach the web just now.";
-        }
-      },
-    },
     onConnect: () => {
       console.log("[voice] connected");
       const kickoff = pendingKickoffRef.current;
@@ -252,9 +215,8 @@ ANSWERING FOLLOW-UP QUESTIONS (very important):
 - Each topic in the briefing JSON also carries a REFERENCE PACK: "deepBrief" (longer narrative), "background" (history/context), "keyFacts" (numbers, names, dates, direct quotes), "qa" (pre-answered likely questions), and "articleExcerpts" (raw passages from the original sources). When the user asks for more detail, "go deeper", "who said that", "how much", "what happened before", etc., draw your answer from THIS PACK first — it is grounded in the actual articles.
 - "go deeper" / "tell me more" → expand using deepBrief + 1-2 keyFacts, in a natural conversational way (don't read the JSON).
 - Specific factual questions → answer from keyFacts or qa when possible; cite the source name.
-- If the pack truly doesn't cover the question, CALL THE "searchTopic" TOOL with { topicId: <current topic id>, query: <user's question> } to fetch a fresh answer from the live web. Say something brief like "let me look that up" before calling. Use the tool's returned text as your answer and cite the source it gives you.
-- NEVER say "I don't have that information" or "I don't know" as a final answer. Either answer from the pack, or call searchTopic, or honestly say "let me check" and then call searchTopic.
-- For questions completely unrelated to today's news, you may answer briefly from general knowledge, but prefer searchTopic for anything time-sensitive.`;
+- If the pack truly doesn't cover a very specific detail, do NOT say "I don't know". Instead, answer with what the pack DOES cover (the broader context, the key facts you have, the angle the sources took) and offer to dig deeper in tomorrow's briefing — e.g. "the reporting I have focuses on X and Y; I'll flag Z for tomorrow's update."
+- For questions completely unrelated to today's news, you may answer briefly from general knowledge, then steer back to the briefing.`;
 
 function tierLabel(tier?: string) {
   if (tier === "home") return "HOME";
