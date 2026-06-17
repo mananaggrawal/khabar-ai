@@ -170,32 +170,6 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     },
     onModeChange: ({ mode }: any) => {
       if (mode === "speaking") agentSpokeRef.current = true;
-      if (
-        mode === "listening" &&
-        autoStartPromptRef.current &&
-        !autoStartSentRef.current &&
-        !agentSpokeRef.current
-      ) {
-        if (autoStartTimerRef.current) window.clearTimeout(autoStartTimerRef.current);
-        autoStartTimerRef.current = window.setTimeout(() => {
-          const prompt = autoStartPromptRef.current;
-          if (
-            !prompt ||
-            autoStartSentRef.current ||
-            agentSpokeRef.current ||
-            conversation.isSpeaking
-          ) {
-            return;
-          }
-          autoStartSentRef.current = true;
-          try {
-            conversation.sendUserMessage(prompt);
-          } catch (e) {
-            autoStartSentRef.current = false;
-            console.warn("[voice] auto-start prompt failed", e);
-          }
-        }, 250);
-      }
     },
     onAudio: () => {
       agentSpokeRef.current = true;
