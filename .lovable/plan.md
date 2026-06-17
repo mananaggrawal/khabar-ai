@@ -1,66 +1,39 @@
-# The real bug: enriched context never reaches the agent
+## Fix double "Welcome" + improve intro + Indian accent
 
-You are right. The data fetch and enrichment are working — but the agent is answering from stale/empty context because **the contextual update is being rejected at the transport layer**.
+### 1. Double "Welcome" — root cause
+Two places both say "Welcome to Khabar AI":
+- `AGENT_SYSTEM_PROMPT` instructs: *Open EXACTLY with "Welcome to Khabar AI…"*
+- `buildFirstMessage()` returns a string starting with "Welcome to Khabar AI…", which is then sent as `Please begin the briefing now. Start with: "<opener>"`.
 
-From the live console:
+The agent obeys both → says Welcome, then the opener (which also starts with Welcome).
 
-```
-[voice] connected
-Failed to send message via WebRTC:
-TypeError: Message too large (can send a maximum of 65535 bytes)
-    at e.send (...)
-    at sendMessage (...)
-```
+**Fix:** make the opener the single source of truth. In `AGENT_SYSTEM_PROMPT`, replace the "Open EXACTLY with…" rule with: *"Your opening line is provided in the kickoff message — read it naturally, then continue. Do NOT prepend your own greeting."* Keep `buildFirstMessage()` as the one that produces the welcome.
 
-ElevenLabs' WebRTC data channel has a hard 65,535-byte per-message cap. In `useVoiceAgent.ts` we build one giant string (system prompt + compact index + the full enriched `buildBriefingContext` JSON with `deepBrief`, `background`, `keyFacts`, `qa`, and `articleExcerpts` for every non-quick-hit topic) and push it through a single `conversation.sendContextualUpdate(...)`. With 8 home + 6 world enriched topics it blows past 64 KB on the first send, the channel throws, and **none of the enrichment lands**. The agent then runs on whatever it can scrape from its own first-message opener + system prompt — i.e. yesterday-ish, generic, "I don't know" territory.
+### 2. Improve the intro
+Rewrite `buildFirstMessage()` to be warmer, more conversational, India-flavoured, and clearer about controls. New shape (still one short paragraph):
 
-The kickoff `sendUserMessage` that follows ("Please begin the briefing now…") is small enough to go through, which is why the agent talks at all but sounds uninformed.
+> "Namaste, and welcome to Khabar AI — your daily catch-up on what's happening and why it matters. Today we've got {N from India}, {M from around the world}, and {K quick hits} — about fifteen minutes in all. Jump in anytime: say 'next' to skip, 'go deeper' for more, or name a story to jump to. Let's get into it."
 
-## Fix
+- Uses "Namaste" only when `homeCountry === "in"`; otherwise a neutral "Hey, welcome to Khabar AI…".
+- Keeps the dynamic counts.
+- Mentions runtime + the three voice commands explicitly (matches what the system prompt already promises).
+- Empty-briefing branch stays.
 
-Chunk the kickoff context into multiple sub-64 KB `sendContextualUpdate` calls, sent sequentially before the opener user message. Trim a few obvious fat points at the same time so the chunk count stays small.
+### 3. Indian accent
+The accent is determined by the **ElevenLabs voice**, not the prompt. Two ways to set it:
 
-### Changes to `src/hooks/useVoiceAgent.ts`
+**A. Agent dashboard (recommended, zero code):** in the ElevenLabs agent settings, change the voice to an Indian-English voice (e.g. "Monika Sogam – Indian English", "Niraj – Hindi-English", or any Indian voice from the Voice Library). This is the cleanest fix and sticks across sessions.
 
-1. **New helper `splitForContextChannel(text, maxBytes = 60000)`** — splits a string on topic/section boundaries (the `},{` between topics in the JSON, or `\n--` separators in the compact index) into UTF-8-safe chunks ≤ ~60 KB (leaves headroom for the WebRTC framing overhead).
+**B. Per-session override in code:** pass `overrides.tts.voiceId` to `useConversation`. Requires "Voice ID" override to be enabled in the agent dashboard, and we need the specific voice ID to hardcode.
 
-2. **Replace the single-message kickoff** in the `onConnect` handler. Instead of one `sendContextualUpdate(kickoff.context)`, iterate:
-   ```
-   for (const [i, part] of parts.entries()) {
-     conversation.sendContextualUpdate(
-       `BRIEFING CONTEXT PART ${i + 1}/${parts.length}:\n${part}`
-     );
-   }
-   conversation.sendUserMessage(kickoff.opener);
-   ```
-   Wrap each `send` in try/catch so a single failed chunk does not abort the rest, and `console.warn` the index that failed.
+I'll proceed with **A** by default (no code change for the voice) and additionally add a light prompt nudge: *"Speak in natural Indian English — warm, unhurried, with Indian pronunciations of names and places."* This won't change the accent of the synthesised voice but helps with name pronunciation and pacing.
 
-3. **`pendingKickoffRef`** changes shape from `{ context, opener }` to `{ parts: string[], opener }`. `start()` builds the parts via `splitForContextChannel` after constructing the full context string.
-
-4. **Trim the enrichment payload modestly** in `buildBriefingContext` to reduce chunk count (typically from ~4 chunks down to ~2):
-   - `articleExcerpts`: cap to **2 per topic** (was unlimited), each excerpt sliced to **400 chars** (was 600).
-   - `deepBrief`: cap to 1200 chars.
-   - `background`: cap to 600 chars.
-   - `keyFacts`: cap to first 8.
-   - `qa`: cap to first 4 pairs.
-
-   These caps lose nothing meaningful — the agent never reads excerpts verbatim, it summarises — but they make the channel reliable.
-
-5. **Add an explicit log line** when chunks are sent: `console.log("[voice] sent context", parts.length, "chunks,", totalBytes, "bytes")` so we can confirm in the next session that the full pack landed.
-
-### Verification
-
-After the fix:
-- Refresh the briefing (no schema/regen needed — this is a transport fix only).
-- Start a session. Console should show `[voice] sent context N chunks, … bytes` and **no** `Message too large` error.
-- Ask "go deeper on story 2" — agent should now quote facts/dates from `keyFacts` and the enriched `deepBrief` instead of hedging.
-
-### Out of scope (intentionally)
-
-- No backend / enrichment changes. The pack itself is already good; it just was not arriving.
-- No reintroduction of the live-search tool. The chunked pack is the source of truth.
-- No `index.ts` / ElevenLabs dashboard changes.
+If you'd rather I wire option B, give me the voice ID and I'll set it via `overrides.tts.voiceId`.
 
 ### Files touched
+- `src/hooks/useVoiceAgent.ts` — edit `AGENT_SYSTEM_PROMPT` (remove "Open EXACTLY with", add "Speak in natural Indian English"); rewrite `buildFirstMessage()`.
 
-- `src/hooks/useVoiceAgent.ts` — chunking helper, kickoff loop, ref shape, payload caps in `buildBriefingContext`, one diagnostic log.
+### Verification
+- Start a fresh session → agent says "Namaste, and welcome to Khabar AI…" exactly once, no second "Welcome".
+- Console still shows `[voice] sent context N chunks, … bytes`.
+- If you switch the dashboard voice to an Indian one, the accent updates on the next session.
