@@ -167,7 +167,7 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         ? buildJumpMessage(briefing, effectiveJump)
         : buildFirstMessage(briefing);
       pendingKickoffRef.current = {
-        context,
+        parts: splitForContextChannel(context),
         opener: `Please begin the briefing now. Start with: "${opener}"`,
       };
       await conversation.startSession({
