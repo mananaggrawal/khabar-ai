@@ -177,18 +177,16 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     if (!briefing) return;
     setIsStarting(true);
     setConfigError(null);
+    setErrorDetail(null);
     try {
       await navigator.mediaDevices.getUserMedia({ audio: true });
       const tokenRes = await mintToken({ data: undefined as never });
       if (!tokenRes.ok) {
-        setConfigError(tokenRes.reason);
+        reportError(tokenRes.reason, (tokenRes as any).detail);
         setIsStarting(false);
         return;
       }
 
-      // Resume: if no explicit jump, see if we already covered some topics in
-      // a previous session for this briefing (in-memory transcript or
-      // localStorage). Pick up from the next uncovered topic.
       let resumeIndex: number | undefined;
       let isResume = false;
       if (typeof jumpToIndex !== "number") {
@@ -201,21 +199,22 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
       const effectiveJump = typeof jumpToIndex === "number" ? jumpToIndex : resumeIndex;
 
       const compactIndex = buildCompactIndex(briefing);
-      const fullBriefing = buildBriefingContext(briefing);
+      const slimBriefing = buildSlimBriefingContext(briefing);
       const jumpNote = isResume && typeof effectiveJump === "number"
         ? `\n\nRESUMING a previous session. The user already heard stories 1 through ${effectiveJump}. Pick up at story #${effectiveJump + 1} and continue in order. Do NOT repeat the full intro — open with a brief "Picking up where we left off" line, then go.`
         : typeof effectiveJump === "number"
         ? `\n\nThe user tapped story #${effectiveJump + 1}. Begin there and continue in order.`
         : "";
+      // Keep the live context push small — large payloads (>30KB) over the
+      // WebRTC data channel cause 1006 disconnects. The system prompt is
+      // already delivered via overrides.agent.prompt; we only need to push
+      // today's headlines + slim per-topic data here.
       const context = [
-        "SESSION RULES:",
-        AGENT_SYSTEM_PROMPT,
-        "",
         `TODAY'S HEADLINES (tiered index — read in the order shown):`,
         compactIndex,
         "",
-        "FULL BRIEFING DATA (use for explanations, why-it-matters, and sources):",
-        fullBriefing,
+        "BRIEFING DATA (use for explanations, why-it-matters, and sources):",
+        slimBriefing,
         jumpNote,
       ].join("\n");
       const opener = isResume && typeof effectiveJump === "number"
