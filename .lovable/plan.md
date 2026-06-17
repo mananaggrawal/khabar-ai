@@ -1,22 +1,21 @@
-## Two fixes in `src/hooks/useVoiceAgent.ts`
+## Plan
 
-### 1. Never show "YOU · …" in the transcript
-Right now `shouldHideTranscriptLine` only hides specific user phrases (the auto-start prompt). The user wants **all** user lines hidden from the UI.
+1. **Stop app-side prompt/control injection completely**
+   - Remove the remaining unused prompt builders and auto-start/control helpers from `src/hooks/useVoiceAgent.ts`.
+   - Keep `startSession()` minimal so ElevenLabs dashboard configuration owns the first message and speaking flow.
 
-- Change `shouldHideTranscriptLine` so any `role === "user"` line returns `true` (hidden).
-- Keep server-side persistence of user messages (the `persistMessage` call) so history/coverage logic still works — the hide check only gates the on-screen `setTranscript` push.
+2. **Fix the “Agent rejected the session” signal**
+   - The screenshot shows `e.error_event.error_type` and says the agent is returning an invalid error packet before audio starts.
+   - Update voice error handling so malformed ElevenLabs SDK error events do not crash the UI or show noisy internal text.
+   - Keep a short user-facing error only when the session truly fails.
 
-### 2. Agent must start the briefing on its own
-Today the auto-start path:
-- Sends `firstMessage: opener` via `startSession`. If the ElevenLabs dashboard override is off, the agent never speaks it.
-- 1.8s after connect, fires a single `sendUserMessage(prompt)` — but only if `isSpeaking` is false and the agent hasn't spoken. If the kickoff context (heavy, ~30KB, sent over ~paced 350ms chunks for several seconds) is still streaming, the agent often stays idle waiting and the one-shot prompt arrives before context is fully delivered, so the agent doesn't actually start.
+3. **Prevent the app from making the agent wait after intro**
+   - Remove all remaining client logic that implies resume/jump control or hidden system messages.
+   - Ensure the app does not send text messages or contextual updates after connect; the agent should continue from its ElevenLabs first-message/system prompt.
 
-Make the trigger fire **after** the context chunks finish, and retry if the agent stays silent:
+4. **Keep UI transcript clean**
+   - Continue hiding user responses in the on-screen transcript.
+   - Hide only the app display noise, not agent speech/audio.
 
-- Move the auto-start prompt send to the end of the kickoff-chunks async block (right after the final `sendContextualUpdate` + a short drain delay), instead of a fixed 1.8s timer racing the chunks.
-- Add a short retry: if `agentSpokeRef.current` is still false ~2.5s after the first prompt, re-send the auto-start prompt once. Cap at 2 sends total to avoid loops.
-- Keep the existing `onModeChange` listening-mode fallback for cases where the agent connects without a kickoff (resume on same briefing).
-- The auto-start prompt text already instructs "no greeting, continue as monologue", so the agent will begin the first story immediately.
-
-### Out of scope
-No backend, ElevenLabs dashboard, or UI component changes — only the hook's transcript filter and auto-start sequencing.
+5. **Verify behavior**
+   - Use the live preview to start a briefing and check that the app no longer shows the invalid SDK packet error and no app-side control messages are sent.
