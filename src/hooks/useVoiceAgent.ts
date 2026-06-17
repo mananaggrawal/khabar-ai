@@ -83,7 +83,14 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
       if (autoStartTimerRef.current) window.clearTimeout(autoStartTimerRef.current);
       autoStartTimerRef.current = window.setTimeout(() => {
         const prompt = autoStartPromptRef.current;
-        if (!prompt || autoStartSentRef.current || agentSpokeRef.current || conversation.isSpeaking) return;
+        if (
+          !prompt ||
+          autoStartSentRef.current ||
+          agentSpokeRef.current ||
+          conversation.isSpeaking
+        ) {
+          return;
+        }
         autoStartSentRef.current = true;
         try {
           conversation.sendUserMessage(prompt);
@@ -163,11 +170,23 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     },
     onModeChange: ({ mode }: any) => {
       if (mode === "speaking") agentSpokeRef.current = true;
-      if (mode === "listening" && autoStartPromptRef.current && !autoStartSentRef.current && !agentSpokeRef.current) {
+      if (
+        mode === "listening" &&
+        autoStartPromptRef.current &&
+        !autoStartSentRef.current &&
+        !agentSpokeRef.current
+      ) {
         if (autoStartTimerRef.current) window.clearTimeout(autoStartTimerRef.current);
         autoStartTimerRef.current = window.setTimeout(() => {
           const prompt = autoStartPromptRef.current;
-          if (!prompt || autoStartSentRef.current || agentSpokeRef.current || conversation.isSpeaking) return;
+          if (
+            !prompt ||
+            autoStartSentRef.current ||
+            agentSpokeRef.current ||
+            conversation.isSpeaking
+          ) {
+            return;
+          }
           autoStartSentRef.current = true;
           try {
             conversation.sendUserMessage(prompt);
