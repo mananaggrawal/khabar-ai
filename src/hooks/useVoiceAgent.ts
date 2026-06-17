@@ -24,6 +24,7 @@ interface UseVoiceAgentOpts {
 export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
   const [transcript, setTranscript] = useState<TranscriptLine[]>([]);
   const [configError, setConfigError] = useState<VoiceConfigError>(null);
+  const [errorDetail, setErrorDetail] = useState<string | null>(null);
   const [amplitude, setAmplitude] = useState(0);
   const [isStarting, setIsStarting] = useState(false);
   const freqRef = useRef<Uint8Array | null>(null);
@@ -31,11 +32,19 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
   const briefingIdRef = useRef<string | null>(null);
   const briefingRef = useRef<Briefing | null>(null);
   const pendingKickoffRef = useRef<{ parts: string[]; opener: string } | null>(null);
+  const agentSpokeRef = useRef(false);
+  const connectedAtRef = useRef<number>(0);
 
   useEffect(() => {
     briefingIdRef.current = briefing?.id ?? null;
     briefingRef.current = briefing;
   }, [briefing]);
+
+  const reportError = useCallback((reason: VoiceConfigError, detail?: string) => {
+    console.error("[voice] error surfaced:", reason, detail);
+    setConfigError(reason);
+    if (detail) setErrorDetail(detail);
+  }, []);
 
   const mintToken = useServerFn(getElevenLabsToken);
   const persistMessage = useServerFn(saveMessage);
@@ -43,39 +52,71 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
   const conversation = useConversation({
     onConnect: () => {
       console.log("[voice] connected");
+      agentSpokeRef.current = false;
+      connectedAtRef.current = Date.now();
       const kickoff = pendingKickoffRef.current;
       pendingKickoffRef.current = null;
       if (!kickoff) return;
-      try {
-        let totalBytes = 0;
-        kickoff.parts.forEach((part, i) => {
-          const labeled = `BRIEFING CONTEXT PART ${i + 1}/${kickoff.parts.length}:\n${part}`;
-          try {
-            conversation.sendContextualUpdate?.(labeled);
-            totalBytes += new TextEncoder().encode(labeled).length;
-          } catch (e) {
-            console.warn("[voice] context chunk failed", i + 1, e);
+      // Send chunks paced — blasting >30KB synchronously over the WebRTC
+      // data channel right after connect overflows the channel buffer and
+      // tears the session down with code 1006.
+      (async () => {
+        try {
+          let totalBytes = 0;
+          for (let i = 0; i < kickoff.parts.length; i++) {
+            const part = kickoff.parts[i];
+            const labeled = `BRIEFING CONTEXT PART ${i + 1}/${kickoff.parts.length}:\n${part}`;
+            try {
+              conversation.sendContextualUpdate?.(labeled);
+              totalBytes += new TextEncoder().encode(labeled).length;
+            } catch (e) {
+              console.warn("[voice] context chunk failed", i + 1, e);
+            }
+            // Yield between chunks so the data channel can drain.
+            await new Promise((r) => setTimeout(r, 350));
           }
-        });
-        console.log("[voice] sent context", kickoff.parts.length, "chunks,", totalBytes, "bytes");
-        // NOTE: the opener is delivered via overrides.agent.firstMessage on
-        // startSession — do NOT also sendUserMessage here, or the agent will
-        // greet twice (its first_message + a response to our prompt).
-      } catch (e) {
-        console.warn("[voice] kickoff failed", e);
-      }
+          console.log("[voice] sent context", kickoff.parts.length, "chunks,", totalBytes, "bytes");
+        } catch (e) {
+          console.warn("[voice] kickoff failed", e);
+        }
+      })();
     },
     onDisconnect: () => {
       setAmplitude(0);
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      // If we connected but the agent never produced a single response,
+      // surface that — the most common cause is the agent's "first message"
+      // / "prompt" override being disabled in the ElevenLabs dashboard, or
+      // the context push tearing the WebRTC channel down.
+      if (connectedAtRef.current && !agentSpokeRef.current) {
+        const elapsed = Date.now() - connectedAtRef.current;
+        reportError(
+          "disconnected_early",
+          `Session ended after ${Math.round(elapsed / 100) / 10}s without the agent speaking. ` +
+            `Likely causes: (1) the agent's "First message" or "System prompt" override is disabled in the ElevenLabs dashboard (Security → Overrides), ` +
+            `(2) the agent is paused/unpublished, or (3) the briefing context payload was rejected.`,
+        );
+      }
+      connectedAtRef.current = 0;
     },
     onError: (err: any) => {
+      // ElevenLabs SDK sometimes passes a raw event, sometimes an object.
+      const detail =
+        typeof err === "string"
+          ? err
+          : err?.message ?? err?.reason ?? err?.error ?? (() => { try { return JSON.stringify(err); } catch { return String(err); } })();
       console.error("[voice] error", err);
-      setConfigError("upstream_error");
+      reportError("upstream_error", detail);
     },
     onMessage: (msg: any) => {
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const bid = briefingIdRef.current;
+      // Capture any server-side error events the SDK forwards.
+      if (msg?.type && /error/i.test(msg.type)) {
+        const detail = msg?.error?.message ?? msg?.message ?? JSON.stringify(msg).slice(0, 400);
+        reportError("upstream_error", `Agent error (${msg.type}): ${detail}`);
+        return;
+      }
       if (msg.type === "user_transcript") {
         const text = msg.user_transcription_event?.user_transcript ?? "";
         if (text) {
@@ -85,10 +126,9 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
       } else if (msg.type === "agent_response") {
         const text = msg.agent_response_event?.agent_response ?? "";
         if (text) {
+          agentSpokeRef.current = true;
           setTranscript((t) => [...t, { id, role: "agent", text, at: Date.now() }]);
           if (bid) persistMessage({ data: { briefingId: bid, role: "agent", content: text } }).catch(console.error);
-          // Live progress: mark topics as covered as the agent speaks them,
-          // so a session ended mid-briefing resumes at the next story.
           const b = briefingRef.current;
           if (b && bid) {
             const norm = normalize(text);
