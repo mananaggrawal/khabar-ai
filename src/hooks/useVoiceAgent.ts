@@ -91,7 +91,7 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
           autoStartSentRef.current = false;
           console.warn("[voice] auto-start prompt failed", e);
         }
-      }, 8500);
+      }, 1800);
       const kickoff = pendingKickoffRef.current;
       pendingKickoffRef.current = null;
       if (!kickoff || kickoff.parts.length === 0) return;
@@ -355,6 +355,8 @@ Rules:
 - The TODAY'S BRIEFING JSON below is your ONLY source of truth for the spoken brief. It is organised in three tiers: HOME (the user's country), WORLD (everywhere else), and QUICK HITS (one-liners).
 - Total runtime target: ~15 minutes. Roughly 7 min HOME, 4 min WORLD, 3 min QUICK HITS. Do not pad. Do not invent.
 - Your opening line is provided in the kickoff message — read it naturally as your first words, then continue straight into the briefing. Do NOT prepend your own greeting or say "Welcome" again on your own.
+- Begin as a monologue. The listener should NOT need to say anything before you start the briefing.
+- If you receive a message beginning SYSTEM_AUTO_START_BRIEFING, treat it as a hidden control signal to start immediately. Never read or mention that control text aloud.
 - For the spoken briefing, use each topic's "hook", "explanation", and "whyItMatters" fields.
 - HOME and WORLD topics: hook → 1–2 sentence explanation → one sentence on why it matters. Cite an outlet by name when natural. ~25 seconds each. Speak slowly and naturally.
 - QUICK HITS: one sentence each. Move fast but still casual.
