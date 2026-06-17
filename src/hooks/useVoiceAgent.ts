@@ -79,68 +79,6 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
       agentSpokeRef.current = false;
       lastSdkErrorRef.current = null;
       connectedAtRef.current = Date.now();
-      autoStartSentRef.current = false;
-      if (autoStartTimerRef.current) window.clearTimeout(autoStartTimerRef.current);
-      const fireAutoStart = (reason: string) => {
-        const prompt = autoStartPromptRef.current;
-        if (!prompt || autoStartSentRef.current || agentSpokeRef.current || conversation.isSpeaking) return;
-        autoStartSentRef.current = true;
-        try {
-          console.log("[voice] auto-start fire:", reason);
-          conversation.sendUserMessage(prompt);
-          // Retry once if the agent stays silent.
-          window.setTimeout(() => {
-            if (!agentSpokeRef.current && !conversation.isSpeaking && autoStartPromptRef.current) {
-              try {
-                console.log("[voice] auto-start retry");
-                conversation.sendUserMessage(autoStartPromptRef.current);
-              } catch (e) {
-                console.warn("[voice] auto-start retry failed", e);
-              }
-            }
-          }, 2500);
-        } catch (e) {
-          autoStartSentRef.current = false;
-          console.warn("[voice] auto-start prompt failed", e);
-        }
-      };
-      const kickoff = pendingKickoffRef.current;
-      pendingKickoffRef.current = null;
-      if (!kickoff || kickoff.parts.length === 0) {
-        // No kickoff context to send — fire auto-start shortly after connect.
-        autoStartTimerRef.current = window.setTimeout(() => fireAutoStart("no-kickoff"), 1800);
-        return;
-      }
-      // Send chunks paced — blasting >30KB synchronously over the WebRTC
-      // data channel right after connect overflows the channel buffer and
-      // tears the session down with code 1006.
-      (async () => {
-        try {
-          // Let the SDK finish its initiation packet before we publish our own
-          // context. Sending immediately after onConnect can race LiveKit's data
-          // channel and close the room before the first audio packet arrives.
-          await new Promise((r) => setTimeout(r, 1200));
-          let totalBytes = 0;
-          for (let i = 0; i < kickoff.parts.length; i++) {
-            const part = kickoff.parts[i];
-            const labeled = `BRIEFING CONTEXT PART ${i + 1}/${kickoff.parts.length}:\n${part}`;
-            try {
-              conversation.sendContextualUpdate?.(labeled);
-              totalBytes += new TextEncoder().encode(labeled).length;
-            } catch (e) {
-              console.warn("[voice] context chunk failed", i + 1, e);
-            }
-            // Yield between chunks so the data channel can drain.
-            await new Promise((r) => setTimeout(r, 350));
-          }
-          console.log("[voice] sent context", kickoff.parts.length, "chunks,", totalBytes, "bytes");
-          // Give the channel a beat to drain, then kick the agent off.
-          await new Promise((r) => setTimeout(r, 400));
-          fireAutoStart("post-kickoff");
-        } catch (e) {
-          console.warn("[voice] kickoff failed", e);
-        }
-      })();
     },
     onDisconnect: (details: any) => {
       setAmplitude(0);
