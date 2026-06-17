@@ -84,6 +84,20 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         if (text) {
           setTranscript((t) => [...t, { id, role: "agent", text, at: Date.now() }]);
           if (bid) persistMessage({ data: { briefingId: bid, role: "agent", content: text } }).catch(console.error);
+          // Live progress: mark topics as covered as the agent speaks them,
+          // so a session ended mid-briefing resumes at the next story.
+          const b = briefingRef.current;
+          if (b && bid) {
+            const norm = normalize(text);
+            let covered = loadProgress(bid);
+            b.topics.forEach((topic, idx) => {
+              const key = normalize(topic.headline).slice(0, 40);
+              if (key.length >= 8 && norm.includes(key) && idx > covered) {
+                covered = idx;
+              }
+            });
+            saveProgress(bid, covered);
+          }
         }
       }
     },
