@@ -459,6 +459,7 @@ function buildAutoStartPrompt(isResume: boolean, effectiveJump?: number): string
 function shouldHideTranscriptLine(role: "user" | "agent", text: string): boolean {
   if (role !== "user") return false;
   const normalized = text.toLowerCase().replace(/[^a-z0-9_ ]/g, " ").replace(/\s+/g, " ").trim();
+  if (!normalized) return true;
   return normalized.startsWith(AUTO_START_PREFIX.toLowerCase()) || normalized === "you can start";
 }
 
