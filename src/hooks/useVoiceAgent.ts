@@ -83,7 +83,14 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
       if (autoStartTimerRef.current) window.clearTimeout(autoStartTimerRef.current);
       autoStartTimerRef.current = window.setTimeout(() => {
         const prompt = autoStartPromptRef.current;
-        if (!prompt || autoStartSentRef.current) return;
+        if (
+          !prompt ||
+          autoStartSentRef.current ||
+          agentSpokeRef.current ||
+          conversation.isSpeaking
+        ) {
+          return;
+        }
         autoStartSentRef.current = true;
         try {
           conversation.sendUserMessage(prompt);
@@ -163,20 +170,6 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     },
     onModeChange: ({ mode }: any) => {
       if (mode === "speaking") agentSpokeRef.current = true;
-      if (mode === "listening" && autoStartPromptRef.current && !autoStartSentRef.current) {
-        if (autoStartTimerRef.current) window.clearTimeout(autoStartTimerRef.current);
-        autoStartTimerRef.current = window.setTimeout(() => {
-          const prompt = autoStartPromptRef.current;
-          if (!prompt || autoStartSentRef.current) return;
-          autoStartSentRef.current = true;
-          try {
-            conversation.sendUserMessage(prompt);
-          } catch (e) {
-            autoStartSentRef.current = false;
-            console.warn("[voice] auto-start prompt failed", e);
-          }
-        }, 250);
-      }
     },
     onAudio: () => {
       agentSpokeRef.current = true;
@@ -442,12 +435,12 @@ const AUTO_START_PREFIX = "SYSTEM_AUTO_START_BRIEFING";
 
 function buildAutoStartPrompt(isResume: boolean, effectiveJump?: number): string {
   if (isResume && typeof effectiveJump === "number") {
-    return `${AUTO_START_PREFIX}: Start speaking now as a continuous news monologue from story ${effectiveJump + 1}. Do not wait for the listener and do not ask a question.`;
+    return `${AUTO_START_PREFIX}: Continue speaking now as a continuous news monologue from story ${effectiveJump + 1}. Do not say Namaste, welcome, or any greeting. Do not wait for the listener and do not ask a question.`;
   }
   if (typeof effectiveJump === "number") {
-    return `${AUTO_START_PREFIX}: Start speaking now as a continuous news monologue from story ${effectiveJump + 1}. Do not wait for the listener and do not ask a question.`;
+    return `${AUTO_START_PREFIX}: Continue speaking now as a continuous news monologue from story ${effectiveJump + 1}. Do not say Namaste, welcome, or any greeting. Do not wait for the listener and do not ask a question.`;
   }
-  return `${AUTO_START_PREFIX}: Start speaking now as a continuous news monologue from the first story. Do not wait for the listener and do not ask a question.`;
+  return `${AUTO_START_PREFIX}: Continue speaking now as a continuous news monologue from the first story. Do not say Namaste, welcome, or any greeting. Do not wait for the listener and do not ask a question.`;
 }
 
 function shouldHideTranscriptLine(role: "user" | "agent", text: string): boolean {
