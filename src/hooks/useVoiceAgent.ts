@@ -319,14 +319,14 @@ function buildBriefingContext(b: Briefing): string {
         sources: t.sources.slice(0, 6).map((s) => s.name),
       };
       if (t.tier !== "quick_hit") {
-        if (t.deepBrief) base.deepBrief = t.deepBrief;
-        if (t.background) base.background = t.background;
-        if (t.keyFacts?.length) base.keyFacts = t.keyFacts;
-        if (t.qa?.length) base.qa = t.qa;
+        if (t.deepBrief) base.deepBrief = t.deepBrief.slice(0, 1200);
+        if (t.background) base.background = t.background.slice(0, 600);
+        if (t.keyFacts?.length) base.keyFacts = t.keyFacts.slice(0, 8);
+        if (t.qa?.length) base.qa = t.qa.slice(0, 4);
         if (t.articleExcerpts?.length) {
-          base.articleExcerpts = t.articleExcerpts.map((e) => ({
+          base.articleExcerpts = t.articleExcerpts.slice(0, 2).map((e) => ({
             source: e.source,
-            excerpt: e.excerpt.slice(0, 600),
+            excerpt: e.excerpt.slice(0, 400),
           }));
         }
       }
