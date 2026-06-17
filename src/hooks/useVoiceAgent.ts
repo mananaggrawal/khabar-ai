@@ -62,7 +62,6 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     return () => {
       window.removeEventListener("unhandledrejection", onUnhandled);
       window.removeEventListener("error", onWindowError);
-      if (autoStartTimerRef.current) window.clearTimeout(autoStartTimerRef.current);
     };
   }, [reportError]);
 
