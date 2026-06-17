@@ -29,7 +29,7 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
   const rafRef = useRef<number | null>(null);
   const briefingIdRef = useRef<string | null>(null);
   const briefingRef = useRef<Briefing | null>(null);
-  const pendingKickoffRef = useRef<{ context: string; opener: string } | null>(null);
+  const pendingKickoffRef = useRef<{ parts: string[]; opener: string } | null>(null);
 
   useEffect(() => {
     briefingIdRef.current = briefing?.id ?? null;
@@ -46,7 +46,17 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
       pendingKickoffRef.current = null;
       if (!kickoff) return;
       try {
-        conversation.sendContextualUpdate?.(kickoff.context);
+        let totalBytes = 0;
+        kickoff.parts.forEach((part, i) => {
+          const labeled = `BRIEFING CONTEXT PART ${i + 1}/${kickoff.parts.length}:\n${part}`;
+          try {
+            conversation.sendContextualUpdate?.(labeled);
+            totalBytes += new TextEncoder().encode(labeled).length;
+          } catch (e) {
+            console.warn("[voice] context chunk failed", i + 1, e);
+          }
+        });
+        console.log("[voice] sent context", kickoff.parts.length, "chunks,", totalBytes, "bytes");
         conversation.sendUserMessage?.(kickoff.opener);
       } catch (e) {
         console.warn("[voice] kickoff failed", e);
@@ -157,7 +167,7 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         ? buildJumpMessage(briefing, effectiveJump)
         : buildFirstMessage(briefing);
       pendingKickoffRef.current = {
-        context,
+        parts: splitForContextChannel(context),
         opener: `Please begin the briefing now. Start with: "${opener}"`,
       };
       await conversation.startSession({
@@ -309,14 +319,14 @@ function buildBriefingContext(b: Briefing): string {
         sources: t.sources.slice(0, 6).map((s) => s.name),
       };
       if (t.tier !== "quick_hit") {
-        if (t.deepBrief) base.deepBrief = t.deepBrief;
-        if (t.background) base.background = t.background;
-        if (t.keyFacts?.length) base.keyFacts = t.keyFacts;
-        if (t.qa?.length) base.qa = t.qa;
+        if (t.deepBrief) base.deepBrief = t.deepBrief.slice(0, 1200);
+        if (t.background) base.background = t.background.slice(0, 600);
+        if (t.keyFacts?.length) base.keyFacts = t.keyFacts.slice(0, 8);
+        if (t.qa?.length) base.qa = t.qa.slice(0, 4);
         if (t.articleExcerpts?.length) {
-          base.articleExcerpts = t.articleExcerpts.map((e) => ({
+          base.articleExcerpts = t.articleExcerpts.slice(0, 2).map((e) => ({
             source: e.source,
-            excerpt: e.excerpt.slice(0, 600),
+            excerpt: e.excerpt.slice(0, 400),
           }));
         }
       }
@@ -345,4 +355,41 @@ function buildCompactIndex(b: Briefing): string {
     quick.forEach((t) => { lines.push(`${n++}. ${t.headline}${t.hook ? ` — ${t.hook}` : ""}`); });
   }
   return lines.join("\n");
+}
+
+// WebRTC data channel cap is 65535 bytes per message. Leave headroom for
+// framing + our "PART x/N" label, then split on safe boundaries.
+function splitForContextChannel(text: string, maxBytes = 55000): string[] {
+  const enc = new TextEncoder();
+  if (enc.encode(text).length <= maxBytes) return [text];
+
+  // Prefer splitting on topic-object boundaries inside the JSON payload,
+  // falling back to newlines, then hard char chunks.
+  const candidates = text.includes("},{")
+    ? text.split(/(?<=\},)(?=\{)/)
+    : text.split(/\n/);
+
+  const parts: string[] = [];
+  let buf = "";
+  const flush = () => { if (buf) { parts.push(buf); buf = ""; } };
+
+  for (const seg of candidates) {
+    const piece = buf ? buf + (text.includes("},{") ? "" : "\n") + seg : seg;
+    if (enc.encode(piece).length <= maxBytes) {
+      buf = piece;
+    } else {
+      flush();
+      if (enc.encode(seg).length <= maxBytes) {
+        buf = seg;
+      } else {
+        // Segment itself too big — hard slice by chars (approx, safe upper bound).
+        const step = Math.floor(maxBytes / 2);
+        for (let i = 0; i < seg.length; i += step) {
+          parts.push(seg.slice(i, i + step));
+        }
+      }
+    }
+  }
+  flush();
+  return parts;
 }
