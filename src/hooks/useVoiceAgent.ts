@@ -36,6 +36,10 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
   const rafRef = useRef<number | null>(null);
   const briefingIdRef = useRef<string | null>(null);
   const agentSpokeRef = useRef(false);
+  const lastAgentAudioAtRef = useRef<number>(0);
+  const watchdogRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const restartAttemptsRef = useRef(0);
+  const restartingRef = useRef(false);
 
   useEffect(() => {
     briefingIdRef.current = briefing?.id ?? null;
@@ -54,6 +58,7 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     onConnect: () => {
       console.log("[voice] connected");
       agentSpokeRef.current = false;
+      lastAgentAudioAtRef.current = Date.now();
       setConfigError(null);
       setErrorDetail(null);
     },
@@ -62,10 +67,6 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     },
     onError: (err: unknown) => {
-      // ElevenLabs SDK occasionally emits malformed error events where
-      // `error_event` is undefined. Swallow those quietly — surfacing them
-      // as "Agent rejected the session" is misleading because the session
-      // actually proceeds. Only surface clear, descriptive errors.
       const detail =
         typeof err === "string"
           ? err
@@ -79,10 +80,14 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
       reportError("upstream_error", String(detail));
     },
     onModeChange: ({ mode }: any) => {
-      if (mode === "speaking") agentSpokeRef.current = true;
+      if (mode === "speaking") {
+        agentSpokeRef.current = true;
+        lastAgentAudioAtRef.current = Date.now();
+      }
     },
     onAudio: () => {
       agentSpokeRef.current = true;
+      lastAgentAudioAtRef.current = Date.now();
     },
     onMessage: (msg: any) => {
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -93,7 +98,10 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         const text = msg.message.trim();
         if (!text) return;
         if (shouldHideTranscriptLine(role, text)) return;
-        if (role === "agent") agentSpokeRef.current = true;
+        if (role === "agent") {
+          agentSpokeRef.current = true;
+          lastAgentAudioAtRef.current = Date.now();
+        }
         setTranscript((t) => [...t, { id, role, text, at: Date.now() }]);
         if (bid) persistMessage({ data: { briefingId: bid, role, content: text } }).catch(console.error);
         return;
@@ -109,6 +117,7 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
         const text = msg.agent_response_event?.agent_response ?? "";
         if (text) {
           agentSpokeRef.current = true;
+          lastAgentAudioAtRef.current = Date.now();
           setTranscript((t) => [...t, { id, role: "agent", text, at: Date.now() }]);
           if (bid) persistMessage({ data: { briefingId: bid, role: "agent", content: text } }).catch(console.error);
         }
@@ -169,7 +178,58 @@ export function useVoiceAgent({ briefing }: UseVoiceAgentOpts) {
     }
   }, [briefing, conversation, mintToken, reportError]);
 
+  // Silence watchdog: if the agent stops producing audio mid-briefing for
+  // longer than SILENCE_MS, end and restart the session so it resumes
+  // speaking. Capped at MAX_RESTARTS to avoid loops.
+  const SILENCE_MS = 8000;
+  const MAX_RESTARTS = 2;
+  useEffect(() => {
+    if (conversation.status !== "connected") {
+      if (watchdogRef.current) {
+        clearInterval(watchdogRef.current);
+        watchdogRef.current = null;
+      }
+      return;
+    }
+    restartAttemptsRef.current = 0;
+    watchdogRef.current = setInterval(async () => {
+      if (restartingRef.current) return;
+      if (!agentSpokeRef.current) return; // intro hasn't started yet
+      if (conversation.isSpeaking) {
+        lastAgentAudioAtRef.current = Date.now();
+        return;
+      }
+      const silentFor = Date.now() - lastAgentAudioAtRef.current;
+      if (silentFor < SILENCE_MS) return;
+      if (restartAttemptsRef.current >= MAX_RESTARTS) return;
+      restartingRef.current = true;
+      restartAttemptsRef.current += 1;
+      console.warn(`[voice] watchdog: silent ${Math.round(silentFor / 1000)}s — restarting session (attempt ${restartAttemptsRef.current}/${MAX_RESTARTS})`);
+      try {
+        await conversation.endSession();
+      } catch (e) {
+        console.warn("[voice] watchdog endSession failed", e);
+      }
+      // small pause before reconnecting
+      await new Promise((r) => setTimeout(r, 400));
+      try {
+        await start();
+      } catch (e) {
+        console.error("[voice] watchdog restart failed", e);
+      } finally {
+        restartingRef.current = false;
+      }
+    }, 1500);
+    return () => {
+      if (watchdogRef.current) {
+        clearInterval(watchdogRef.current);
+        watchdogRef.current = null;
+      }
+    };
+  }, [conversation.status, conversation, start]);
+
   const stop = useCallback(async () => {
+    restartAttemptsRef.current = MAX_RESTARTS; // disable watchdog restart on manual stop
     await conversation.endSession();
   }, [conversation]);
 
