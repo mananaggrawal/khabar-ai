@@ -207,12 +207,12 @@ const COUNTRY_LABELS: Record<string, string> = {
   global: "around the world",
 };
 
-const AGENT_SYSTEM_PROMPT = `You are Khabar AI, an AI-native news anchor. Intellectual but warm and conversational — like a well-read friend catching you up over chai. Speak slowly, casually, with natural pauses. Avoid stiff broadcaster cadence; use everyday words.
+const AGENT_SYSTEM_PROMPT = `You are Khabar AI, an AI-native news anchor. Intellectual but warm and conversational — like a well-read friend catching you up over chai. Speak in natural Indian English: warm, unhurried, with Indian pronunciations of names, places, and Hindi words. Avoid stiff broadcaster cadence; use everyday words and natural pauses.
 
 Rules:
 - The TODAY'S BRIEFING JSON below is your ONLY source of truth for the spoken brief. It is organised in three tiers: HOME (the user's country), WORLD (everywhere else), and QUICK HITS (one-liners).
 - Total runtime target: ~15 minutes. Roughly 7 min HOME, 4 min WORLD, 3 min QUICK HITS. Do not pad. Do not invent.
-- Open EXACTLY with: "Welcome to Khabar AI. We'll catch you up on what's happening and why it matters." Then in one short, casual sentence tell them what's in today's briefing and that they can interrupt anytime ("say 'next' to skip, 'go deeper' if you want more").
+- Your opening line is provided in the kickoff message — read it naturally as your first words, then continue straight into the briefing. Do NOT prepend your own greeting or say "Welcome" again on your own.
 - For the spoken briefing, use each topic's "hook", "explanation", and "whyItMatters" fields.
 - HOME and WORLD topics: hook → 1–2 sentence explanation → one sentence on why it matters. Cite an outlet by name when natural. ~25 seconds each. Speak slowly and naturally.
 - QUICK HITS: one sentence each. Move fast but still casual.
@@ -239,13 +239,19 @@ function buildFirstMessage(b: Briefing): string {
   const home = b.topics.filter((t) => t.tier === "home").length;
   const world = b.topics.filter((t) => t.tier === "world").length;
   const quick = b.topics.filter((t) => t.tier === "quick_hit").length;
-  const homeLabel = COUNTRY_LABELS[b.homeCountry ?? "in"] ?? "your country";
-  if (b.topics.length === 0) return "Welcome to Khabar AI. I couldn't find any stories yet — try refreshing in a minute.";
+  const isIndia = (b.homeCountry ?? "in") === "in";
+  if (b.topics.length === 0) {
+    return isIndia
+      ? "Namaste, and welcome to Khabar AI. I couldn't pull any stories just yet — give it a minute and try again."
+      : "Hey, welcome to Khabar AI. I couldn't pull any stories just yet — give it a minute and try again.";
+  }
+  const homeLabel = isIndia ? "from India" : `from ${COUNTRY_LABELS[b.homeCountry ?? "in"] ?? "home"}`;
   const parts: string[] = [];
-  if (home) parts.push(`${home} from ${homeLabel}`);
+  if (home) parts.push(`${home} ${homeLabel}`);
   if (world) parts.push(`${world} from around the world`);
   if (quick) parts.push(`${quick} quick hits`);
-  return `Welcome to Khabar AI. We'll catch you up on what's happening and why it matters. Today we've got ${parts.join(", ")} — interrupt anytime.`;
+  const greeting = isIndia ? "Namaste, and welcome to Khabar AI" : "Hey, welcome to Khabar AI";
+  return `${greeting} — your daily catch-up on what's happening and why it matters. Today we've got ${parts.join(", ")} — about fifteen minutes in all. Jump in anytime: say 'next' to skip, 'go deeper' for more, or name a story to jump to. Alright, let's get into it.`;
 }
 
 function buildJumpMessage(b: Briefing, i: number): string {
