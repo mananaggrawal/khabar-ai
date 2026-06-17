@@ -435,12 +435,12 @@ const AUTO_START_PREFIX = "SYSTEM_AUTO_START_BRIEFING";
 
 function buildAutoStartPrompt(isResume: boolean, effectiveJump?: number): string {
   if (isResume && typeof effectiveJump === "number") {
-    return `${AUTO_START_PREFIX}: Start speaking now as a continuous news monologue from story ${effectiveJump + 1}. Do not wait for the listener and do not ask a question.`;
+    return `${AUTO_START_PREFIX}: Continue speaking now as a continuous news monologue from story ${effectiveJump + 1}. Do not say Namaste, welcome, or any greeting. Do not wait for the listener and do not ask a question.`;
   }
   if (typeof effectiveJump === "number") {
-    return `${AUTO_START_PREFIX}: Start speaking now as a continuous news monologue from story ${effectiveJump + 1}. Do not wait for the listener and do not ask a question.`;
+    return `${AUTO_START_PREFIX}: Continue speaking now as a continuous news monologue from story ${effectiveJump + 1}. Do not say Namaste, welcome, or any greeting. Do not wait for the listener and do not ask a question.`;
   }
-  return `${AUTO_START_PREFIX}: Start speaking now as a continuous news monologue from the first story. Do not wait for the listener and do not ask a question.`;
+  return `${AUTO_START_PREFIX}: Continue speaking now as a continuous news monologue from the first story. Do not say Namaste, welcome, or any greeting. Do not wait for the listener and do not ask a question.`;
 }
 
 function shouldHideTranscriptLine(role: "user" | "agent", text: string): boolean {
