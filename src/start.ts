@@ -31,6 +31,11 @@ const apiMiddleware = createMiddleware().server(async ({ next, request }) => {
     }
   }
 
+  if (url.pathname === "/api/health") {
+    return new Response(JSON.stringify({ status: "ok" }), {
+      headers: { "Content-Type": "application/json" },
+    });
+  }
   if (url.pathname === "/api/admin/generate" && request.method === "POST") {
     return handleGenerate(request);
   }
