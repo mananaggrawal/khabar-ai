@@ -1,0 +1,13 @@
+diff --git a/node_modules/@tanstack/start-plugin-core/dist/esm/start-manifest-plugin/manifestBuilder.js b/node_modules/@tanstack/start-plugin-core/dist/esm/start-manifest-plugin/manifestBuilder.js
+index 997896d..437332d 100644
+--- a/node_modules/@tanstack/start-plugin-core/dist/esm/start-manifest-plugin/manifestBuilder.js
++++ b/node_modules/@tanstack/start-plugin-core/dist/esm/start-manifest-plugin/manifestBuilder.js
+@@ -236,7 +236,7 @@ function buildRouteManifestRoutes(options) {
+ 		chunksByFileName: options.chunksByFileName,
+ 		getStylesheetLink: options.assetResolvers.getStylesheetLink
+ 	}).getChunkCssAssets;
+-	for (const [routeId, route] of Object.entries(options.routeTreeRoutes)) {
++	for (const [routeId, route] of Object.entries(options.routeTreeRoutes ?? {})) {
+ 		if (!route.filePath) {
+ 			if (routeId === rootRouteId) {
+ 				routes[routeId] = { ...route };
