@@ -10,6 +10,9 @@
 
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { uploadAudio } from "@/lib/supabase-storage";
+
+const LOCAL_MODE = process.env.LOCAL_MODE === "true";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -157,13 +160,19 @@ export async function googleTTS(text: string, filename: string): Promise<string>
 
   const pcm = await synthesizeWithRetry(text);
   const wav = pcmToWav(pcm);
-
-  const audioDir = join(process.cwd(), "public", "audio");
-  await mkdir(audioDir, { recursive: true });
-  await writeFile(join(audioDir, `${filename}.wav`), wav);
-
   const durationSec = (pcm.length / 2 / SAMPLE_RATE).toFixed(1);
-  console.log(`[tts] saved ${filename}.wav — ${(wav.length / 1024).toFixed(0)} KB, ~${durationSec}s`);
 
-  return `/audio/${filename}.wav`;
+  if (LOCAL_MODE) {
+    // Local dev — write to public/audio/ (served by Vite)
+    const audioDir = join(process.cwd(), "public", "audio");
+    await mkdir(audioDir, { recursive: true });
+    await writeFile(join(audioDir, `${filename}.wav`), wav);
+    console.log(`[tts] saved local ${filename}.wav — ${(wav.length / 1024).toFixed(0)} KB, ~${durationSec}s`);
+    return `/audio/${filename}.wav`;
+  }
+
+  // Production — upload to Supabase Storage
+  const url = await uploadAudio(`${filename}.wav`, wav);
+  console.log(`[tts] uploaded ${filename}.wav to storage — ${(wav.length / 1024).toFixed(0)} KB, ~${durationSec}s`);
+  return url;
 }
