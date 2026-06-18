@@ -1,197 +1,164 @@
-import { useState } from "react";
-import { ChevronDown, ExternalLink, Play } from "lucide-react";
+import { useState, type CSSProperties } from "react";
+import { ChevronDown, ExternalLink } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import type { BriefingTopic, BriefingTier } from "@/lib/news/briefing.functions";
+import type { BriefingTopic } from "@/lib/news/generator";
 
 interface Props {
   topics: BriefingTopic[];
-  onJumpTo?: (index: number) => void;
-  activeIndex?: number | null;
-  homeLabel?: string;
 }
 
-export function BriefingList({ topics, onJumpTo, activeIndex, homeLabel = "Home" }: Props) {
+export function BriefingList({ topics }: Props) {
   if (topics.length === 0) return null;
-
-  // Preserve original index across the flat list for onJumpTo / activeIndex.
-  const indexed = topics.map((t, i) => ({ t, i }));
-  const home = indexed.filter((x) => x.t.tier === "home");
-  const world = indexed.filter((x) => x.t.tier === "world");
-  const quick = indexed.filter((x) => x.t.tier === "quick_hit");
-
   return (
-    <div className="w-full space-y-8">
-      {home.length > 0 && (
-        <Section
-          title={`From ${homeLabel}`}
-          subtitle={`${home.length} ${home.length === 1 ? "story" : "stories"}`}
-          items={home}
-          onJumpTo={onJumpTo}
-          activeIndex={activeIndex}
-          variant="deep"
-        />
-      )}
-      {world.length > 0 && (
-        <Section
-          title="Around the world"
-          subtitle={`${world.length} ${world.length === 1 ? "story" : "stories"}`}
-          items={world}
-          onJumpTo={onJumpTo}
-          activeIndex={activeIndex}
-          variant="deep"
-        />
-      )}
-      {quick.length > 0 && (
-        <Section
-          title="Quick hits"
-          subtitle={`${quick.length} bullets`}
-          items={quick}
-          onJumpTo={onJumpTo}
-          activeIndex={activeIndex}
-          variant="quick"
-        />
-      )}
+    <div className="space-y-2">
+      {topics.map((t, i) => <TopicCard key={t.id} topic={t} index={i} />)}
     </div>
   );
 }
 
-function Section({
-  title, subtitle, items, onJumpTo, activeIndex, variant,
-}: {
-  title: string;
-  subtitle: string;
-  items: { t: BriefingTopic; i: number }[];
-  onJumpTo?: (index: number) => void;
-  activeIndex?: number | null;
-  variant: "deep" | "quick";
-}) {
+// ── Brand logos ───────────────────────────────────────────────────────────────
+
+function PerplexityLogo({ className }: { className?: string }) {
   return (
-    <section>
-      <div className="mb-3 flex items-baseline justify-between px-1">
-        <h2 className="font-serif text-lg tracking-tight">{title}</h2>
-        <span className="text-[10px] uppercase tracking-[0.25em] text-muted-foreground">{subtitle}</span>
-      </div>
-      <div className="space-y-2">
-        {items.map(({ t, i }) =>
-          variant === "deep" ? (
-            <DeepCard
-              key={t.id}
-              topic={t}
-              index={i}
-              active={activeIndex === i}
-              onJumpTo={onJumpTo}
-            />
-          ) : (
-            <QuickRow
-              key={t.id}
-              topic={t}
-              index={i}
-              active={activeIndex === i}
-              onJumpTo={onJumpTo}
-            />
-          ),
-        )}
-      </div>
-    </section>
+    <svg viewBox="0 0 24 24" className={className} fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 .014L.086 6.9v13.771h2.157V8.256L12 2.443l9.757 5.813v12.415h2.157V6.9L12 .014zm.643 11.104V8.63h-1.286v2.488L7.51 8.63 6.867 9.7l3.87 2.3-3.87 2.3.643 1.072 3.847-2.288v2.488h1.286v-2.488l3.847 2.288.643-1.072-3.87-2.3 3.87-2.3z" />
+    </svg>
   );
 }
 
-function DeepCard({
-  topic: t, index: i, active, onJumpTo,
-}: { topic: BriefingTopic; index: number; active: boolean; onJumpTo?: (index: number) => void }) {
-  const [open, setOpen] = useState(false);
-  const hasMore = !!(t.explanation || t.whyItMatters || t.sources.length || (t.followUps && t.followUps.length));
+function ChatGPTLogo({ className }: { className?: string }) {
   return (
-    <div
-      className={`rounded-2xl border border-white/5 bg-white/[0.02] transition ${
-        active ? "ring-1 ring-primary/40" : ""
-      }`}
-    >
+    <svg viewBox="0 0 24 24" className={className} fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+      <path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z" />
+    </svg>
+  );
+}
+
+function GoogleLogo({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} xmlns="http://www.w3.org/2000/svg">
+      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
+      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
+      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05" />
+      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
+    </svg>
+  );
+}
+
+// ── Deep-dive services ────────────────────────────────────────────────────────
+
+const SERVICES: {
+  name: string;
+  Logo: (props: { className?: string }) => JSX.Element;
+  color: string;
+  url: (q: string) => string;
+}[] = [
+  {
+    name: "Perplexity",
+    Logo: PerplexityLogo,
+    color: "#20B8CD",
+    url: (q) => `https://www.perplexity.ai/search?q=${encodeURIComponent(q)}`,
+  },
+  {
+    name: "ChatGPT",
+    Logo: ChatGPTLogo,
+    color: "#10A37F",
+    url: (q) => `https://chatgpt.com/?q=${encodeURIComponent(q)}`,
+  },
+  {
+    name: "Google",
+    Logo: GoogleLogo,
+    color: "transparent",
+    url: (q) => `https://www.google.com/search?q=${encodeURIComponent(q)}`,
+  },
+];
+
+function buildQuery(t: BriefingTopic): string {
+  // Concise but context-rich prompt — auto-submitted as-is
+  const base = t.explanation
+    ? `${t.headline}. ${t.explanation}`
+    : t.headline;
+  return `${base} — explain the full background, key players, and what happens next.`;
+}
+
+// ── Topic card ────────────────────────────────────────────────────────────────
+
+function TopicCard({ topic: t, index: i }: { topic: BriefingTopic; index: number }) {
+  const [open, setOpen] = useState(false);
+  const query = buildQuery(t);
+
+  return (
+    <div className="rounded-2xl border border-white/5 bg-white/[0.02]">
+      {/* Header row */}
       <div
-        role="button"
-        tabIndex={0}
-        onClick={() => hasMore && setOpen(!open)}
-        onKeyDown={(e) => {
-          if (hasMore && (e.key === "Enter" || e.key === " ")) {
-            e.preventDefault();
-            setOpen(!open);
-          }
-        }}
+        role="button" tabIndex={0}
+        onClick={() => setOpen(!open)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(!open); } }}
         className="flex w-full cursor-pointer items-start gap-3 px-4 py-3 text-left"
       >
         <span className="mt-1 w-6 shrink-0 text-xs tabular-nums text-muted-foreground">
           {String(i + 1).padStart(2, "0")}
         </span>
         <div className="min-w-0 flex-1">
-          <p className="font-serif text-base leading-snug text-foreground">{t.headline}</p>
-          {t.hook && (
-            <p className="mt-0.5 text-sm text-muted-foreground line-clamp-2">{t.hook}</p>
-          )}
-          <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground/80">
-            {t.sources.length > 0 && (
-              <span>
-                {t.sources.length} {t.sources.length === 1 ? "source" : "sources"}
-              </span>
-            )}
-            {onJumpTo && (
-              <button
-                type="button"
-                onClick={(e) => { e.stopPropagation(); onJumpTo(i); }}
-                className="inline-flex items-center gap-1 rounded-full bg-white/5 px-2 py-0.5 hover:bg-white/10 hover:text-foreground"
-              >
-                <Play className="size-2.5" /> Read aloud
-              </button>
-            )}
-          </div>
+          <p className="font-serif text-base leading-snug">{t.headline}</p>
+          {t.hook && <p className="mt-0.5 text-sm text-muted-foreground line-clamp-2">{t.hook}</p>}
         </div>
-        {hasMore && (
-          <ChevronDown
-            className={`mt-1 size-4 shrink-0 text-muted-foreground transition-transform ${
-              open ? "rotate-180" : ""
-            }`}
-          />
-        )}
+        <ChevronDown className={`mt-1 size-4 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} />
       </div>
+
+      {/* Expanded body */}
       <AnimatePresence initial={false}>
-        {open && hasMore && (
+        {open && (
           <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2 }}
+            initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }}
             className="overflow-hidden"
           >
-            <div className="space-y-3 px-4 pb-4 pl-[3.25rem] text-sm text-foreground/85">
-              {t.explanation && <p className="leading-relaxed">{t.explanation}</p>}
-              {t.whyItMatters && (
-                <p className="text-muted-foreground">
-                  <span className="text-foreground/70">Why it matters — </span>
-                  {t.whyItMatters}
+            <div className="space-y-3 px-4 pb-4 pl-[3.25rem]">
+              {/* Explanation */}
+              {t.explanation && (
+                <p className="text-sm leading-relaxed text-foreground/85">{t.explanation}</p>
+              )}
+
+              {/* Source link */}
+              {t.sourceUrl && (
+                <a
+                  href={t.sourceUrl} target="_blank" rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="inline-flex items-center gap-1 text-[11px] text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+                >
+                  <ExternalLink className="size-3" />
+                  {t.sourceName ?? "Source"}
+                </a>
+              )}
+
+              {/* Go deeper */}
+              <div className="pt-1">
+                <p className="mb-2 text-[10px] uppercase tracking-widest text-muted-foreground/40">
+                  Go deeper
                 </p>
-              )}
-              {t.followUps && t.followUps.length > 0 && (
-                <ul className="space-y-0.5 text-xs text-muted-foreground">
-                  {t.followUps.map((q, j) => (
-                    <li key={j}>· {q}</li>
-                  ))}
-                </ul>
-              )}
-              {t.sources.length > 0 && (
-                <ul className="space-y-1 pt-1">
-                  {t.sources.map((s, j) => (
-                    <li key={j}>
-                      <a
-                        href={s.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary"
+                <div className="flex items-center gap-2">
+                  {SERVICES.map((svc) => (
+                    <a
+                      key={svc.name}
+                      href={svc.url(query)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      title={`Open in ${svc.name}`}
+                      className="flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-white/20 hover:bg-white/[0.08] hover:text-foreground"
+                    >
+                      <span
+                        className="inline-flex shrink-0"
+                        style={svc.color !== "transparent" ? { color: svc.color } as CSSProperties : undefined}
                       >
-                        <ExternalLink className="size-3" /> {s.name}
-                      </a>
-                    </li>
+                        <svc.Logo className="size-3.5" />
+                      </span>
+                      {svc.name}
+                    </a>
                   ))}
-                </ul>
-              )}
+                </div>
+              </div>
             </div>
           </motion.div>
         )}
@@ -199,34 +166,3 @@ function DeepCard({
     </div>
   );
 }
-
-function QuickRow({
-  topic: t, index: i, active, onJumpTo,
-}: { topic: BriefingTopic; index: number; active: boolean; onJumpTo?: (index: number) => void }) {
-  return (
-    <div
-      className={`flex items-start gap-3 rounded-xl border border-white/5 bg-white/[0.015] px-4 py-2.5 ${
-        active ? "ring-1 ring-primary/40" : ""
-      }`}
-    >
-      <span className="mt-0.5 w-6 shrink-0 text-xs tabular-nums text-muted-foreground">
-        {String(i + 1).padStart(2, "0")}
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="text-sm leading-snug text-foreground">{t.headline}</p>
-        {t.hook && <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2">{t.hook}</p>}
-      </div>
-      {onJumpTo && (
-        <button
-          type="button"
-          onClick={() => onJumpTo(i)}
-          className="mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-white/10 hover:text-foreground"
-        >
-          <Play className="size-2.5" />
-        </button>
-      )}
-    </div>
-  );
-}
-
-export type { BriefingTier };

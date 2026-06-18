@@ -24,19 +24,30 @@ export const saveMessage = createServerFn({ method: "POST" })
 
 export const listBriefings = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
-  .handler(async ({ context }) => {
-    const { data, error } = await context.supabase
-      .from("briefings")
-      .select("id, generated_at, topics")
-      .eq("user_id", context.userId)
-      .order("generated_at", { ascending: false })
-      .limit(50);
-    if (error) throw new Error(error.message);
-    return data ?? [];
+  .handler(async () => {
+    // In LOCAL_MODE, read directly from the generator's local store
+    const { readFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    try {
+      const raw = await readFile(join(process.cwd(), ".local-data", "briefings.json"), "utf-8");
+      const all = JSON.parse(raw) as Array<{
+        id: string; generatedAt: string; date: string; topics: unknown[];
+      }>;
+      return all.map((b) => ({
+        id: b.id,
+        generated_at: b.generatedAt,
+        topics: b.topics,
+      }));
+    } catch {
+      return [];
+    }
   });
 
 const DEFAULT_PREFS = {
-  categories: ["world", "tech", "markets", "science"] as string[],
+  categories: [
+    "india-national", "india-business", "india-sports", "india-tech", "india-entertainment",
+    "global-world", "global-business", "global-sports", "global-tech", "global-health",
+  ] as string[],
   voice_id: "nPczCjzI2devNBz1zQrb",
   home_country: "in" as "in" | "us" | "uk" | "global",
 };
@@ -62,7 +73,7 @@ export const savePreferences = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator(
     z.object({
-      categories: z.array(z.string()).min(1).max(8).optional(),
+      categories: z.array(z.string()).min(1).max(20).optional(),
       voice_id: z.string().optional(),
       home_country: z.enum(["in", "us", "uk", "global"]).optional(),
     }),
