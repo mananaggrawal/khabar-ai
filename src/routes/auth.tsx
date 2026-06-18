@@ -1,4 +1,4 @@
-import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
+import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { lovable } from "@/integrations/lovable";
@@ -6,12 +6,7 @@ import { Button } from "@/components/ui/button";
 import { VoiceOrb } from "@/components/VoiceOrb";
 import { toast } from "sonner";
 
-const LOCAL_MODE = import.meta.env.VITE_LOCAL_MODE === "true";
-
 export const Route = createFileRoute("/auth")({
-  beforeLoad: () => {
-    if (LOCAL_MODE) throw redirect({ to: "/" });
-  },
   head: () => ({
     meta: [
       { title: "Sign in · Khabar AI" },
