@@ -3,7 +3,7 @@ services:
     name: khabar-ai
     runtime: node
     buildCommand: npm ci && npm run build
-    startCommand: node .output/server/index.mjs
+    startCommand: node dist/server/server.js
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
