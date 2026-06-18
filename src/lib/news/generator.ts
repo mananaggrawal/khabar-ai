@@ -13,6 +13,9 @@ import { join } from "node:path";
 import { fetchRss, type RssItem } from "./rss";
 import { TOP_FEEDS, SECTIONS, SECTION_MAP, type SectionCategory, type SectionConfig } from "./sources";
 import { googleTTS } from "@/lib/tts/google";
+import { saveBriefingToStorage, loadBriefingFromStorage } from "@/lib/supabase-storage";
+
+const LOCAL_MODE = process.env.LOCAL_MODE === "true";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -315,6 +318,10 @@ Return JSON with exactly two keys:
 const DATA_DIR = join(process.cwd(), ".local-data");
 
 export async function saveBriefing(briefing: DailyBriefing): Promise<void> {
+  if (!LOCAL_MODE) {
+    await saveBriefingToStorage(briefing.date, briefing);
+    return;
+  }
   await mkdir(DATA_DIR, { recursive: true });
   const path = join(DATA_DIR, "briefings.json");
   let all: DailyBriefing[] = [];
@@ -370,6 +377,11 @@ function normalizeBriefing(raw: any): DailyBriefing {
 
 export async function getTodayBriefing(): Promise<DailyBriefing | null> {
   const today = new Date().toISOString().slice(0, 10);
+  if (!LOCAL_MODE) {
+    const raw = await loadBriefingFromStorage(today);
+    if (!raw) return null;
+    return normalizeBriefing(raw);
+  }
   try {
     const all: any[] = JSON.parse(await readFile(join(DATA_DIR, "briefings.json"), "utf-8"));
     if (all.length === 0) return null;
@@ -379,6 +391,17 @@ export async function getTodayBriefing(): Promise<DailyBriefing | null> {
 }
 
 export async function getLatestBriefing(): Promise<DailyBriefing | null> {
+  if (!LOCAL_MODE) {
+    // Try today first, then yesterday (up to 3 days back)
+    for (let i = 0; i < 3; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const date = d.toISOString().slice(0, 10);
+      const raw = await loadBriefingFromStorage(date);
+      if (raw) return normalizeBriefing(raw);
+    }
+    return null;
+  }
   try {
     const all: any[] = JSON.parse(await readFile(join(DATA_DIR, "briefings.json"), "utf-8"));
     return all[0] ? normalizeBriefing(all[0]) : null;

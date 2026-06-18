@@ -1,0 +1,10 @@
+node_modules
+.output
+.local-data
+public/audio
+secrets
+.env
+.env.local
+.git
+.gitignore
+*.md

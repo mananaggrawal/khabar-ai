@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: khabar-ai
+    runtime: node
+    buildCommand: npm ci && npm run build
+    startCommand: node .output/server/index.mjs
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: LOCAL_MODE
+        value: "false"
+      - key: VITE_LOCAL_MODE
+        value: "false"
+      - key: BRIEFING_HOME
+        value: in
+      # Set these in Render dashboard (never commit secrets):
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_PROJECT_ID
+        sync: false
+      - key: VITE_SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ADMIN_KEY
+        sync: false
