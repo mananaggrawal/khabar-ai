@@ -142,14 +142,22 @@ const server = createServer(async (req, res) => {
   }
 
   if (pathname === "/api/admin/cron" && req.method === "POST") {
-    try {
-      const request = await toRequest(req);
-      const response = await handleCron(request);
-      await sendResponse(response, res);
-    } catch (err) {
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: String(err?.message ?? err) }));
+    const key = req.headers["x-admin-key"] || "";
+    if (!process.env.ADMIN_KEY || key !== process.env.ADMIN_KEY) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Unauthorized" }));
+      return;
     }
+    // Respond 200 immediately — no body reading, no async
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
+    // Fire generation after response is flushed
+    setImmediate(() => {
+      handleCron(new Request("http://localhost/api/admin/cron", {
+        method: "POST",
+        headers: { "x-admin-key": key },
+      })).catch((err) => console.error("[cron]", err?.message ?? err));
+    });
     return;
   }
 
