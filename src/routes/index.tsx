@@ -1,11 +1,11 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { motion, AnimatePresence } from "motion/react";
 import {
-  Settings, Loader2, AlertTriangle,
-  SkipBack, SkipForward, Pause, Play, Square, RefreshCw, ChevronDown,
+  Settings, AlertTriangle,
+  SkipBack, SkipForward, Pause, Play, Square, ChevronDown,
   RotateCcw, RotateCw,
 } from "lucide-react";
 
@@ -16,7 +16,6 @@ import { useMonologue } from "@/hooks/useMonologue";
 import type { BriefingSection } from "@/lib/news/generator";
 
 const LOCAL_MODE = import.meta.env.VITE_LOCAL_MODE === "true";
-const ADMIN_KEY = "khabar-admin-2026";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -88,18 +87,6 @@ function BriefingSurface() {
     queryFn: () => fetchFn({ data: undefined as never }),
     staleTime: 5 * 60 * 1000,
     retry: 1,
-  });
-
-  const generateMutation = useMutation({
-    mutationFn: async () => {
-      const res = await fetch("/api/admin/generate", {
-        method: "POST",
-        headers: { "x-admin-key": ADMIN_KEY },
-      });
-      if (!res.ok) throw new Error((await res.json()).error ?? "Generation failed");
-      return res.json();
-    },
-    onSuccess: () => briefingQuery.refetch(),
   });
 
   const briefing = briefingQuery.data ?? null;
@@ -293,31 +280,11 @@ function BriefingSurface() {
           )}
 
 
-          {/* Idle — generate if no briefing, or hint to tap orb */}
-          {mono.state === "idle" && !briefingQuery.isLoading && (
-            <>
-              <div className="flex flex-col items-center gap-2">
-                {hasAudio && (
-                  <p className="text-center text-sm text-muted-foreground">
-                    Tap anywhere to start listening
-                  </p>
-                )}
-                <button
-                  onClick={() => generateMutation.mutate()}
-                  disabled={generateMutation.isPending}
-                  className="flex items-center gap-2 rounded-full px-4 py-1 text-xs text-muted-foreground/50 transition-colors hover:text-muted-foreground disabled:opacity-40"
-                >
-                  {generateMutation.isPending
-                    ? <><Loader2 className="size-3 animate-spin" /> Generating…</>
-                    : <><RefreshCw className="size-3" /> Regenerate</>}
-                </button>
-              </div>
-              {generateMutation.isError && (
-                <p className="text-center text-xs text-amber-400/80">
-                  {(generateMutation.error as any)?.message ?? "Generation failed"}
-                </p>
-              )}
-            </>
+          {/* Idle — hint to tap orb */}
+          {mono.state === "idle" && !briefingQuery.isLoading && hasAudio && (
+            <p className="text-center text-sm text-muted-foreground">
+              Tap anywhere to start listening
+            </p>
           )}
         </div>
 
