@@ -4,6 +4,35 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
+/**
+ * Mints a short-lived ElevenLabs conversation token for the agent.
+ */
+export const getElevenLabsToken = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async (): Promise<
+    | { ok: true; token: string }
+    | { ok: false; reason: "missing_api_key" | "missing_agent_id" | "upstream_error"; detail?: string }
+  > => {
+    const apiKey = process.env.ELEVENLABS_API_KEY;
+    const agentId = process.env.ELEVENLABS_AGENT_ID;
+    if (!apiKey) return { ok: false, reason: "missing_api_key" };
+    if (!agentId) return { ok: false, reason: "missing_agent_id" };
+    try {
+      const r = await fetch(
+        `https://api.elevenlabs.io/v1/convai/conversation/token?agent_id=${agentId}`,
+        { headers: { "xi-api-key": apiKey } },
+      );
+      if (!r.ok) {
+        return { ok: false, reason: "upstream_error", detail: `${r.status} ${await r.text()}` };
+      }
+      const { token } = (await r.json()) as { token: string };
+      return { ok: true, token };
+    } catch (e: any) {
+      return { ok: false, reason: "upstream_error", detail: String(e?.message ?? e) };
+    }
+  });
+
+
 // Splits text at sentence boundaries to fit ElevenLabs' per-request limit.
 function chunkText(text: string, maxChars = 4500): string[] {
   const chunks: string[] = [];

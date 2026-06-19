@@ -29,7 +29,7 @@ function HistoryPage() {
           <p className="text-sm text-muted-foreground">No briefings yet. Head back and tap the orb.</p>
         )}
         <ul className="space-y-3">
-          {q.data?.map((b) => {
+          {q.data?.map((b: any) => {
             const topics = (b.topics as unknown as BriefingTopic[]) ?? [];
             return (
               <li
