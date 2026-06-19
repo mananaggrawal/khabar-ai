@@ -91,6 +91,9 @@ const server = createServer(async (req, res) => {
     pathname.startsWith("/assets/") ||
     pathname === "/favicon.ico" ||
     pathname === "/favicon.svg" ||
+    pathname === "/favicon.png" ||
+    pathname === "/icon-192.png" ||
+    pathname === "/icon-512.png" ||
     pathname === "/apple-touch-icon.png" ||
     pathname === "/manifest.webmanifest" ||
     pathname === "/robots.txt" ||
