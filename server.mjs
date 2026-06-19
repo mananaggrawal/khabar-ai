@@ -185,200 +185,276 @@ server.listen(PORT, "0.0.0.0", () => {
 
 function adminPage(supabaseUrl, supabaseKey) {
   const ALLOWED_EMAIL = "manan190303@gmail.com";
+  const adminKey = process.env.ADMIN_KEY || "";
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Khabar AI — Admin</title>
+  <title>Khabar AI</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-           background: #0f0f0f; color: #e5e5e5; min-height: 100vh; }
-    .center { display: flex; flex-direction: column; align-items: center;
-              justify-content: center; min-height: 100vh; gap: 16px; }
-    .page { padding: 24px; max-width: 600px; margin: 0 auto; }
-    h1 { font-size: 1.4rem; font-weight: 600; margin-bottom: 4px; }
-    .sub { color: #888; font-size: 0.85rem; margin-bottom: 24px; }
-    .card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px;
-            padding: 20px; margin-bottom: 16px; }
-    .row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
-    .badge { padding: 3px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; }
-    .badge.generated { background: #14532d; color: #4ade80; }
-    .badge.missing { background: #431407; color: #fb923c; }
-    .badge.error { background: #3b0764; color: #c084fc; }
-    .date { font-weight: 600; font-size: 0.95rem; min-width: 100px; }
-    .meta { color: #888; font-size: 0.82rem; }
-    .today-tag { background: #1e3a5f; color: #60a5fa; padding: 2px 8px;
-                 border-radius: 20px; font-size: 0.72rem; }
-    .btn { background: #2563eb; color: #fff; border: none; padding: 10px 20px;
-           border-radius: 8px; font-size: 0.9rem; cursor: pointer; display: inline-flex;
-           align-items: center; gap: 8px; }
-    .btn:hover { background: #1d4ed8; }
-    .btn:disabled { background: #374151; color: #6b7280; cursor: not-allowed; }
-    .btn.google { background: #fff; color: #111; font-weight: 500; }
-    .btn.google:hover { background: #f3f3f3; }
-    .btn.sm { padding: 6px 14px; font-size: 0.8rem; background: #374151; }
-    .btn.sm:hover { background: #4b5563; }
-    #gen-result { margin-top: 12px; font-size: 0.85rem; color: #4ade80; }
-    .user-row { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
-    .avatar { width: 32px; height: 32px; border-radius: 50%; }
-    .user-email { font-size: 0.85rem; color: #888; flex: 1; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:        oklch(0.13 0.035 295);
+      --surface:   oklch(0.17 0.04 295);
+      --fg:        oklch(0.98 0.005 300);
+      --primary:   oklch(0.72 0.19 300);
+      --primary-fg:oklch(0.15 0.03 295);
+      --muted:     oklch(0.7 0.03 295);
+      --border:    oklch(1 0 0 / 8%);
+      --surface2:  oklch(1 0 0 / 2%);
+      --divider:   oklch(1 0 0 / 5%);
+    }
+    html, body {
+      background: var(--bg); color: var(--fg); min-height: 100vh;
+      font-family: 'Geist', ui-sans-serif, system-ui, sans-serif;
+      font-size: 14px; letter-spacing: -0.01em;
+      -webkit-font-smoothing: antialiased;
+    }
+    .serif { font-family: 'Instrument Serif', ui-serif, Georgia, serif; letter-spacing: -0.02em; }
+
+    /* Gradient glow — same as main app */
+    .glow {
+      position: fixed; inset: 0; pointer-events: none; z-index: 0;
+      background:
+        radial-gradient(ellipse at 50% 30%, oklch(0.22 0.04 290 / 0.7), transparent 60%),
+        radial-gradient(ellipse at 80% 80%, oklch(0.25 0.08 30 / 0.35), transparent 65%);
+    }
+    .z1 { position: relative; z-index: 1; }
+
+    /* Screens */
+    .screen { display: none; }
+    .screen.active { display: block; }
+    .screen.flex { display: none; }
+    .screen.flex.active { display: flex; }
+
+    /* Centred layout (login / denied) */
+    .center { flex-direction: column; align-items: center; justify-content: center;
+              min-height: 100vh; gap: 12px; padding: 24px; }
+
+    /* Top bar */
+    .topbar { display: flex; align-items: center; justify-content: space-between;
+              padding: 28px 24px 0; max-width: 640px; margin: 0 auto; }
+    .wordmark { font-size: 20px; }
+    .wordmark em { font-style: italic; color: var(--primary); }
+    .user-row { display: flex; align-items: center; gap: 10px; }
+    .avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
+    .avatar-init {
+      width: 28px; height: 28px; border-radius: 50%; background: oklch(0.72 0.19 300 / 0.2);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 500; color: var(--primary);
+    }
+
+    /* Content */
+    .content { padding: 32px 24px 48px; max-width: 640px; margin: 0 auto; }
+
+    /* Card group — same as SectionGroup */
+    .group {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 16px; overflow: hidden; padding: 20px;
+    }
+    .date-label {
+      font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+      color: var(--muted); margin-bottom: 14px;
+    }
+    .status-row { display: flex; align-items: center; gap: 10px; margin-bottom: 5px; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .dot-ok { background: var(--primary); }
+    .dot-warn { background: oklch(0.75 0.15 70); }
+    .status-main { font-size: 15px; font-weight: 500; }
+    .status-meta { font-size: 13px; color: var(--muted); padding-left: 17px; margin-top: 2px; }
+    .divider { height: 1px; background: var(--divider); margin: 18px 0; }
+    .gen-sub { font-size: 13px; color: var(--muted); margin-bottom: 14px; }
+    .gen-result { margin-top: 12px; font-size: 13px; }
+
+    /* Buttons */
+    .btn-primary {
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      width: 100%; padding: 12px 20px; border-radius: 999px;
+      background: var(--primary); color: var(--primary-fg); border: none;
+      font-family: 'Geist', ui-sans-serif, system-ui, sans-serif;
+      font-size: 14px; font-weight: 500; cursor: pointer; letter-spacing: -0.01em;
+      transition: opacity 0.15s;
+    }
+    .btn-primary:hover { opacity: 0.88; }
+    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-ghost {
+      background: none; border: none; font-family: inherit;
+      font-size: 13px; color: var(--muted); cursor: pointer; padding: 0;
+    }
+    .btn-ghost:hover { color: var(--fg); }
+    .btn-google {
+      display: flex; align-items: center; gap: 10px; padding: 11px 24px;
+      border-radius: 999px; background: var(--fg); color: #111;
+      border: none; font-family: 'Geist', ui-sans-serif, system-ui, sans-serif;
+      font-size: 14px; font-weight: 500; cursor: pointer;
+    }
+    .btn-google:hover { opacity: 0.92; }
+
+    /* Login page titles */
+    .login-title { font-size: 28px; margin-bottom: 4px; }
+    .login-sub { font-size: 13px; color: var(--muted); margin-bottom: 16px; }
+    .login-err { font-size: 12px; color: oklch(0.65 0.22 25); margin-top: 8px; display: none; }
+
+    /* Denied */
+    .denied-title { font-size: 16px; font-weight: 500; margin-bottom: 4px; }
+    .denied-sub { font-size: 13px; color: var(--muted); margin-bottom: 16px; }
+
+    /* Spinner */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spin { animation: spin 0.8s linear infinite; display: inline-block; }
   </style>
 </head>
 <body>
+<div class="glow"></div>
+<div class="z1">
 
-<!-- Login screen -->
-<div class="center" id="login-screen">
-  <div style="font-size:2rem">📰</div>
-  <div style="font-size:1.2rem;font-weight:600">Khabar AI Admin</div>
-  <div style="color:#888;font-size:0.85rem">Sign in with your Google account</div>
-  <button class="btn google" onclick="signIn()">
-    <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
-    Sign in with Google
-  </button>
-  <div id="login-error" style="color:#ef4444;font-size:0.82rem;display:none"></div>
-</div>
-
-<!-- Denied screen -->
-<div class="center" id="denied-screen" style="display:none">
-  <div style="font-size:2rem">🚫</div>
-  <div style="font-weight:600">Access Denied</div>
-  <div style="color:#888;font-size:0.85rem">This account is not authorised.</div>
-  <button class="btn sm" onclick="signOut()">Sign out</button>
-</div>
-
-<!-- Admin dashboard -->
-<div id="admin-screen" style="display:none">
-  <div class="page">
-    <div class="user-row">
-      <img id="avatar" class="avatar" src="" style="display:none" />
-      <span id="user-email" class="user-email"></span>
-      <button class="btn sm" onclick="signOut()">Sign out</button>
-    </div>
-    <h1>📰 Khabar AI Admin</h1>
-    <p class="sub">Daily briefing status &amp; generation console</p>
-
-    <div id="status-area"><p style="color:#888">Loading status…</p></div>
-
-    <div class="card" style="margin-top:8px">
-      <div style="font-weight:600;margin-bottom:8px">Generate Today's Briefing</div>
-      <div class="meta" style="margin-bottom:12px">Takes 3–5 minutes. Do not close this tab.</div>
-      <button class="btn" id="generate-btn" onclick="runGenerate()">▶ Generate Now</button>
-      <div id="gen-result"></div>
+  <!-- Login -->
+  <div id="s-login" class="screen flex">
+    <div class="center">
+      <div class="serif login-title">Khabar <em style="font-style:italic;color:var(--primary)">AI</em></div>
+      <div class="login-sub">Admin — sign in to continue</div>
+      <button class="btn-google" onclick="signIn()">
+        <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+        Sign in with Google
+      </button>
+      <div id="login-err" class="login-err"></div>
     </div>
   </div>
+
+  <!-- Denied -->
+  <div id="s-denied" class="screen flex">
+    <div class="center">
+      <div class="denied-title">Access denied</div>
+      <div class="denied-sub">This account is not authorised.</div>
+      <button class="btn-ghost" onclick="signOut()">Sign out</button>
+    </div>
+  </div>
+
+  <!-- Dashboard -->
+  <div id="s-dash" class="screen">
+    <div class="topbar">
+      <div class="serif wordmark">Khabar <em>AI</em></div>
+      <div class="user-row">
+        <img id="u-avatar" class="avatar" src="" style="display:none" alt="">
+        <div id="u-init" class="avatar-init" style="display:none"></div>
+        <button class="btn-ghost" onclick="signOut()">Sign out</button>
+      </div>
+    </div>
+    <div class="content">
+      <div class="group">
+        <div class="date-label" id="today-label"></div>
+        <div id="status-row" class="status-row">
+          <div class="dot dot-warn"></div>
+          <div class="status-main" style="color:var(--muted)">Checking…</div>
+        </div>
+        <div id="status-meta" class="status-meta" style="display:none"></div>
+        <div class="divider"></div>
+        <div class="gen-sub">Regenerate if today's briefing is missing or outdated.</div>
+        <button class="btn-primary" id="gen-btn" onclick="runGenerate()">Generate now</button>
+        <div id="gen-result" class="gen-result"></div>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script>
-  const SUPABASE_URL = ${JSON.stringify(supabaseUrl)};
-  const SUPABASE_KEY = ${JSON.stringify(supabaseKey)};
-  const ALLOWED_EMAIL = ${JSON.stringify(ALLOWED_EMAIL)};
-  const ADMIN_KEY = ${JSON.stringify(process.env.ADMIN_KEY || "")};
+  const SB_URL = ${JSON.stringify(supabaseUrl)};
+  const SB_KEY = ${JSON.stringify(supabaseKey)};
+  const ALLOWED = ${JSON.stringify(ALLOWED_EMAIL)};
+  const AKEY   = ${JSON.stringify(adminKey)};
 
-  const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  const sb = supabase.createClient(SB_URL, SB_KEY);
+
+  // Set today label
+  const today = new Date().toISOString().slice(0, 10);
+  const todayFmt = new Date(today + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  document.getElementById('today-label').textContent = 'Today — ' + todayFmt;
 
   async function init() {
-    // Handle OAuth callback hash
     const { data: { session } } = await sb.auth.getSession();
-    showFor(session);
-
-    sb.auth.onAuthStateChange((_e, session) => showFor(session));
+    render(session);
+    sb.auth.onAuthStateChange((_, s) => render(s));
   }
 
-  function showFor(session) {
-    if (!session) {
-      show('login-screen');
-      return;
-    }
-    const email = session.user?.email || '';
-    if (email !== ALLOWED_EMAIL) {
-      show('denied-screen');
-      return;
-    }
-    // Authorised
-    document.getElementById('user-email').textContent = email;
-    const avatar = session.user?.user_metadata?.avatar_url;
+  function render(session) {
+    if (!session) { show('s-login'); return; }
+    if (session.user?.email !== ALLOWED) { show('s-denied'); return; }
+    const meta = session.user?.user_metadata || {};
+    const avatar = meta.avatar_url || '';
+    const name = (meta.name || session.user.email || 'M')[0].toUpperCase();
     if (avatar) {
-      const img = document.getElementById('avatar');
+      const img = document.getElementById('u-avatar');
       img.src = avatar; img.style.display = 'block';
+      document.getElementById('u-init').style.display = 'none';
+    } else {
+      document.getElementById('u-init').textContent = name;
+      document.getElementById('u-init').style.display = 'flex';
     }
-    show('admin-screen');
+    show('s-dash');
     loadStatus();
   }
 
   function show(id) {
-    ['login-screen','denied-screen','admin-screen'].forEach(s => {
-      document.getElementById(s).style.display = s === id ? (id === 'admin-screen' ? 'block' : 'flex') : 'none';
+    ['s-login','s-denied','s-dash'].forEach(s => {
+      const el = document.getElementById(s);
+      el.classList.remove('active');
     });
+    document.getElementById(id).classList.add('active');
   }
 
   async function signIn() {
-    const { error } = await sb.auth.signInWithOAuth({
-      provider: 'google',
-      options: { redirectTo: window.location.href }
-    });
-    if (error) {
-      const el = document.getElementById('login-error');
-      el.textContent = error.message; el.style.display = 'block';
-    }
+    const { error } = await sb.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: window.location.href } });
+    if (error) { const el = document.getElementById('login-err'); el.textContent = error.message; el.style.display = 'block'; }
   }
 
-  async function signOut() {
-    await sb.auth.signOut();
-    show('login-screen');
-  }
+  async function signOut() { await sb.auth.signOut(); show('s-login'); }
 
   async function loadStatus() {
-    const area = document.getElementById('status-area');
+    const row = document.getElementById('status-row');
+    const meta = document.getElementById('status-meta');
     try {
-      const r = await fetch('/api/admin/status', { headers: { 'x-admin-key': ADMIN_KEY } });
-      const data = await r.json();
-      if (!r.ok) { area.innerHTML = '<p style="color:#ef4444">' + (data.error || 'Error') + '</p>'; return; }
-      renderStatus(data.days);
-    } catch(e) {
-      area.innerHTML = '<p style="color:#ef4444">Could not load status</p>';
-    }
-  }
-
-  function renderStatus(days) {
-    const today = new Date().toISOString().slice(0,10);
-    const html = days.map(d => {
-      const isToday = d.date === today;
-      const bc = d.status === 'generated' ? 'generated' : d.status === 'missing' ? 'missing' : 'error';
-      const bt = d.status === 'generated' ? '✓ Generated' : d.status === 'missing' ? '✗ Missing' : '! Error';
-      const meta = d.status === 'generated'
-        ? d.sections + ' sections · ' + d.totalTopics + ' topics' + (d.generatedAt ? ' · ' + new Date(d.generatedAt).toLocaleTimeString() : '')
-        : '';
-      return '<div class="card"><div class="row">'
-        + '<span class="date">' + d.date + '</span>'
-        + (isToday ? '<span class="today-tag">TODAY</span>' : '')
-        + '<span class="badge ' + bc + '">' + bt + '</span>'
-        + '</div>' + (meta ? '<div class="meta">' + meta + '</div>' : '') + '</div>';
-    }).join('');
-    document.getElementById('status-area').innerHTML = html;
+      const r = await fetch('/api/admin/status', { headers: { 'x-admin-key': AKEY } });
+      const d = await r.json();
+      if (d.status === 'generated') {
+        row.innerHTML = '<div class="dot dot-ok"></div><div class="status-main">Generated</div>';
+        meta.textContent = d.sections + ' sections · ' + d.totalTopics + ' topics' + (d.generatedAt ? ' · ' + new Date(d.generatedAt).toLocaleTimeString() : '');
+        meta.style.display = 'block';
+        document.getElementById('gen-btn').textContent = 'Regenerate';
+      } else {
+        row.innerHTML = '<div class="dot dot-warn"></div><div class="status-main" style="color:oklch(0.75 0.15 70)">Not generated</div>';
+        meta.style.display = 'none';
+        document.getElementById('gen-btn').textContent = 'Generate now';
+      }
+    } catch { row.innerHTML = '<div class="dot dot-warn"></div><div class="status-main" style="color:var(--muted)">Could not check status</div>'; }
   }
 
   async function runGenerate() {
-    const btn = document.getElementById('generate-btn');
+    const btn = document.getElementById('gen-btn');
     const result = document.getElementById('gen-result');
-    btn.disabled = true; btn.textContent = '⏳ Generating… (3–5 min)';
-    result.style.color = '#4ade80'; result.textContent = '';
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin">&#9696;</span> Generating…';
+    result.textContent = '';
     try {
-      const r = await fetch('/api/admin/generate', { method: 'POST', headers: { 'x-admin-key': ADMIN_KEY } });
-      const data = await r.json();
+      const r = await fetch('/api/admin/generate', { method: 'POST', headers: { 'x-admin-key': AKEY } });
+      const d = await r.json();
       if (r.ok) {
-        result.textContent = '✓ Done — ' + data.sections + ' sections, ' + data.totalTopics + ' topics for ' + data.date;
+        result.style.color = 'var(--primary)';
+        result.textContent = 'Done — ' + d.sections + ' sections, ' + d.totalTopics + ' topics for ' + d.date;
         loadStatus();
       } else {
-        result.style.color = '#ef4444';
-        result.textContent = '✗ ' + (data.error || 'Generation failed');
+        result.style.color = 'oklch(0.65 0.22 25)';
+        result.textContent = d.error || 'Generation failed';
       }
-    } catch(e) {
-      result.style.color = '#ef4444'; result.textContent = '✗ Network error';
+    } catch {
+      result.style.color = 'oklch(0.65 0.22 25)';
+      result.textContent = 'Network error';
     }
-    btn.disabled = false; btn.textContent = '▶ Generate Now';
+    btn.disabled = false;
+    btn.textContent = 'Regenerate';
   }
 
   init();
