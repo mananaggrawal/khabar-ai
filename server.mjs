@@ -1,6 +1,7 @@
 /**
  * Production HTTP server for Khabar AI on Render.
  * - Serves dist/client/ as static assets (JS, CSS, images)
+ * - Intercepts /api/* routes before SSR (bypasses TanStack Start middleware issues)
  * - Passes all other requests to the TanStack Start SSR handler
  */
 import { createServer } from "node:http";
@@ -12,25 +13,26 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const CLIENT_DIR = join(__dirname, "dist", "client");
 const SERVER_BUNDLE = join(__dirname, "dist", "server", "server.js");
+const API_BUNDLE = join(__dirname, "dist", "server", "api-entry.js");
 
 // MIME types for static assets
 const MIME = {
-  ".js":   "application/javascript",
-  ".mjs":  "application/javascript",
-  ".css":  "text/css",
-  ".html": "text/html; charset=utf-8",
-  ".json": "application/json",
-  ".png":  "image/png",
-  ".jpg":  "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".svg":  "image/svg+xml",
-  ".ico":  "image/x-icon",
-  ".webp": "image/webp",
-  ".woff": "font/woff",
-  ".woff2":"font/woff2",
-  ".ttf":  "font/ttf",
-  ".wav":  "audio/wav",
-  ".mp3":  "audio/mpeg",
+  ".js":    "application/javascript",
+  ".mjs":   "application/javascript",
+  ".css":   "text/css",
+  ".html":  "text/html; charset=utf-8",
+  ".json":  "application/json",
+  ".png":   "image/png",
+  ".jpg":   "image/jpeg",
+  ".jpeg":  "image/jpeg",
+  ".svg":   "image/svg+xml",
+  ".ico":   "image/x-icon",
+  ".webp":  "image/webp",
+  ".woff":  "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf":   "font/ttf",
+  ".wav":   "audio/wav",
+  ".mp3":   "audio/mpeg",
 };
 
 if (!existsSync(SERVER_BUNDLE)) {
@@ -39,6 +41,7 @@ if (!existsSync(SERVER_BUNDLE)) {
 }
 
 const { default: ssrHandler } = await import(SERVER_BUNDLE);
+const { handleGenerate, handleAsk } = await import(API_BUNDLE);
 
 // Convert Node.js IncomingMessage to a Web Fetch Request
 async function toRequest(req) {
@@ -53,7 +56,6 @@ async function toRequest(req) {
       })
     : undefined;
 
-  // Build headers (Node gives an object, not Headers)
   const headers = new Headers();
   for (const [k, v] of Object.entries(req.headers)) {
     if (Array.isArray(v)) v.forEach((vi) => headers.append(k, vi));
@@ -85,8 +87,6 @@ const server = createServer(async (req, res) => {
   const pathname = url.pathname;
 
   // ── Static file serving ────────────────────────────────────────────────
-  // Client assets live in dist/client/. Requests for /assets/*, plus common
-  // root-level files (favicon, manifest, etc.) are served directly.
   const isStatic =
     pathname.startsWith("/assets/") ||
     pathname === "/favicon.ico" ||
@@ -107,6 +107,39 @@ const server = createServer(async (req, res) => {
     }
     res.writeHead(404);
     res.end("Not found");
+    return;
+  }
+
+  // ── API routes (intercepted before SSR) ───────────────────────────────
+  if (pathname === "/api/health") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ status: "ok" }));
+    return;
+  }
+
+  if (pathname === "/api/admin/generate" && req.method === "POST") {
+    try {
+      const request = await toRequest(req);
+      const response = await handleGenerate(request);
+      await sendResponse(response, res);
+    } catch (err) {
+      console.error("[khabar] /api/admin/generate error:", err);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: String(err?.message ?? err) }));
+    }
+    return;
+  }
+
+  if (pathname === "/api/ask" && req.method === "POST") {
+    try {
+      const request = await toRequest(req);
+      const response = await handleAsk(request);
+      await sendResponse(response, res);
+    } catch (err) {
+      console.error("[khabar] /api/ask error:", err);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: String(err?.message ?? err) }));
+    }
     return;
   }
 
