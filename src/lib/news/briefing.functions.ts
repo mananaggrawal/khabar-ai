@@ -4,12 +4,12 @@
  */
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { getTodayBriefing, type DailyBriefing } from "./generator";
+import { getLatestBriefing, type DailyBriefing } from "./generator";
 
 export type { DailyBriefing as Briefing, BriefingTopic, BriefingSection } from "./generator";
 
 export const fetchBriefing = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async (): Promise<DailyBriefing | null> => {
-    return getTodayBriefing();
+    return getLatestBriefing();
   });
