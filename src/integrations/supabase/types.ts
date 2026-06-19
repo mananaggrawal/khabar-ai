@@ -53,6 +53,42 @@ export type Database = {
         }
         Relationships: []
       }
+      daily_briefings: {
+        Row: {
+          briefing_date: string
+          coverage_window_start: string | null
+          generated_at: string
+          home_country: string
+          id: string
+          sources: Json
+          topics: Json
+          topics_tiered: Json | null
+          total_topics: number | null
+        }
+        Insert: {
+          briefing_date: string
+          coverage_window_start?: string | null
+          generated_at?: string
+          home_country?: string
+          id?: string
+          sources?: Json
+          topics?: Json
+          topics_tiered?: Json | null
+          total_topics?: number | null
+        }
+        Update: {
+          briefing_date?: string
+          coverage_window_start?: string | null
+          generated_at?: string
+          home_country?: string
+          id?: string
+          sources?: Json
+          topics?: Json
+          topics_tiered?: Json | null
+          total_topics?: number | null
+        }
+        Relationships: []
+      }
       messages: {
         Row: {
           briefing_id: string
