@@ -63,7 +63,7 @@ async function callElevenLabsTTS(
 export const generateBriefingAudio = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator(z.object({ briefingId: z.string().uuid() }))
-  .handler(async ({ data, context }): Promise<{ audioUrl: string }> => {
+  .handler(async ({ data, context }: any): Promise<{ audioUrl: string }> => {
     const { supabase, userId } = context;
 
     const { data: briefing } = await supabase
