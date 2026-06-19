@@ -5,6 +5,7 @@
  */
 import { generateDailyBriefing, getTodayBriefing } from "@/lib/news/generator";
 import { googleTTS } from "@/lib/tts/google";
+import { loadBriefingFromStorage } from "@/lib/supabase-storage";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -33,6 +34,42 @@ export async function handleGenerate(request: Request): Promise<Response> {
     console.error("[admin] generation failed", err);
     return json({ error: err?.message ?? "Generation failed" }, 500);
   }
+}
+
+// GET /api/admin/status  — last N days' generation status
+export async function handleStatus(request: Request): Promise<Response> {
+  const adminKey = process.env.ADMIN_KEY;
+  if (!adminKey) return json({ error: "ADMIN_KEY not configured" }, 500);
+  if (request.headers.get("x-admin-key") !== adminKey)
+    return json({ error: "Unauthorized" }, 401);
+
+  const days = 7;
+  const results = [];
+  const now = new Date();
+
+  for (let i = 0; i < days; i++) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i);
+    const date = d.toISOString().slice(0, 10);
+    try {
+      const briefing: any = await loadBriefingFromStorage(date);
+      if (briefing) {
+        results.push({
+          date,
+          status: "generated",
+          sections: briefing.sections?.length ?? 0,
+          totalTopics: briefing.sections?.reduce((n: number, s: any) => n + (s.topics?.length ?? 0), 0) ?? 0,
+          generatedAt: briefing.generatedAt ?? null,
+        });
+      } else {
+        results.push({ date, status: "missing" });
+      }
+    } catch {
+      results.push({ date, status: "error" });
+    }
+  }
+
+  return json({ days: results });
 }
 
 // POST /api/ask  { question: string }
