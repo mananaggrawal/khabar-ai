@@ -88,7 +88,7 @@ function TopicCard({ topic: t, index: i }: { topic: BriefingTopic; index: number
   const query = buildQuery(t);
 
   return (
-    <div className="rounded-2xl border border-white/5 bg-white/[0.02]">
+    <div className="rounded-2xl border border-white/5 bg-white/[0.02] overflow-hidden">
       {/* Header row */}
       <div
         role="button" tabIndex={0}
@@ -137,7 +137,7 @@ function TopicCard({ topic: t, index: i }: { topic: BriefingTopic; index: number
                 <p className="mb-2 text-[10px] uppercase tracking-widest text-muted-foreground/40">
                   Go deeper
                 </p>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   {SERVICES.map((svc) => (
                     <a
                       key={svc.name}

@@ -341,17 +341,17 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
     }
   }
 
-  // Orb: idle→play, playing→listen, paused→RESUME (not listen), listening→stop
+  // Orb: idle→play, playing→pause, paused→resume, listening→stop
   const orbTap = useCallback(() => {
     switch (state) {
       case "idle":      play(); break;
-      case "playing":   startListening(); break;
-      case "paused":    resume(); break;         // ← fixed: resume, not listen
+      case "playing":   pause(); break;
+      case "paused":    resume(); break;
       case "listening": stopListening(); break;
       case "answering": break;
       case "error":     setError(null); setState("idle"); break;
     }
-  }, [state, play, resume, startListening, stopListening]);
+  }, [state, play, pause, resume, stopListening]);
 
   useEffect(() => () => {
     audioRef.current?.pause();
