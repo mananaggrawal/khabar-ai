@@ -539,7 +539,13 @@ function adminPage(supabaseUrl, supabaseKey) {
     try {
       const r = await fetch('/api/admin/status', { headers: { 'x-admin-key': AKEY } });
       const d = await r.json();
-      renderDays(d.days || []);
+      // Support both new { days:[] } and old { date, status, lastAvailable } shapes
+      let days = d.days;
+      if (!days) {
+        days = [{ date: d.date, status: d.status, sections: d.sections, totalTopics: d.totalTopics, generatedAt: d.generatedAt }];
+        if (d.lastAvailable) days.push({ ...d.lastAvailable, status: 'generated' });
+      }
+      renderDays(days || []);
     } catch {
       list.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 0;">Could not load status</div>';
     }
