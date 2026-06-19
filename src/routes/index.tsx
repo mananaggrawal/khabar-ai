@@ -526,6 +526,12 @@ function TopBar({ isDark, onToggleTheme }: { isDark: boolean; onToggleTheme: () 
         Khabar <span className="italic text-primary">AI</span>
       </Link>
       <div className="flex items-center gap-1">
+        <Link
+          to="/prototype"
+          className="mr-1 inline-flex items-center rounded-full bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground shadow hover:opacity-90"
+        >
+          View prototype
+        </Link>
         <button
           onClick={onToggleTheme}
           aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
