@@ -290,7 +290,20 @@ function adminPage(supabaseUrl, supabaseKey) {
     .btn-dl:hover { color: var(--fg); border-color: oklch(1 0 0 / 20%); }
     .divider { height: 1px; background: var(--divider); margin: 0; }
     .gen-sub { font-size: 13px; color: var(--muted); margin-bottom: 14px; }
-    .gen-result { margin-top: 12px; font-size: 13px; }
+
+    /* Log terminal */
+    .log-terminal {
+      display: none; margin-top: 14px;
+      background: oklch(0.10 0.02 295); border: 1px solid var(--border);
+      border-radius: 10px; padding: 12px 14px;
+      max-height: 260px; overflow-y: auto;
+      font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Code', monospace;
+      font-size: 12px; line-height: 1.65;
+    }
+    .log-terminal.visible { display: block; }
+    .log-line { color: oklch(0.62 0.025 295); word-break: break-word; }
+    .log-done { color: var(--primary); font-weight: 500; }
+    .log-error { color: oklch(0.65 0.22 25); }
 
     /* Buttons */
     .btn-primary {
@@ -374,7 +387,7 @@ function adminPage(supabaseUrl, supabaseKey) {
       <div class="group">
         <div class="gen-sub">Regenerate today's briefing if missing or outdated.</div>
         <button class="btn-primary" id="gen-btn" onclick="runGenerate()">Generate now</button>
-        <div id="gen-result" class="gen-result"></div>
+        <div id="gen-log" class="log-terminal"></div>
       </div>
     </div>
   </div>
@@ -526,27 +539,63 @@ function adminPage(supabaseUrl, supabaseKey) {
     } catch { alert('Download failed'); }
   }
 
+  function appendLog(type, msg) {
+    const el = document.getElementById('gen-log');
+    const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const line = document.createElement('div');
+    line.className = 'log-line' + (type !== 'log' ? ' log-' + type : '');
+    line.textContent = ts + '  ' + msg;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
+  }
+
   async function runGenerate() {
     const btn = document.getElementById('gen-btn');
-    const result = document.getElementById('gen-result');
+    const logEl = document.getElementById('gen-log');
+
     btn.disabled = true;
     btn.innerHTML = '<span class="spin">&#9696;</span> Generating…';
-    result.textContent = '';
+    logEl.innerHTML = '';
+    logEl.classList.add('visible');
+
     try {
       const r = await fetch('/api/admin/generate', { method: 'POST', headers: { 'x-admin-key': AKEY } });
-      const d = await r.json();
-      if (r.ok) {
-        result.style.color = 'var(--primary)';
-        result.textContent = 'Done — ' + d.sections + ' sections, ' + d.totalTopics + ' topics for ' + d.date;
-        loadStatus();
-      } else {
-        result.style.color = 'oklch(0.65 0.22 25)';
-        result.textContent = d.error || 'Generation failed';
+      if (!r.ok || !r.body) {
+        appendLog('error', 'Request failed: HTTP ' + r.status);
+        btn.disabled = false; btn.textContent = 'Retry';
+        return;
       }
-    } catch {
-      result.style.color = 'oklch(0.65 0.22 25)';
-      result.textContent = 'Network error';
+
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() || '';
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const ev = JSON.parse(line.slice(6));
+            if (ev.type === 'log') {
+              appendLog('log', ev.msg);
+            } else if (ev.type === 'done') {
+              appendLog('done', 'Done — ' + ev.sections + ' sections, ' + ev.totalTopics + ' topics');
+              loadStatus();
+            } else if (ev.type === 'error') {
+              appendLog('error', ev.msg);
+            }
+          } catch {}
+        }
+      }
+    } catch (err) {
+      appendLog('error', 'Network error: ' + (err.message || err));
     }
+
     btn.disabled = false;
     btn.textContent = 'Regenerate';
   }

@@ -14,26 +14,47 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
-// POST /api/admin/generate
+// POST /api/admin/generate — streams SSE log events during generation
 export async function handleGenerate(request: Request): Promise<Response> {
   const adminKey = process.env.ADMIN_KEY;
   if (!adminKey) return json({ error: "ADMIN_KEY not configured" }, 500);
   if (request.headers.get("x-admin-key") !== adminKey)
     return json({ error: "Unauthorized" }, 401);
 
-  try {
-    console.log("[admin] briefing generation triggered");
-    const briefing = await generateDailyBriefing();
-    return json({
-      ok: true,
-      date: briefing.date,
-      sections: briefing.sections.length,
-      totalTopics: briefing.sections.reduce((n, s) => n + s.topics.length, 0),
-    });
-  } catch (err: any) {
-    console.error("[admin] generation failed", err);
-    return json({ error: err?.message ?? "Generation failed" }, 500);
-  }
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = writable.getWriter();
+  const enc = new TextEncoder();
+
+  const send = (data: object) => {
+    try { writer.write(enc.encode(`data: ${JSON.stringify(data)}\n\n`)); } catch {}
+  };
+
+  // Fire-and-forget — don't await so we return the stream immediately
+  (async () => {
+    try {
+      console.log("[admin] generation triggered");
+      const briefing = await generateDailyBriefing((msg) => send({ type: "log", msg }));
+      send({
+        type: "done",
+        date: briefing.date,
+        sections: briefing.sections.length,
+        totalTopics: briefing.sections.reduce((n, s) => n + s.topics.length, 0),
+      });
+    } catch (err: any) {
+      console.error("[admin] generation failed", err);
+      send({ type: "error", msg: err?.message ?? "Generation failed" });
+    } finally {
+      try { writer.close(); } catch {}
+    }
+  })();
+
+  return new Response(readable, {
+    headers: {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      "x-accel-buffering": "no",  // disable nginx/render buffering
+    },
+  });
 }
 
 // GET /api/admin/status  — last 3 days' generation status

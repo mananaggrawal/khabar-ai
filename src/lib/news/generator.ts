@@ -408,37 +408,51 @@ export async function getLatestBriefing(): Promise<DailyBriefing | null> {
   } catch { return null; }
 }
 
+// ─── Logger type ─────────────────────────────────────────────────────────────
+
+export type Logger = (msg: string) => void;
+
 // ─── Main generator ───────────────────────────────────────────────────────────
 
-export async function generateDailyBriefing(): Promise<DailyBriefing> {
+export async function generateDailyBriefing(logger: Logger = () => {}): Promise<DailyBriefing> {
   const date = new Date().toISOString().slice(0, 10);
   const dateLabel = new Date().toLocaleDateString("en-US", {
     weekday: "long", month: "long", day: "numeric", year: "numeric",
   });
-  console.log(`[generator] starting single-pull briefing for ${date}`);
+
+  const log = (msg: string) => { console.log(`[generator] ${msg}`); logger(msg); };
+
+  log(`Starting briefing for ${date}`);
 
   // Step 1: Fetch all feeds
-  console.log(`[generator] fetching ${TOP_FEEDS.length} top feeds…`);
+  log(`Fetching ${TOP_FEEDS.length} RSS feeds…`);
   const { india, global } = await fetchAllFeeds();
-  console.log(`[generator] ${india.length} India headlines, ${global.length} global headlines`);
+  log(`Fetched ${india.length} India + ${global.length} global headlines`);
 
   // Step 2: Categorise in one Gemini call
-  console.log(`[generator] categorising into ${SECTIONS.length} sections…`);
+  log(`Categorising headlines into ${SECTIONS.length} sections…`);
   const picks = await geminiCategorise(india, global, dateLabel);
   for (const [cat, items] of picks) {
-    console.log(`[generator]   ${cat}: ${items.length} stories`);
+    log(`  ${cat}: ${items.length} ${items.length === 1 ? "story" : "stories"} selected`);
   }
 
   // Step 3: Research + assemble (parallel Gemini calls per section)
-  console.log(`[generator] researching ${picks.size} sections in parallel…`);
+  log(`Researching ${picks.size} sections in parallel (Gemini + web search)…`);
   const sectionEntries = [...picks.entries()];
   const sectionResults = await Promise.all(
     sectionEntries.map(([cat, items]) => {
       const cfg = SECTION_MAP.get(cat)!;
-      return processSection(cfg, items, dateLabel).catch((err) => {
-        console.error(`[generator] section ${cat} failed:`, err.message);
-        return null;
-      });
+      log(`  Research started: ${cfg.label}`);
+      return processSection(cfg, items, dateLabel)
+        .then((result) => {
+          log(`  Research done: ${cfg.label} — ${result.topics.length} topics`);
+          return result;
+        })
+        .catch((err) => {
+          log(`  Research failed: ${cat} — ${err.message}`);
+          console.error(`[generator] section ${cat} failed:`, err.message);
+          return null;
+        });
     }),
   );
 
@@ -457,13 +471,17 @@ export async function generateDailyBriefing(): Promise<DailyBriefing> {
 
   // Step 4: TTS — sequential to stay within rate limits
   const sections: BriefingSection[] = [];
+  let ttsIndex = 0;
   for (const data of dedupedResults) {
     if (!data) continue;
-    console.log(`[generator] TTS for ${data.category}…`);
+    ttsIndex++;
+    log(`TTS ${ttsIndex}/${dedupedResults.filter(Boolean).length}: ${data.label}…`);
     try {
       const audioUrl = await googleTTS(data.monologueScript, `briefing-${date}-${data.category}`);
       sections.push({ ...data, audioUrl });
+      log(`  TTS done: ${data.label}`);
     } catch (err: any) {
+      log(`  TTS failed: ${data.label} — ${err.message}`);
       console.error(`[generator] TTS failed for ${data.category}:`, err.message);
       sections.push({ ...data, audioUrl: "" });
     }
@@ -476,7 +494,8 @@ export async function generateDailyBriefing(): Promise<DailyBriefing> {
     sections,
   };
 
+  log(`Saving briefing to storage…`);
   await saveBriefing(briefing);
-  console.log(`[generator] done — ${sections.length} sections, ${date}`);
+  log(`Done — ${sections.length} sections, ${sections.reduce((n, s) => n + s.topics.length, 0)} topics`);
   return briefing;
 }
