@@ -580,6 +580,11 @@ function adminPage(supabaseUrl, supabaseKey) {
 
     try {
       const r = await fetch('/api/admin/generate', { method: 'POST', headers: { 'x-admin-key': AKEY } });
+      if (r.status === 409) {
+        appendLog('log', 'Generation already in progress — check back in a few minutes.');
+        btn.disabled = false; btn.textContent = 'Regenerate';
+        return;
+      }
       if (!r.ok || !r.body) {
         appendLog('error', 'Request failed: HTTP ' + r.status);
         btn.disabled = false; btn.textContent = 'Retry';

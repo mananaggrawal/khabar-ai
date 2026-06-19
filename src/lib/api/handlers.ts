@@ -14,12 +14,16 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
+let generating = false;
+
 // POST /api/admin/generate — streams SSE log events during generation
 export async function handleGenerate(request: Request): Promise<Response> {
   const adminKey = process.env.ADMIN_KEY;
   if (!adminKey) return json({ error: "ADMIN_KEY not configured" }, 500);
   if (request.headers.get("x-admin-key") !== adminKey)
     return json({ error: "Unauthorized" }, 401);
+
+  if (generating) return json({ error: "Already generating" }, 409);
 
   const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
   const writer = writable.getWriter();
@@ -29,6 +33,7 @@ export async function handleGenerate(request: Request): Promise<Response> {
     try { writer.write(enc.encode(`data: ${JSON.stringify(data)}\n\n`)); } catch {}
   };
 
+  generating = true;
   // Fire-and-forget — don't await so we return the stream immediately
   (async () => {
     try {
@@ -44,6 +49,7 @@ export async function handleGenerate(request: Request): Promise<Response> {
       console.error("[admin] generation failed", err);
       send({ type: "error", msg: err?.message ?? "Generation failed" });
     } finally {
+      generating = false;
       try { writer.close(); } catch {}
     }
   })();
@@ -64,10 +70,12 @@ export async function handleCron(request: Request): Promise<Response> {
   if (request.headers.get("x-admin-key") !== adminKey)
     return json({ error: "Unauthorized" }, 401);
 
-  // Start generation detached — do NOT await
-  generateDailyBriefing().catch((err) =>
-    console.error("[cron] generation failed:", err?.message ?? err),
-  );
+  if (generating) return json({ ok: false, message: "Already generating" });
+
+  generating = true;
+  generateDailyBriefing()
+    .catch((err) => console.error("[cron] generation failed:", err?.message ?? err))
+    .finally(() => { generating = false; });
 
   return json({ ok: true, message: "Generation started" });
 }
