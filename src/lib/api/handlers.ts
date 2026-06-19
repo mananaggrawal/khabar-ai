@@ -36,28 +36,63 @@ export async function handleGenerate(request: Request): Promise<Response> {
   }
 }
 
-// GET /api/admin/status  — today's generation status
+// GET /api/admin/status  — last 3 days' generation status
 export async function handleStatus(request: Request): Promise<Response> {
   const adminKey = process.env.ADMIN_KEY;
   if (!adminKey) return json({ error: "ADMIN_KEY not configured" }, 500);
   if (request.headers.get("x-admin-key") !== adminKey)
     return json({ error: "Unauthorized" }, 401);
 
-  const today = new Date().toISOString().slice(0, 10);
-  try {
-    const briefing: any = await loadBriefingFromStorage(today);
-    if (briefing) {
-      return json({
-        date: today,
-        status: "generated",
-        sections: briefing.sections?.length ?? 0,
-        totalTopics: briefing.sections?.reduce((n: number, s: any) => n + (s.topics?.length ?? 0), 0) ?? 0,
-        generatedAt: briefing.generatedAt ?? null,
-      });
+  const days: object[] = [];
+  for (let i = 0; i < 3; i++) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const date = d.toISOString().slice(0, 10);
+    try {
+      const briefing: any = await loadBriefingFromStorage(date);
+      if (briefing) {
+        days.push({
+          date,
+          status: "generated",
+          sections: briefing.sections?.length ?? 0,
+          totalTopics: briefing.sections?.reduce((n: number, s: any) => n + (s.topics?.length ?? 0), 0) ?? 0,
+          generatedAt: briefing.generatedAt ?? null,
+        });
+      } else {
+        days.push({ date, status: "missing" });
+      }
+    } catch {
+      days.push({ date, status: "error" });
     }
-    return json({ date: today, status: "missing" });
-  } catch {
-    return json({ date: today, status: "error" }, 500);
+  }
+
+  return json({ days });
+}
+
+// GET /api/admin/download?date=YYYY-MM-DD — proxy briefing JSON as a file download
+export async function handleDownload(request: Request): Promise<Response> {
+  const adminKey = process.env.ADMIN_KEY;
+  if (!adminKey) return json({ error: "ADMIN_KEY not configured" }, 500);
+  if (request.headers.get("x-admin-key") !== adminKey)
+    return json({ error: "Unauthorized" }, 401);
+
+  const url = new URL(request.url);
+  const date = url.searchParams.get("date") ?? "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date))
+    return json({ error: "Invalid date — use YYYY-MM-DD" }, 400);
+
+  try {
+    const briefing = await loadBriefingFromStorage(date);
+    if (!briefing) return json({ error: "Briefing not found for " + date }, 404);
+    return new Response(JSON.stringify(briefing, null, 2), {
+      status: 200,
+      headers: {
+        "content-type": "application/json",
+        "content-disposition": `attachment; filename="khabar-${date}.json"`,
+      },
+    });
+  } catch (err: any) {
+    return json({ error: err?.message ?? "Download failed" }, 500);
   }
 }
 

@@ -41,7 +41,7 @@ if (!existsSync(SERVER_BUNDLE)) {
 }
 
 const { default: ssrHandler } = await import(SERVER_BUNDLE);
-const { handleGenerate, handleAsk, handleStatus } = await import(API_BUNDLE);
+const { handleGenerate, handleAsk, handleStatus, handleDownload } = await import(API_BUNDLE);
 
 // Convert Node.js IncomingMessage to a Web Fetch Request
 async function toRequest(req) {
@@ -148,6 +148,18 @@ const server = createServer(async (req, res) => {
       await sendResponse(response, res);
     } catch (err) {
       console.error("[khabar] /api/admin/generate error:", err);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: String(err?.message ?? err) }));
+    }
+    return;
+  }
+
+  if (pathname === "/api/admin/download" && req.method === "GET") {
+    try {
+      const request = await toRequest(req);
+      const response = await handleDownload(request);
+      await sendResponse(response, res);
+    } catch (err) {
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: String(err?.message ?? err) }));
     }
@@ -262,9 +274,21 @@ function adminPage(supabaseUrl, supabaseKey) {
     .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
     .dot-ok { background: var(--primary); }
     .dot-warn { background: oklch(0.75 0.15 70); }
-    .status-main { font-size: 15px; font-weight: 500; }
-    .status-meta { font-size: 13px; color: var(--muted); padding-left: 17px; margin-top: 2px; }
-    .divider { height: 1px; background: var(--divider); margin: 18px 0; }
+    .dot-err { background: oklch(0.65 0.22 25); }
+    .day-row { padding: 14px 0; }
+    .day-row:first-child { padding-top: 0; }
+    .day-row:last-child { padding-bottom: 0; }
+    .day-date { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+    .day-status { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .day-status-left { display: flex; align-items: center; gap: 8px; }
+    .status-main { font-size: 14px; font-weight: 500; }
+    .status-meta { font-size: 12px; color: var(--muted); }
+    .btn-dl { background: none; border: 1px solid var(--border); border-radius: 999px;
+              font-family: 'Geist', ui-sans-serif, system-ui, sans-serif;
+              font-size: 12px; color: var(--muted); cursor: pointer; padding: 4px 12px;
+              transition: color 0.15s, border-color 0.15s; white-space: nowrap; }
+    .btn-dl:hover { color: var(--fg); border-color: oklch(1 0 0 / 20%); }
+    .divider { height: 1px; background: var(--divider); margin: 0; }
     .gen-sub { font-size: 13px; color: var(--muted); margin-bottom: 14px; }
     .gen-result { margin-top: 12px; font-size: 13px; }
 
@@ -343,15 +367,12 @@ function adminPage(supabaseUrl, supabaseKey) {
       </div>
     </div>
     <div class="content">
+      <div class="group" style="padding:0 20px;">
+        <div id="days-list" style="padding:20px 0;"></div>
+      </div>
+      <div style="height:16px;"></div>
       <div class="group">
-        <div class="date-label" id="today-label"></div>
-        <div id="status-row" class="status-row">
-          <div class="dot dot-warn"></div>
-          <div class="status-main" style="color:var(--muted)">Checking…</div>
-        </div>
-        <div id="status-meta" class="status-meta" style="display:none"></div>
-        <div class="divider"></div>
-        <div class="gen-sub">Regenerate if today's briefing is missing or outdated.</div>
+        <div class="gen-sub">Regenerate today's briefing if missing or outdated.</div>
         <button class="btn-primary" id="gen-btn" onclick="runGenerate()">Generate now</button>
         <div id="gen-result" class="gen-result"></div>
       </div>
@@ -369,10 +390,7 @@ function adminPage(supabaseUrl, supabaseKey) {
 
   const sb = supabase.createClient(SB_URL, SB_KEY);
 
-  // Set today label
   const today = new Date().toISOString().slice(0, 10);
-  const todayFmt = new Date(today + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
-  document.getElementById('today-label').textContent = 'Today — ' + todayFmt;
 
   async function init() {
     const { data: { session } } = await sb.auth.getSession();
@@ -413,23 +431,99 @@ function adminPage(supabaseUrl, supabaseKey) {
 
   async function signOut() { await sb.auth.signOut(); show('s-login'); }
 
+  function dayLabel(date, i) {
+    if (i === 0) return 'Today';
+    if (i === 1) return 'Yesterday';
+    return new Date(date + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+  }
+
+  function renderDays(days) {
+    const list = document.getElementById('days-list');
+    list.innerHTML = '';
+    days.forEach((day, i) => {
+      const row = document.createElement('div');
+      row.className = 'day-row';
+
+      const dateEl = document.createElement('div');
+      dateEl.className = 'day-date';
+      dateEl.textContent = dayLabel(day.date, i) + ' — ' + day.date;
+      row.appendChild(dateEl);
+
+      const statusRow = document.createElement('div');
+      statusRow.className = 'day-status';
+
+      const left = document.createElement('div');
+      left.className = 'day-status-left';
+
+      const dot = document.createElement('div');
+      const label = document.createElement('div');
+      label.className = 'status-main';
+
+      if (day.status === 'generated') {
+        dot.className = 'dot dot-ok';
+        label.textContent = 'Generated';
+        left.appendChild(dot);
+        left.appendChild(label);
+        const meta = document.createElement('div');
+        meta.className = 'status-meta';
+        meta.textContent = day.sections + ' sections · ' + day.totalTopics + ' topics'
+          + (day.generatedAt ? ' · ' + new Date(day.generatedAt).toLocaleTimeString() : '');
+        left.appendChild(meta);
+
+        const dlBtn = document.createElement('button');
+        dlBtn.className = 'btn-dl';
+        dlBtn.textContent = 'Download';
+        dlBtn.onclick = () => downloadBriefing(day.date);
+        statusRow.appendChild(left);
+        statusRow.appendChild(dlBtn);
+      } else {
+        dot.className = day.status === 'error' ? 'dot dot-err' : 'dot dot-warn';
+        label.textContent = day.status === 'error' ? 'Error' : 'Not generated';
+        label.style.color = day.status === 'error' ? 'oklch(0.65 0.22 25)' : 'oklch(0.75 0.15 70)';
+        left.appendChild(dot);
+        left.appendChild(label);
+        statusRow.appendChild(left);
+      }
+
+      row.appendChild(statusRow);
+      list.appendChild(row);
+
+      if (i < days.length - 1) {
+        const div = document.createElement('div');
+        div.className = 'divider';
+        div.style.margin = '0 -20px';
+        list.appendChild(div);
+      }
+    });
+
+    const todayStatus = days[0]?.status;
+    document.getElementById('gen-btn').textContent = todayStatus === 'generated' ? 'Regenerate' : 'Generate now';
+  }
+
   async function loadStatus() {
-    const row = document.getElementById('status-row');
-    const meta = document.getElementById('status-meta');
+    const list = document.getElementById('days-list');
+    list.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 0;">Checking…</div>';
     try {
       const r = await fetch('/api/admin/status', { headers: { 'x-admin-key': AKEY } });
       const d = await r.json();
-      if (d.status === 'generated') {
-        row.innerHTML = '<div class="dot dot-ok"></div><div class="status-main">Generated</div>';
-        meta.textContent = d.sections + ' sections · ' + d.totalTopics + ' topics' + (d.generatedAt ? ' · ' + new Date(d.generatedAt).toLocaleTimeString() : '');
-        meta.style.display = 'block';
-        document.getElementById('gen-btn').textContent = 'Regenerate';
-      } else {
-        row.innerHTML = '<div class="dot dot-warn"></div><div class="status-main" style="color:oklch(0.75 0.15 70)">Not generated</div>';
-        meta.style.display = 'none';
-        document.getElementById('gen-btn').textContent = 'Generate now';
-      }
-    } catch { row.innerHTML = '<div class="dot dot-warn"></div><div class="status-main" style="color:var(--muted)">Could not check status</div>'; }
+      renderDays(d.days || []);
+    } catch {
+      list.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 0;">Could not load status</div>';
+    }
+  }
+
+  async function downloadBriefing(date) {
+    try {
+      const r = await fetch('/api/admin/download?date=' + date, { headers: { 'x-admin-key': AKEY } });
+      if (!r.ok) { alert('Download failed'); return; }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'khabar-' + date + '.json';
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch { alert('Download failed'); }
   }
 
   async function runGenerate() {
