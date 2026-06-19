@@ -142,6 +142,7 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
 
       const audio = attachAudio(section.audioUrl, startAt, onEnded);
       audio.play().catch((e: any) => {
+        if (e?.name === "AbortError") return; // interrupted by pause — not a real error
         setState("error");
         setError(e?.message ?? "Playback blocked — tap again");
       });

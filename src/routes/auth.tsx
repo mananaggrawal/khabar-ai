@@ -71,9 +71,6 @@ function AuthPage() {
           {busy ? "Connecting…" : "Continue with Google"}
         </Button>
 
-        <p className="text-center text-xs text-muted-foreground/70">
-          By continuing you agree to receive a daily voice briefing.
-        </p>
       </div>
     </div>
   );

@@ -18,11 +18,11 @@ import type { BriefingSection } from "@/lib/news/generator";
 const LOCAL_MODE = import.meta.env.VITE_LOCAL_MODE === "true";
 
 function useTheme() {
-  const [isDark, setIsDark] = useState(true);
+  const [isDark, setIsDark] = useState(false); // light is default
 
   useEffect(() => {
-    const saved = typeof window !== "undefined" ? localStorage.getItem("khabar-theme") : null;
-    const dark = saved !== "light";
+    const saved = localStorage.getItem("khabar-theme");
+    const dark = saved === "dark"; // dark only if explicitly chosen
     setIsDark(dark);
     document.documentElement.classList.toggle("light", !dark);
   }, []);
