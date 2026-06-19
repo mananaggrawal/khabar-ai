@@ -12,7 +12,7 @@ export const lovable = {
       opts?: SignInOptions,
     ) => {
       const { error } = await supabase.auth.signInWithOAuth({
-        provider,
+        provider: provider as "google" | "apple",
         options: {
           redirectTo: opts?.redirect_uri ?? window.location.origin,
         },

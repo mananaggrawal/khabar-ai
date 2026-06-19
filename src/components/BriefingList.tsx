@@ -49,7 +49,7 @@ function GoogleLogo({ className }: { className?: string }) {
 
 const SERVICES: {
   name: string;
-  Logo: (props: { className?: string }) => JSX.Element;
+  Logo: (props: { className?: string }) => React.ReactElement;
   color: string;
   url: (q: string) => string;
 }[] = [

@@ -11,7 +11,7 @@ export const saveMessage = createServerFn({ method: "POST" })
       content: z.string().min(1).max(8000),
     }),
   )
-  .handler(async ({ data, context }) => {
+  .handler(async ({ data, context }: any) => {
     const { error } = await context.supabase.from("messages").insert({
       briefing_id: data.briefingId,
       user_id: context.userId,
@@ -36,8 +36,8 @@ export const listBriefings = createServerFn({ method: "GET" })
       return all.map((b) => ({
         id: b.id,
         generated_at: b.generatedAt,
-        topics: b.topics,
-      }));
+        topics: b.topics as any,
+      })) as any;
     } catch {
       return [];
     }
@@ -54,7 +54,7 @@ const DEFAULT_PREFS = {
 
 export const getPreferences = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
-  .handler(async ({ context }) => {
+  .handler(async ({ context }: any) => {
     const { data, error } = await context.supabase
       .from("preferences")
       .select("categories, voice_id, home_country")
@@ -78,7 +78,7 @@ export const savePreferences = createServerFn({ method: "POST" })
       home_country: z.enum(["in", "us", "uk", "global"]).optional(),
     }),
   )
-  .handler(async ({ data, context }) => {
+  .handler(async ({ data, context }: any) => {
     // Read existing to preserve unchanged fields
     const { data: existing } = await context.supabase
       .from("preferences")
