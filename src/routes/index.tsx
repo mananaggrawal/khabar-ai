@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from "motion/react";
 import {
   Settings, AlertTriangle,
   SkipBack, SkipForward, Pause, Play, Square, ChevronDown,
-  RotateCcw, RotateCw,
+  RotateCcw, RotateCw, Sun, Moon,
 } from "lucide-react";
 
 import { VoiceOrb } from "@/components/VoiceOrb";
@@ -16,6 +16,28 @@ import { useMonologue } from "@/hooks/useMonologue";
 import type { BriefingSection } from "@/lib/news/generator";
 
 const LOCAL_MODE = import.meta.env.VITE_LOCAL_MODE === "true";
+
+function useTheme() {
+  const [isDark, setIsDark] = useState(true);
+
+  useEffect(() => {
+    const saved = typeof window !== "undefined" ? localStorage.getItem("khabar-theme") : null;
+    const dark = saved !== "light";
+    setIsDark(dark);
+    document.documentElement.classList.toggle("light", !dark);
+  }, []);
+
+  const toggle = () => {
+    setIsDark((prev) => {
+      const next = !prev;
+      document.documentElement.classList.toggle("light", !next);
+      localStorage.setItem("khabar-theme", next ? "dark" : "light");
+      return next;
+    });
+  };
+
+  return { isDark, toggle };
+}
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -68,10 +90,7 @@ function FullScreenCanvas({ children }: { children: React.ReactNode }) {
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0"
-        style={{
-          background:
-            "radial-gradient(ellipse at 50% 30%, oklch(0.22 0.04 290 / 0.7), transparent 60%), radial-gradient(ellipse at 80% 80%, oklch(0.25 0.08 30 / 0.35), transparent 65%)",
-        }}
+        style={{ background: "var(--bg-gradient)" }}
       />
       <div className="relative z-10 mx-auto flex min-h-screen w-full max-w-4xl flex-col">
         {children}
@@ -81,6 +100,7 @@ function FullScreenCanvas({ children }: { children: React.ReactNode }) {
 }
 
 function BriefingSurface() {
+  const { isDark, toggle: toggleTheme } = useTheme();
   const fetchFn = useServerFn(fetchBriefing);
   const briefingQuery = useQuery({
     queryKey: ["briefing"],
@@ -159,7 +179,7 @@ function BriefingSurface() {
 
   return (
     <>
-      <TopBar />
+      <TopBar isDark={isDark} onToggleTheme={toggleTheme} />
       <main className="flex flex-1 flex-col items-center px-4 pb-10">
 
         {/* Date + stale badge */}
@@ -496,7 +516,7 @@ function WaveformIcon() {
 
 // ── Top bar ───────────────────────────────────────────────────────────────────
 
-function TopBar() {
+function TopBar({ isDark, onToggleTheme }: { isDark: boolean; onToggleTheme: () => void }) {
   return (
     <header
       className="flex items-center justify-between px-6 pt-6"
@@ -506,7 +526,14 @@ function TopBar() {
         Khabar <span className="italic text-primary">AI</span>
       </Link>
       <div className="flex items-center gap-1">
-        <Link to="/settings" className="inline-flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-white/5 hover:text-foreground" aria-label="Settings">
+        <button
+          onClick={onToggleTheme}
+          aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+          className="inline-flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
+        >
+          {isDark ? <Sun className="size-4" /> : <Moon className="size-4" />}
+        </button>
+        <Link to="/settings" className="inline-flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5" aria-label="Settings">
           <Settings className="size-4" />
         </Link>
       </div>

@@ -58,15 +58,38 @@ function getKey() {
 }
 
 function parseGeminiJson(raw: string): any {
-  let text = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
-  text = text.replace(/,(\s*[}\]])/g, "$1");
-  try {
-    return JSON.parse(text);
-  } catch {
-    const match = text.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
-    if (match) return JSON.parse(match[1].replace(/,(\s*[}\]])/g, "$1"));
-    throw new Error(`Failed to parse Gemini JSON: ${text.slice(0, 200)}`);
+  let text = raw.trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "")
+    .trim();
+
+  // Strip trailing commas before } or ]
+  const stripTrailing = (s: string) => s.replace(/,(\s*[}\]])/g, "$1");
+
+  // Convert JS-style single-quoted keys/values to double-quoted JSON
+  const fixQuotes = (s: string) =>
+    s.replace(/(['"])?([a-zA-Z_$][a-zA-Z0-9_$]*)(['"])?\s*:/g, '"$2":')
+     .replace(/:\s*'([^'\\]*(\\.[^'\\]*)*)'/g, ': "$1"');
+
+  const attempts = [
+    () => JSON.parse(stripTrailing(text)),
+    () => JSON.parse(stripTrailing(fixQuotes(text))),
+    () => {
+      const match = text.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+      if (!match) throw new Error("no JSON structure found");
+      return JSON.parse(stripTrailing(match[1]));
+    },
+    () => {
+      const match = text.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+      if (!match) throw new Error("no JSON structure found");
+      return JSON.parse(stripTrailing(fixQuotes(match[1])));
+    },
+  ];
+
+  for (const attempt of attempts) {
+    try { return attempt(); } catch { /* try next */ }
   }
+  throw new Error(`Failed to parse Gemini JSON: ${text.slice(0, 200)}`);
 }
 
 async function geminiJson(system: string, user: string): Promise<any> {
