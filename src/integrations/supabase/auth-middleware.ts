@@ -15,9 +15,9 @@ export const requireSupabaseAuth = createMiddleware({ type: 'function' }).server
         context: {
           supabase: createLocalClient() as any,
           userId: LOCAL_USER_ID,
-          claims: { sub: LOCAL_USER_ID },
+          claims: { sub: LOCAL_USER_ID } as any,
         },
-      });
+      }) as any;
     }
 
     const SUPABASE_URL = process.env.SUPABASE_URL;
