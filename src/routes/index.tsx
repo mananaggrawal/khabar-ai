@@ -163,7 +163,7 @@ function BriefingSurface() {
   const totalTopics = briefing?.sections?.reduce((n, s) => n + s.topics.length, 0) ?? 0;
 
   const orbState = (() => {
-    if (briefingQuery.isLoading) return "connecting" as const;
+    if (briefingQuery.isLoading) return "idle" as const;
     if (mono.state === "playing") return "speaking" as const;
     if (mono.state === "listening" || mono.state === "answering") return "listening" as const;
     if (mono.state === "paused") return "listening" as const;

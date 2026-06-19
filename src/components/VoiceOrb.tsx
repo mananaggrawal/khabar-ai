@@ -184,13 +184,6 @@ export function VoiceOrb({
         />
       )}
 
-      {/* Connecting dots ring */}
-      {state === "connecting" && (
-        <span
-          className="pointer-events-none absolute inset-[-3px] rounded-full border border-primary/30"
-          style={{ animation: "orb-spin 2.2s linear infinite" }}
-        />
-      )}
     </button>
   );
 }
