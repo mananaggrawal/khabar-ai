@@ -1,5 +1,13 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+
+function useApplyTheme() {
+  useEffect(() => {
+    const saved = localStorage.getItem("khabar-theme");
+    const dark = saved === "dark";
+    document.documentElement.classList.toggle("light", !dark);
+  }, []);
+}
 import { supabase } from "@/integrations/supabase/client";
 import { lovable } from "@/integrations/lovable";
 import { Button } from "@/components/ui/button";
@@ -19,6 +27,7 @@ export const Route = createFileRoute("/auth")({
 function AuthPage() {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  useApplyTheme();
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -46,10 +55,7 @@ function AuthPage() {
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0"
-        style={{
-          background:
-            "radial-gradient(ellipse at 50% 20%, oklch(0.4 0.18 300 / 0.55), transparent 60%), radial-gradient(ellipse at 80% 90%, oklch(0.35 0.2 320 / 0.4), transparent 65%)",
-        }}
+        style={{ background: "var(--bg-gradient)" }}
       />
       <div className="relative z-10 mx-auto flex min-h-screen w-full max-w-md flex-col items-center justify-center gap-10 px-6">
         <VoiceOrb state="idle" size={160} />
