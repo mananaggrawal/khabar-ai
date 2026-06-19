@@ -57,6 +57,21 @@ export async function handleGenerate(request: Request): Promise<Response> {
   });
 }
 
+// POST /api/admin/cron — fire-and-forget trigger for cron jobs (returns immediately)
+export async function handleCron(request: Request): Promise<Response> {
+  const adminKey = process.env.ADMIN_KEY;
+  if (!adminKey) return json({ error: "ADMIN_KEY not configured" }, 500);
+  if (request.headers.get("x-admin-key") !== adminKey)
+    return json({ error: "Unauthorized" }, 401);
+
+  // Start generation detached — do NOT await
+  generateDailyBriefing().catch((err) =>
+    console.error("[cron] generation failed:", err?.message ?? err),
+  );
+
+  return json({ ok: true, message: "Generation started" });
+}
+
 // GET /api/admin/status  — last 3 days' generation status
 export async function handleStatus(request: Request): Promise<Response> {
   const adminKey = process.env.ADMIN_KEY;

@@ -41,7 +41,7 @@ if (!existsSync(SERVER_BUNDLE)) {
 }
 
 const { default: ssrHandler } = await import(SERVER_BUNDLE);
-const { handleGenerate, handleAsk, handleStatus, handleDownload } = await import(API_BUNDLE);
+const { handleGenerate, handleAsk, handleStatus, handleDownload, handleCron } = await import(API_BUNDLE);
 
 // Convert Node.js IncomingMessage to a Web Fetch Request
 async function toRequest(req) {
@@ -133,6 +133,18 @@ const server = createServer(async (req, res) => {
     try {
       const request = await toRequest(req);
       const response = await handleStatus(request);
+      await sendResponse(response, res);
+    } catch (err) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: String(err?.message ?? err) }));
+    }
+    return;
+  }
+
+  if (pathname === "/api/admin/cron" && req.method === "POST") {
+    try {
+      const request = await toRequest(req);
+      const response = await handleCron(request);
       await sendResponse(response, res);
     } catch (err) {
       res.writeHead(500, { "Content-Type": "application/json" });
