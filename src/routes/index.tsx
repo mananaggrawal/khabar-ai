@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { motion, AnimatePresence } from "motion/react";
@@ -128,27 +128,6 @@ function BriefingSurface() {
     return () => document.removeEventListener("keydown", onKey);
   }, [mono.state, mono.seekForward, mono.seekBackward, mono.pause, mono.resume]);
 
-  // Auto-play on first user gesture — satisfies browser autoplay policy.
-  // The moment the user touches/clicks anywhere after the briefing loads, playback starts.
-  const autoPlayedRef = useRef(false);
-  useEffect(() => {
-    if (autoPlayedRef.current) return;
-    if (!briefing?.sections?.some((s) => s.audioUrl)) return;
-
-    const onGesture = () => {
-      if (autoPlayedRef.current) return;
-      if (mono.state !== "idle") return;
-      autoPlayedRef.current = true;
-      mono.play();
-    };
-
-    document.addEventListener("touchstart", onGesture, { once: true, passive: true });
-    document.addEventListener("click",      onGesture, { once: true });
-    return () => {
-      document.removeEventListener("touchstart", onGesture);
-      document.removeEventListener("click",      onGesture);
-    };
-  }, [briefing, mono.state, mono.play]);
 
   const briefingDate = briefing?.date ?? "";
   const isToday = briefingDate === new Date().toISOString().slice(0, 10);
