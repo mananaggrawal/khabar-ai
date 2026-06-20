@@ -160,7 +160,7 @@ function TopicCard({ topic: t, index: i, isActive, playingState = "idle", progre
           <button
             onClick={handlePlayPause}
             aria-label={isPlaying ? "Pause" : "Play"}
-            className={`flex w-14 shrink-0 items-center justify-center outline-none transition-colors ${
+            className={`flex w-14 shrink-0 items-center justify-start pl-4 outline-none transition-colors ${
               isActive ? "text-primary" : "text-muted-foreground hover:text-foreground"
             }`}
           >

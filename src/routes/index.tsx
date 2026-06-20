@@ -13,7 +13,7 @@ import { VoiceOrb } from "@/components/VoiceOrb";
 import { BriefingList } from "@/components/BriefingList";
 import { fetchBriefing } from "@/lib/news/briefing.functions";
 import { useMonologue } from "@/hooks/useMonologue";
-import type { BriefingSection } from "@/lib/news/generator";
+import type { BriefingSection, BriefingTopic } from "@/lib/news/generator";
 
 const LOCAL_MODE = import.meta.env.VITE_LOCAL_MODE === "true";
 
@@ -158,7 +158,7 @@ function BriefingSurface() {
   return (
     <>
       <TopBar isDark={isDark} onToggleTheme={toggleTheme} />
-      <main className="flex flex-1 flex-col items-center px-4 pb-10">
+      <main className={`flex flex-1 flex-col items-center px-4 transition-[padding] duration-300 ${(mono.state === "playing" || mono.state === "paused") ? "pb-44" : "pb-10"}`}>
 
         {/* Date + stale badge */}
         <div className="mt-2 flex flex-col items-center gap-1">
@@ -204,79 +204,12 @@ function BriefingSurface() {
           )}
         </div>
 
-        {/* ── Music player controls ─────────────────────────────────────── */}
-        <div className="mt-4 w-full max-w-sm space-y-3">
-
-          {/* Progress bar — shown when playing or paused */}
-          {(mono.state === "playing" || mono.state === "paused") && (
-            <ProgressBar progress={mono.progress} duration={mono.duration} onSeek={mono.seek} />
-          )}
-
-          {/* Transport row */}
-          {(mono.state === "playing" || mono.state === "paused") && (
-            <div className="flex items-center justify-center gap-2">
-              {/* Prev section */}
-              <button
-                onClick={mono.prevSection}
-                disabled={!hasPrev}
-                aria-label="Previous section"
-                className="flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-white/[0.06] hover:text-foreground disabled:opacity-30"
-              >
-                <SkipBack className="size-4" />
-              </button>
-
-              {/* –10s */}
-              <button
-                onClick={() => mono.seekBackward(10)}
-                aria-label="Rewind 10 seconds"
-                className="relative flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-white/[0.06] hover:text-foreground"
-              >
-                <RotateCcw className="size-4" />
-                <span className="absolute bottom-0.5 text-[8px] font-semibold leading-none">10</span>
-              </button>
-
-              {/* Play / Pause (large) */}
-              <button
-                onClick={mono.state === "playing" ? mono.pause : mono.resume}
-                aria-label={mono.state === "playing" ? "Pause" : "Resume"}
-                className="flex size-14 items-center justify-center rounded-full bg-white/[0.08] transition-colors hover:bg-white/[0.14]"
-              >
-                {mono.state === "playing"
-                  ? <Pause className="size-6" />
-                  : <Play className="size-6 ml-0.5" />}
-              </button>
-
-              {/* +10s */}
-              <button
-                onClick={() => mono.seekForward(10)}
-                aria-label="Forward 10 seconds"
-                className="relative flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-white/[0.06] hover:text-foreground"
-              >
-                <RotateCw className="size-4" />
-                <span className="absolute bottom-0.5 text-[8px] font-semibold leading-none">10</span>
-              </button>
-
-              {/* Next section */}
-              <button
-                onClick={mono.nextSection}
-                disabled={!hasNext}
-                aria-label="Next section"
-                className="flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-white/[0.06] hover:text-foreground disabled:opacity-30"
-              >
-                <SkipForward className="size-4" />
-              </button>
-
-            </div>
-          )}
-
-
-          {/* Idle — hint to tap orb */}
-          {mono.state === "idle" && !briefingQuery.isLoading && hasAudio && (
-            <p className="text-center text-sm text-muted-foreground">
-              Tap the orb to start listening
-            </p>
-          )}
-        </div>
+        {/* Idle hint */}
+        {mono.state === "idle" && !briefingQuery.isLoading && hasAudio && (
+          <p className="mt-3 text-center text-sm text-muted-foreground">
+            Tap the orb to start listening
+          </p>
+        )}
 
         {/* ── Section playlist ──────────────────────────────────────────── */}
         {hasSections && (
@@ -299,6 +232,25 @@ function BriefingSurface() {
         )}
 
       </main>
+
+      <PlayerCard
+        state={mono.state === "playing" || mono.state === "paused" ? mono.state : "idle"}
+        nowPlayingTopic={nowPlayingTopic}
+        nowPlayingSection={nowPlayingSection}
+        progress={mono.progress}
+        duration={mono.duration}
+        hasPrev={hasPrev}
+        hasNext={hasNext}
+        currentTopicIdx={mono.currentTopicIdx}
+        totalTopics={mono.topicsWithAudio.length}
+        onPause={mono.pause}
+        onResume={mono.resume}
+        onPrev={mono.prevSection}
+        onNext={mono.nextSection}
+        onSeek={mono.seek}
+        onSeekBackward={mono.seekBackward}
+        onSeekForward={mono.seekForward}
+      />
     </>
   );
 }
@@ -426,7 +378,7 @@ function SectionRow({
             exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }}
             className="overflow-hidden"
           >
-            <div className="px-4 pb-4 pt-1">
+            <div className="pb-3 pt-1">
               <BriefingList
                 topics={section.topics}
                 currentTopicId={currentTopicId}
@@ -443,30 +395,99 @@ function SectionRow({
   );
 }
 
-// ── Progress bar ──────────────────────────────────────────────────────────────
+// ── Floating player card ──────────────────────────────────────────────────────
 
-function ProgressBar({ progress, duration, onSeek }: {
-  progress: number; duration: number; onSeek: (f: number) => void;
+function PlayerCard({
+  state, nowPlayingTopic, nowPlayingSection,
+  progress, duration, hasPrev, hasNext, currentTopicIdx, totalTopics,
+  onPause, onResume, onPrev, onNext, onSeek, onSeekBackward, onSeekForward,
+}: {
+  state: "playing" | "paused" | "idle";
+  nowPlayingTopic?: BriefingTopic | null;
+  nowPlayingSection?: BriefingSection | null;
+  progress: number;
+  duration: number;
+  hasPrev: boolean;
+  hasNext: boolean;
+  currentTopicIdx: number;
+  totalTopics: number;
+  onPause: () => void;
+  onResume: () => void;
+  onPrev: () => void;
+  onNext: () => void;
+  onSeek: (f: number) => void;
+  onSeekBackward: (s: number) => void;
+  onSeekForward: (s: number) => void;
 }) {
   const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+  const visible = state === "playing" || state === "paused";
+
   return (
-    <div className="space-y-1">
-      <div
-        role="slider" aria-valuemin={0} aria-valuemax={100}
-        aria-valuenow={Math.round(progress * 100)} tabIndex={0}
-        className="relative h-1.5 w-full cursor-pointer rounded-full bg-white/10"
-        onClick={(e) => {
-          const rect = e.currentTarget.getBoundingClientRect();
-          onSeek((e.clientX - rect.left) / rect.width);
-        }}
-      >
-        <motion.div className="absolute inset-y-0 left-0 rounded-full bg-primary" style={{ width: `${progress * 100}%` }} />
-      </div>
-      <div className="flex justify-between text-[10px] text-muted-foreground">
-        <span>{fmt(progress * duration)}</span>
-        <span>{fmt(duration)}</span>
-      </div>
-    </div>
+    <AnimatePresence>
+      {visible && (
+        <motion.div
+          initial={{ y: 120, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          exit={{ y: 120, opacity: 0 }}
+          transition={{ type: "spring", damping: 28, stiffness: 320 }}
+          className="fixed inset-x-4 z-50 overflow-hidden rounded-2xl border border-white/[0.12] bg-background"
+          style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 16px)" }}
+        >
+          {/* Seek bar */}
+          <div
+            role="slider" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)}
+            className="relative h-1 w-full cursor-pointer bg-white/[0.08]"
+            onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); onSeek((e.clientX - r.left) / r.width); }}
+          >
+            <div className="h-full bg-primary transition-[width] duration-100" style={{ width: `${progress * 100}%` }} />
+          </div>
+
+          <div className="px-4 py-3">
+            {/* Now-playing info */}
+            {nowPlayingTopic && (
+              <div className="mb-2.5 flex items-baseline justify-between gap-2 min-w-0">
+                <p className="truncate font-serif text-sm leading-snug flex-1 min-w-0">{nowPlayingTopic.headline}</p>
+                <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                  {fmt(progress * duration)} / {fmt(duration)}
+                </span>
+              </div>
+            )}
+            {nowPlayingSection && (
+              <p className="mb-3 text-xs text-muted-foreground">
+                {nowPlayingSection.label} · {currentTopicIdx + 1}/{totalTopics}
+              </p>
+            )}
+
+            {/* Transport */}
+            <div className="flex items-center justify-between">
+              <button onClick={onPrev} disabled={!hasPrev} aria-label="Previous"
+                className="flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-white/[0.06] hover:text-foreground disabled:opacity-30">
+                <SkipBack className="size-4" />
+              </button>
+              <button onClick={() => onSeekBackward(10)} aria-label="Rewind 10 seconds"
+                className="relative flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-white/[0.06] hover:text-foreground">
+                <RotateCcw className="size-4" />
+                <span className="absolute bottom-0.5 text-[8px] font-semibold leading-none">10</span>
+              </button>
+              <button onClick={state === "playing" ? onPause : onResume}
+                aria-label={state === "playing" ? "Pause" : "Resume"}
+                className="flex size-12 items-center justify-center rounded-full bg-white/[0.08] transition-colors hover:bg-white/[0.14]">
+                {state === "playing" ? <Pause className="size-5" /> : <Play className="size-5 ml-0.5" />}
+              </button>
+              <button onClick={() => onSeekForward(10)} aria-label="Forward 10 seconds"
+                className="relative flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-white/[0.06] hover:text-foreground">
+                <RotateCw className="size-4" />
+                <span className="absolute bottom-0.5 text-[8px] font-semibold leading-none">10</span>
+              </button>
+              <button onClick={onNext} disabled={!hasNext} aria-label="Next"
+                className="flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-white/[0.06] hover:text-foreground disabled:opacity-30">
+                <SkipForward className="size-4" />
+              </button>
+            </div>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
 
