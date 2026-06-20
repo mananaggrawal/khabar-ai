@@ -295,7 +295,7 @@ function BriefingSurface() {
           {/* Idle — hint to tap orb */}
           {mono.state === "idle" && !briefingQuery.isLoading && hasAudio && (
             <p className="text-center text-sm text-muted-foreground">
-              Tap anywhere to start listening
+              Tap the orb to start listening
             </p>
           )}
         </div>
