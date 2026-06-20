@@ -95,8 +95,10 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
     (url: string, startAt = 0, onEnded?: () => void) => {
       audioRef.current?.pause();
       const preloaded = preloadRef.current;
+      // Match by filename in case one URL is absolute and the other relative
+      const filename = url.split('/').pop() ?? '';
       const audio =
-        preloaded && preloaded.src === url && startAt === 0
+        preloaded && filename && preloaded.src.endsWith(filename) && startAt === 0
           ? preloaded
           : new Audio(url);
       preloadRef.current = null;
@@ -107,20 +109,34 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
 
       audio.ontimeupdate = () => {
         if (audio.duration > 0) {
-          const frac = audio.currentTime / audio.duration;
-          setProgress(frac);
+          const ct = audio.currentTime;
+          setProgress(ct / audio.duration);
 
-          // Preload next track at 70%
-          if (frac > 0.7 && preloadRef.current === null) {
-            const nextIdx = currentIdxRef.current + 1;
-            const next = storiesWithAudio[nextIdx];
-            if (next) {
-              const nextUrl = language === "hi" ? next.audioUrlHi! : next.audioUrlEn!;
-              if (nextUrl) {
-                const pre = new Audio(nextUrl);
+          // Advance story index when crossing audioStartSec boundary (same section audio)
+          const nextIdx = currentIdxRef.current + 1;
+          const next = storiesWithAudio[nextIdx];
+          if (next) {
+            const nextUrl = language === "hi" ? next.audioUrlHi! : next.audioUrlEn!;
+            const nextFilename = nextUrl?.split('/').pop() ?? '';
+            if (nextFilename && audio.src.endsWith(nextFilename) && next.audioStartSec !== undefined && ct >= next.audioStartSec) {
+              setCurrentStoryIdx(nextIdx);
+            }
+          }
+
+          // Preload next section's audio at 70%
+          if (ct / audio.duration > 0.7 && preloadRef.current === null) {
+            let preloadIdx = currentIdxRef.current + 1;
+            while (preloadIdx < storiesWithAudio.length) {
+              const s = storiesWithAudio[preloadIdx];
+              const sUrl = language === "hi" ? s.audioUrlHi! : s.audioUrlEn!;
+              const sFilename = sUrl?.split('/').pop() ?? '';
+              if (sFilename && !audio.src.endsWith(sFilename)) {
+                const pre = new Audio(sUrl);
                 pre.preload = "auto";
                 preloadRef.current = pre;
+                break;
               }
+              preloadIdx++;
             }
           }
 
@@ -131,7 +147,7 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
             try {
               localStorage.setItem(RESUME_KEY, JSON.stringify({
                 idx: currentIdxRef.current,
-                time: audio.currentTime,
+                time: ct,
                 date: briefing?.date ?? "",
                 lang: language,
               }));
@@ -165,32 +181,47 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
       if (!story) { setState("idle"); setCurrentStoryIdx(-1); return; }
 
       const url = language === "hi" ? story.audioUrlHi! : story.audioUrlEn!;
+      const seekTo = startAt > 0 ? startAt : (story.audioStartSec ?? 0);
 
       setError(null);
       setCurrentStoryIdx(idx);
       setQueueMode(mode);
 
+      // If same section audio already loaded, just seek — no reload
+      const curAudio = audioRef.current;
+      const filename = url.split('/').pop() ?? '';
+      if (curAudio && !curAudio.ended && filename && curAudio.src.endsWith(filename)) {
+        if (seekTo > 0) curAudio.currentTime = seekTo;
+        if (curAudio.paused) curAudio.play().catch(() => {});
+        return;
+      }
+
       const onEnded = mode !== null
         ? () => {
-            const next = currentIdxRef.current + 1;
+            // Find the next story with a different audio file (next section)
+            let next = currentIdxRef.current + 1;
+            while (next < storiesWithAudio.length) {
+              const s = storiesWithAudio[next];
+              const sUrl = language === "hi" ? s.audioUrlHi! : s.audioUrlEn!;
+              const sFilename = sUrl?.split('/').pop() ?? '';
+              if (!sFilename || !url.endsWith(sFilename)) break;
+              next++;
+            }
             if (next >= storiesWithAudio.length) {
               setState("idle"); setCurrentStoryIdx(-1); setQueueMode(null);
               try { localStorage.removeItem(RESUME_KEY); } catch {}
               return;
             }
-            // Section limit check
-            if (mode !== "all") {
-              if (storiesWithAudio[next]?.section !== mode) {
-                setState("idle"); setCurrentStoryIdx(-1); setQueueMode(null);
-                try { localStorage.removeItem(RESUME_KEY); } catch {}
-                return;
-              }
+            if (mode !== "all" && storiesWithAudio[next]?.section !== mode) {
+              setState("idle"); setCurrentStoryIdx(-1); setQueueMode(null);
+              try { localStorage.removeItem(RESUME_KEY); } catch {}
+              return;
             }
             setTimeout(() => playAtRef.current?.(next, queueModeRef.current, 0), 50);
           }
         : undefined;
 
-      const audio = attachAudio(url, startAt, onEnded);
+      const audio = attachAudio(url, seekTo, onEnded);
       audio.play().catch((e: any) => {
         if (e?.name === "AbortError") {
           setTimeout(() => {
@@ -253,15 +284,18 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
   }, [storiesWithAudio, playAt]);
 
   const prev = useCallback(() => {
-    if (audioRef.current && audioRef.current.currentTime > 3) {
-      audioRef.current.currentTime = 0;
-      setProgress(0);
+    const audio = audioRef.current;
+    const story = storiesWithAudio[currentIdxRef.current];
+    const storyStart = story?.audioStartSec ?? 0;
+    if (audio && audio.currentTime > storyStart + 3) {
+      audio.currentTime = storyStart;
+      setProgress(storyStart / (audio.duration || 1));
       return;
     }
     const prevIdx = currentIdxRef.current - 1;
     if (prevIdx >= 0) playAt(prevIdx, queueModeRef.current);
-    else if (audioRef.current) { audioRef.current.currentTime = 0; setProgress(0); }
-  }, [playAt]);
+    else if (audio) { audio.currentTime = 0; setProgress(0); }
+  }, [playAt, storiesWithAudio]);
 
   const play = useCallback(() => {
     try {

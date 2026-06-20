@@ -33,6 +33,7 @@ export type Story = {
   scriptHi: string;
   audioUrlEn?: string;
   audioUrlHi?: string;
+  audioStartSec?: number; // start offset within section audio file (seconds)
 };
 
 export type DailyBriefing = {
@@ -315,7 +316,10 @@ async function generateAllScripts(stories: Story[], logger: Logger): Promise<Sto
   return updated;
 }
 
-// ─── Step 4: TTS (individual per-story calls) ─────────────────────────────────
+// ─── Step 4: TTS (one call per section per language) ──────────────────────────
+//
+// 10 sections × 2 languages = 20 API calls for a full briefing.
+// Per-story start times are estimated via word-count proportions × total duration.
 
 async function generateAllTTS(
   stories: Story[],
@@ -324,31 +328,65 @@ async function generateAllTTS(
 ): Promise<Story[]> {
   const updated = stories.map((s) => ({ ...s }));
 
-  const totalFiles = stories.filter(s => s.scriptEn).length + stories.filter(s => s.scriptHi).length;
-  logger(`TTS: ${totalFiles} files (individual calls)…`);
+  // Group story indices by section (preserving order)
+  const sectionGroups = new Map<SectionId, number[]>();
+  stories.forEach((story, idx) => {
+    if (!story.scriptEn && !story.scriptHi) return;
+    const arr = sectionGroups.get(story.section) ?? [];
+    arr.push(idx);
+    sectionGroups.set(story.section, arr);
+  });
 
-  async function processStream(lang: "en" | "hi") {
-    for (let idx = 0; idx < stories.length; idx++) {
-      const story = stories[idx];
-      const script = lang === "en" ? story.scriptEn : story.scriptHi;
-      if (!script) continue;
-      const filename = `${date}-${story.id.slice(0, 16)}-${lang}`;
+  logger(`TTS: ${sectionGroups.size} sections × 2 languages = ${sectionGroups.size * 2} calls…`);
+
+  for (const [sectionId, indices] of sectionGroups) {
+    // ── EN ──
+    const enScripts = indices.map(i => stories[i].scriptEn).filter(Boolean);
+    if (enScripts.length > 0) {
+      const filename = `${date}-${sectionId}-en`;
       try {
-        const url = await googleTTS(script, filename, lang);
-        if (lang === "en") updated[idx].audioUrlEn = url;
-        else updated[idx].audioUrlHi = url;
-        logger(`    ✓ ${filename}`);
+        const { url, durationSec } = await googleTTS(enScripts.join("\n\n"), filename);
+        const wordCounts = enScripts.map(s => s.split(/\s+/).length);
+        const totalWords = wordCounts.reduce((a, b) => a + b, 0);
+        let wordsSoFar = 0;
+        let scriptIdx = 0;
+        indices.forEach((storyIdx) => {
+          if (!stories[storyIdx].scriptEn) return;
+          updated[storyIdx].audioUrlEn = url;
+          updated[storyIdx].audioStartSec = totalWords > 0 ? (wordsSoFar / totalWords) * durationSec : 0;
+          wordsSoFar += wordCounts[scriptIdx++];
+        });
+        logger(`    ✓ ${filename} (${enScripts.length} stories, ${durationSec.toFixed(1)}s)`);
+      } catch (err: any) {
+        logger(`    ✗ ${filename}: ${err.message?.slice(0, 160)}`);
+      }
+    }
+
+    // ── HI ──
+    const hiScripts = indices.map(i => stories[i].scriptHi).filter(Boolean);
+    if (hiScripts.length > 0) {
+      const filename = `${date}-${sectionId}-hi`;
+      try {
+        const { url, durationSec } = await googleTTS(hiScripts.join("\n\n"), filename);
+        const wordCounts = hiScripts.map(s => s.split(/\s+/).length);
+        const totalWords = wordCounts.reduce((a, b) => a + b, 0);
+        let wordsSoFar = 0;
+        let scriptIdx = 0;
+        indices.forEach((storyIdx) => {
+          if (!stories[storyIdx].scriptHi) return;
+          updated[storyIdx].audioUrlHi = url;
+          // Only set audioStartSec if EN didn't already set it
+          if (updated[storyIdx].audioStartSec === undefined) {
+            updated[storyIdx].audioStartSec = totalWords > 0 ? (wordsSoFar / totalWords) * durationSec : 0;
+          }
+          wordsSoFar += wordCounts[scriptIdx++];
+        });
+        logger(`    ✓ ${filename} (${hiScripts.length} stories, ${durationSec.toFixed(1)}s)`);
       } catch (err: any) {
         logger(`    ✗ ${filename}: ${err.message?.slice(0, 160)}`);
       }
     }
   }
-
-  // Run EN and HI streams in parallel — independent, no shared state
-  await Promise.all([
-    processStream("en"),
-    processStream("hi"),
-  ]);
 
   return updated;
 }
@@ -549,40 +587,73 @@ export async function generateMissingTTS(
     throw new Error("No existing briefing found — run full generation first");
   }
 
-  const needsEn = existing.stories.filter((s) => s.scriptEn && !s.audioUrlEn);
-  const needsHi = existing.stories.filter((s) => s.scriptHi && !s.audioUrlHi);
-  const totalNeeded = needsEn.length + needsHi.length;
+  const anyMissing = existing.stories.some(
+    (s) => (s.scriptEn && !s.audioUrlEn) || (s.scriptHi && !s.audioUrlHi),
+  );
 
-  if (totalNeeded === 0) {
+  if (!anyMissing) {
     log("All stories already have audio — nothing to do");
     return { patched: 0, briefing: existing };
   }
 
   const date = existing.date;
-  log(`TTS patch for ${date}: ${needsEn.length} EN + ${needsHi.length} HI files missing audio (individual calls)…`);
+
+  // Find which sections need regeneration
+  const missingSections = new Set<SectionId>();
+  existing.stories.forEach(s => {
+    if ((s.scriptEn && !s.audioUrlEn) || (s.scriptHi && !s.audioUrlHi)) {
+      missingSections.add(s.section);
+    }
+  });
+
+  log(`TTS patch for ${date}: regenerating ${missingSections.size} sections (${[...missingSections].join(", ")})…`);
 
   const updated = existing.stories.map((s) => ({ ...s }));
 
-  async function processStream(stories: Story[], lang: "en" | "hi") {
-    for (const story of stories) {
-      const storyIdx = existing.stories.findIndex((s) => s.id === story.id);
-      const filename = `${date}-${story.id.slice(0, 16)}-${lang}`;
-      const script = lang === "en" ? story.scriptEn : story.scriptHi;
+  for (const sectionId of missingSections) {
+    const sectionIndices = existing.stories
+      .map((s, i) => ({ s, i }))
+      .filter(({ s }) => s.section === sectionId)
+      .map(({ i }) => i);
+
+    // ── EN ──
+    const enScripts = sectionIndices.map(i => existing.stories[i].scriptEn).filter(Boolean);
+    if (enScripts.length > 0) {
+      const filename = `${date}-${sectionId}-en`;
       try {
-        const url = await googleTTS(script, filename, lang);
-        if (lang === "en") updated[storyIdx].audioUrlEn = url;
-        else updated[storyIdx].audioUrlHi = url;
-        log(`    ✓ ${filename}`);
+        const { url, durationSec } = await googleTTS(enScripts.join("\n\n"), filename);
+        const wordCounts = enScripts.map(s => s.split(/\s+/).length);
+        const totalWords = wordCounts.reduce((a, b) => a + b, 0);
+        let wordsSoFar = 0;
+        let scriptIdx = 0;
+        sectionIndices.forEach((storyIdx) => {
+          if (!existing.stories[storyIdx].scriptEn) return;
+          updated[storyIdx].audioUrlEn = url;
+          updated[storyIdx].audioStartSec = totalWords > 0 ? (wordsSoFar / totalWords) * durationSec : 0;
+          wordsSoFar += wordCounts[scriptIdx++];
+        });
+        log(`    ✓ ${filename} (${enScripts.length} stories, ${durationSec.toFixed(1)}s)`);
+      } catch (err: any) {
+        log(`    ✗ ${filename}: ${err.message?.slice(0, 160)}`);
+      }
+    }
+
+    // ── HI ──
+    const hiScripts = sectionIndices.map(i => existing.stories[i].scriptHi).filter(Boolean);
+    if (hiScripts.length > 0) {
+      const filename = `${date}-${sectionId}-hi`;
+      try {
+        const { url } = await googleTTS(hiScripts.join("\n\n"), filename);
+        sectionIndices.forEach((storyIdx) => {
+          if (!existing.stories[storyIdx].scriptHi) return;
+          updated[storyIdx].audioUrlHi = url;
+        });
+        log(`    ✓ ${filename} (${hiScripts.length} stories)`);
       } catch (err: any) {
         log(`    ✗ ${filename}: ${err.message?.slice(0, 160)}`);
       }
     }
   }
-
-  await Promise.all([
-    processStream(needsEn, "en"),
-    processStream(needsHi, "hi"),
-  ]);
 
   const patched = updated.filter((s, i) => {
     const orig = existing.stories[i];
