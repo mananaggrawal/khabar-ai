@@ -286,7 +286,7 @@ function HomePage() {
                 />
                 {/* Content */}
                 <div className="absolute inset-0 flex flex-col justify-end p-4">
-                  <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/60 mb-1.5">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-white/60 mb-1.5">
                     {today} · {listenMins} min listen
                   </p>
                   <p className="font-serif text-[17px] leading-snug text-white mb-3 line-clamp-2">

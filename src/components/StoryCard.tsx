@@ -117,7 +117,7 @@ export function StoryCard({ story, isPlaying, hasAudio, onPlay, onPause, onTap }
       {/* Text — centre */}
       <div className="min-w-0 flex-1">
         <p
-          className="mb-0.5 text-[10px] font-bold uppercase tracking-widest"
+          className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]"
           style={{ color: accent }}
         >
           {feed?.label ?? story.section}

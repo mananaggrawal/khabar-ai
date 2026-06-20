@@ -85,7 +85,7 @@ export function PlayerScreen({ mono, visible, onClose, isSaved, onSave }: Player
             >
               <ChevronDown className="size-5" />
             </button>
-            <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground/60">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/60">
               Today's Briefing
             </span>
             <button
@@ -152,7 +152,7 @@ export function PlayerScreen({ mono, visible, onClose, isSaved, onSave }: Player
 
           {/* Story info */}
           <div className="px-6 pb-2">
-            <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: accent }}>
+            <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.08em] mb-1.5" style={{ color: accent }}>
               {currentFeed && (
                 <span>{language === "hi" ? currentFeed.labelHi : currentFeed.label}</span>
               )}
