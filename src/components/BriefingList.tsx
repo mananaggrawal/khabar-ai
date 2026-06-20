@@ -154,26 +154,20 @@ function TopicCard({ topic: t, index: i, isActive, playingState = "idle", onPlay
         role="button" tabIndex={0}
         onClick={() => setOpen(!open)}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(!open); } }}
-        className="flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left outline-none"
+        className="flex w-full cursor-pointer items-start gap-3 px-4 py-3 text-left outline-none"
       >
         {/* Play / pause button (left) */}
         {hasAudio ? (
           <button
             onClick={handlePlayPause}
             aria-label={isPlaying ? "Pause" : "Play"}
-            className={`flex size-6 shrink-0 items-center justify-center rounded-full outline-none transition-colors ${
+            className={`mt-1 flex size-5 shrink-0 items-center justify-center outline-none transition-colors ${
               isActive
                 ? "text-primary"
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            {isPlaying ? (
-              <WaveformIcon />
-            ) : isPaused ? (
-              <Play className="size-3 ml-0.5" />
-            ) : (
-              <Play className="size-3 ml-0.5" />
-            )}
+            {isPlaying ? <WaveformIcon /> : <Play className="size-3.5 ml-0.5" />}
           </button>
         ) : (
           <span className="mt-1 w-6 shrink-0 text-xs tabular-nums text-muted-foreground">
