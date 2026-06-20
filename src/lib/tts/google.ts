@@ -164,10 +164,16 @@ async function synthesizeWithRetry(text: string, language: 'en' | 'hi' = 'en', m
       lastErr = err;
       const msg: string = err.message ?? "";
       const is429 = msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED");
+      // Daily quota exhausted — retrying won't help, bail immediately
+      const isDailyQuota = msg.includes("per_day") || msg.includes("per_model_per_day");
       console.warn(`[tts] attempt ${attempt}/${maxAttempts} failed${is429 ? " (rate limit)" : ""}: ${msg}`);
+      if (isDailyQuota) {
+        console.warn("[tts] daily quota exhausted — skipping retries");
+        break;
+      }
       if (attempt < maxAttempts) {
-        // 429 = rate limit: back off aggressively (30s, then 60s)
-        const delay = is429 ? 30_000 * attempt : 1000 * attempt;
+        // Transient 429 = per-minute rate limit: back off (10s, 20s)
+        const delay = is429 ? 10_000 * attempt : 1000 * attempt;
         console.warn(`[tts] waiting ${delay / 1000}s before retry…`);
         await new Promise((r) => setTimeout(r, delay));
       }
