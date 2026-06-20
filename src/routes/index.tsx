@@ -209,8 +209,8 @@ function HomePage() {
         <span className="font-serif text-xl tracking-tight">
           Khabar <em className="italic text-primary">AI</em>
         </span>
-        <span className="text-xs text-muted-foreground italic">
-          Today's news, spoken.
+        <span className="text-xs text-muted-foreground">
+          Today's news, <em className="font-semibold not-italic">spoken.</em>
         </span>
       </header>
 
