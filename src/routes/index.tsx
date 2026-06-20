@@ -201,9 +201,9 @@ function HomePage() {
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
-      {/* Header */}
+      {/* Header — sticky so it stays visible while scrolling */}
       <header
-        className="flex items-center justify-between px-5 pb-2"
+        className="sticky top-0 z-20 flex items-center justify-between px-5 pb-2 bg-background/95 backdrop-blur-sm"
         style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 1rem)" }}
       >
         <span className="font-serif text-xl tracking-tight">
@@ -241,6 +241,7 @@ function HomePage() {
           {/* ── Hero card ── */}
           {(() => {
             const topStory = briefing.stories[0];
+            const displayStory = mono.currentStory ?? topStory;
             const withAudio = briefing.stories.filter((s) =>
               mono.language === "hi" ? !!s.audioUrlHi : !!s.audioUrlEn,
             );
@@ -252,7 +253,7 @@ function HomePage() {
               ? "headlines"
               : ([...availableSections][0] as SectionId);
             const isPlayingAll = mono.state === "playing";
-            const bgImage = topStory?.imageUrl;
+            const bgImage = displayStory?.imageUrl ?? topStory?.imageUrl;
 
             return (
               <div
@@ -282,7 +283,7 @@ function HomePage() {
                     {today} · {listenMins} min listen
                   </p>
                   <p className="font-serif text-[17px] leading-snug text-white mb-3 line-clamp-2">
-                    {topStory?.title ?? "Today's Briefing"}
+                    {displayStory?.title ?? "Today's Briefing"}
                   </p>
                   <button
                     onClick={() => isPlayingAll ? mono.pause() : mono.playSection(firstSection)}
