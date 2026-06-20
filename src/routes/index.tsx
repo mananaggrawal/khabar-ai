@@ -141,12 +141,12 @@ function SectionTabs({
             data-section={feed.id}
             onClick={() => hasContent && onSelect(feed.id)}
             disabled={!hasContent}
-            className={`shrink-0 rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors whitespace-nowrap ${
+            className={`shrink-0 rounded-full px-3.5 py-1.5 text-sm font-medium transition-all whitespace-nowrap border ${
               active
-                ? "bg-primary text-primary-foreground"
+                ? "bg-foreground text-background border-foreground"
                 : hasContent
-                ? "bg-black/[0.06] text-foreground/70 hover:bg-black/[0.09]"
-                : "bg-black/[0.03] text-muted-foreground/40 cursor-not-allowed"
+                ? "bg-white border-border/50 text-foreground/60 hover:border-border hover:text-foreground/80"
+                : "bg-white border-border/20 text-muted-foreground/30 cursor-not-allowed"
             }`}
           >
             {language === "hi" ? feed.labelHi : feed.label}
