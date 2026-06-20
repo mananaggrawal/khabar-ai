@@ -25,7 +25,7 @@ export const isDailyQuotaExhausted = () => _dailyQuotaExhausted;
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const MODEL       = "gemini-3.1-flash-tts-preview";
+const MODEL       = "gemini-2.5-flash-preview-tts";
 const VOICE       = "Algieba";
 const SAMPLE_RATE = 24_000; // Hz — Gemini TTS always outputs 24 kHz PCM
 
