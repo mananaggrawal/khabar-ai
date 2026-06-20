@@ -4,9 +4,10 @@
  */
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
-import { X, ExternalLink, ArrowUpRight } from "lucide-react";
+import { X, ExternalLink, ArrowUpRight, Bookmark } from "lucide-react";
 import type { Story } from "@/lib/news/generator";
 import { FEED_MAP } from "@/lib/news/sources";
+import { SECTION_COLOR } from "@/components/StoryCard";
 
 interface StoryDetailSheetProps {
   story: Story | null;
@@ -14,6 +15,8 @@ interface StoryDetailSheetProps {
   onClose: () => void;
   onPlay: () => void;
   isPlaying: boolean;
+  isSaved?: boolean;
+  onSave?: () => void;
 }
 
 function timeAgo(iso: string): string {
@@ -50,10 +53,13 @@ export function StoryDetailSheet({
   onClose,
   onPlay,
   isPlaying,
+  isSaved,
+  onSave,
 }: StoryDetailSheetProps) {
   if (typeof document === "undefined") return null;
 
   const feed = story ? FEED_MAP.get(story.section) : null;
+  const accent = story ? (SECTION_COLOR[story.section] ?? "#7B5CF0") : "#7B5CF0";
   const script = story
     ? (language === "hi" ? story.scriptHi : story.scriptEn) ?? story.scriptEn
     : null;
@@ -109,13 +115,28 @@ export function StoryDetailSheet({
                   </a>
                 )}
               </div>
-              <button
-                onClick={onClose}
-                aria-label="Close"
-                className="ml-3 mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground transition-colors hover:text-foreground"
-              >
-                <X className="size-4" />
-              </button>
+              <div className="ml-3 mt-0.5 flex shrink-0 items-center gap-1">
+                {onSave && (
+                  <button
+                    onClick={onSave}
+                    aria-label={isSaved ? "Unsave" : "Save"}
+                    className="flex size-8 items-center justify-center rounded-full bg-muted transition-colors hover:text-foreground"
+                  >
+                    <Bookmark
+                      className="size-4"
+                      fill={isSaved ? "currentColor" : "none"}
+                      style={isSaved ? { color: accent } : undefined}
+                    />
+                  </button>
+                )}
+                <button
+                  onClick={onClose}
+                  aria-label="Close"
+                  className="flex size-8 items-center justify-center rounded-full bg-muted text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <X className="size-4" />
+                </button>
+              </div>
             </div>
 
             {/* Scrollable body */}

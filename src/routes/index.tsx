@@ -367,8 +367,6 @@ function HomePage() {
                     onPlay={() => storyIdx >= 0 && mono.playFromInSection(storyIdx, activeSection)}
                     onPause={mono.pause}
                     onTap={() => setDetailStory(story)}
-                    isSaved={savedStories.isSaved(story.id)}
-                    onSave={() => savedStories.toggle(story)}
                   />
                 );
               })
@@ -405,6 +403,8 @@ function HomePage() {
           setDetailStory(null);
         }}
         isPlaying={!!detailStory && mono.currentStory?.id === detailStory.id && mono.state === "playing"}
+        isSaved={detailStory ? savedStories.isSaved(detailStory.id) : false}
+        onSave={() => detailStory && savedStories.toggle(detailStory)}
       />
     </div>
   );
