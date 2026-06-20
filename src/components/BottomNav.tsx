@@ -13,25 +13,28 @@ export function BottomNav() {
 
   return (
     <nav
-      className="fixed bottom-0 left-0 right-0 z-40 flex h-[60px] items-center justify-around border-t border-border/50 bg-background/95 backdrop-blur-sm"
+      className="fixed bottom-0 left-0 right-0 z-40 border-t border-border/50 bg-background/95 backdrop-blur-sm"
       style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
     >
-      {TABS.map(({ href, label, Icon }) => {
-        const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
-        return (
-          <a
-            key={href}
-            href={href}
-            className={cn(
-              "flex flex-col items-center gap-1 text-[10px] font-medium transition-colors px-6 py-1",
-              active ? "text-primary" : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <Icon className={cn("size-[22px]", active && "stroke-[2.5px]")} />
-            {label}
-          </a>
-        );
-      })}
+      {/* Fixed-height row — safe-area padding sits below this */}
+      <div className="flex h-[56px] items-center justify-around">
+        {TABS.map(({ href, label, Icon }) => {
+          const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
+          return (
+            <a
+              key={href}
+              href={href}
+              className={cn(
+                "flex flex-col items-center gap-1 text-[10px] font-medium transition-colors px-6",
+                active ? "text-primary" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <Icon className={cn("size-5", active && "stroke-[2.5px]")} />
+              {label}
+            </a>
+          );
+        })}
+      </div>
     </nav>
   );
 }

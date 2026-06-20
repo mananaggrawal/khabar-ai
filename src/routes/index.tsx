@@ -242,6 +242,65 @@ function HomePage() {
 
       {briefing && (
         <>
+          {/* ── Hero card ── */}
+          {(() => {
+            const topStory = briefing.stories[0];
+            const withAudio = briefing.stories.filter((s) =>
+              mono.language === "hi" ? !!s.audioUrlHi : !!s.audioUrlEn,
+            );
+            const listenMins = Math.max(1, Math.round(withAudio.length * 1.5));
+            const today = new Date().toLocaleDateString("en-IN", {
+              weekday: "short", day: "numeric", month: "long",
+            });
+            const firstSection: SectionId = availableSections.has("headlines")
+              ? "headlines"
+              : ([...availableSections][0] as SectionId);
+            const isPlayingAll = mono.state === "playing";
+            const bgImage = topStory?.imageUrl;
+
+            return (
+              <div
+                className="mx-4 mb-3 relative overflow-hidden rounded-2xl"
+                style={{
+                  height: 220,
+                  background: bgImage
+                    ? undefined
+                    : "linear-gradient(135deg, oklch(0.18 0.05 295) 0%, oklch(0.28 0.14 300) 50%, oklch(0.20 0.10 310) 100%)",
+                  ...(bgImage ? {
+                    backgroundImage: `url(${bgImage})`,
+                    backgroundSize: "cover",
+                    backgroundPosition: "center",
+                  } : {}),
+                }}
+              >
+                {/* Dark gradient overlay */}
+                <div
+                  className="absolute inset-0"
+                  style={{
+                    background: "linear-gradient(to bottom, rgba(0,0,0,0.05) 0%, rgba(0,0,0,0.55) 50%, rgba(0,0,0,0.88) 100%)",
+                  }}
+                />
+                {/* Content */}
+                <div className="absolute inset-0 flex flex-col justify-end p-4">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/60 mb-1.5">
+                    {today} · {listenMins} min listen
+                  </p>
+                  <p className="font-serif text-[17px] leading-snug text-white mb-3 line-clamp-2">
+                    {topStory?.title ?? "Today's Briefing"}
+                  </p>
+                  <button
+                    onClick={() => isPlayingAll ? mono.pause() : mono.playSection(firstSection)}
+                    className="self-start flex items-center gap-1.5 rounded-full bg-white px-4 py-2 text-[12px] font-semibold text-foreground transition-transform active:scale-95 shadow-lg"
+                  >
+                    {isPlayingAll
+                      ? <><Pause className="size-3 fill-current" />Pause</>
+                      : <><Play className="size-3 fill-current ml-0.5" />Play briefing</>}
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Section tabs */}
           <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b border-border/50">
             <SectionTabs

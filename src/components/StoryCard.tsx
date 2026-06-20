@@ -3,18 +3,32 @@ import { cn } from "@/lib/utils";
 import type { Story } from "@/lib/news/generator";
 import { FEED_MAP, type SectionId } from "@/lib/news/sources";
 
-// Lucide icon per section — subtle placeholder (matches original card aesthetic)
+// Per-section accent colors — used for left border + label
+export const SECTION_COLOR: Record<SectionId, string> = {
+  headlines:     "#7B5CF0",
+  india:         "#E05A2B",
+  world:         "#0D9488",
+  business:      "#16A34A",
+  technology:    "#2563EB",
+  entertainment: "#A21CAF",
+  sports:        "#DC2626",
+  science:       "#0891B2",
+  health:        "#E11D48",
+  local:         "#D97706",
+};
+
+// Lucide icon per section
 const SECTION_ICON: Record<SectionId, React.ReactNode> = {
-  headlines:     <Newspaper  className="size-5 text-primary/50" />,
-  india:         <Flag       className="size-5 text-primary/50" />,
-  world:         <Globe      className="size-5 text-primary/50" />,
-  business:      <TrendingUp className="size-5 text-primary/50" />,
-  technology:    <Laptop     className="size-5 text-primary/50" />,
-  entertainment: <Film       className="size-5 text-primary/50" />,
-  sports:        <Trophy     className="size-5 text-primary/50" />,
-  science:       <Microscope className="size-5 text-primary/50" />,
-  health:        <Heart      className="size-5 text-primary/50" />,
-  local:         <MapPin     className="size-5 text-primary/50" />,
+  headlines:     <Newspaper  className="size-5" />,
+  india:         <Flag       className="size-5" />,
+  world:         <Globe      className="size-5" />,
+  business:      <TrendingUp className="size-5" />,
+  technology:    <Laptop     className="size-5" />,
+  entertainment: <Film       className="size-5" />,
+  sports:        <Trophy     className="size-5" />,
+  science:       <Microscope className="size-5" />,
+  health:        <Heart      className="size-5" />,
+  local:         <MapPin     className="size-5" />,
 };
 
 function timeAgo(iso: string): string {
@@ -63,6 +77,7 @@ interface StoryCardProps {
 
 export function StoryCard({ story, isPlaying, hasAudio, onPlay, onPause, onTap }: StoryCardProps) {
   const feed = FEED_MAP.get(story.section);
+  const accent = SECTION_COLOR[story.section] ?? "#7B5CF0";
 
   return (
     <div
@@ -71,11 +86,13 @@ export function StoryCard({ story, isPlaying, hasAudio, onPlay, onPause, onTap }
       onClick={onTap}
       onKeyDown={(e) => e.key === "Enter" && onTap?.()}
       className={cn(
-        "flex items-center gap-3 rounded-2xl px-3 py-3 transition-colors cursor-pointer",
+        "flex items-center gap-3 rounded-2xl px-3 py-3 transition-all duration-150 cursor-pointer overflow-hidden",
+        "border-l-[3px]",
         isPlaying
-          ? "bg-primary/[0.12]"
-          : "bg-card hover:bg-card/80",
+          ? "bg-primary/[0.08] shadow-sm"
+          : "bg-card hover:bg-card/80 active:scale-[0.99]",
       )}
+      style={{ borderLeftColor: accent }}
     >
       {/* Thumbnail — left */}
       {story.imageUrl ? (
@@ -83,7 +100,7 @@ export function StoryCard({ story, isPlaying, hasAudio, onPlay, onPause, onTap }
           <img
             src={story.imageUrl}
             alt=""
-            className="h-[52px] w-[52px] rounded-xl object-cover"
+            className="h-[56px] w-[56px] rounded-xl object-cover shadow-sm"
             onError={(e) => {
               const el = e.currentTarget as HTMLImageElement;
               el.style.display = "none";
@@ -91,23 +108,28 @@ export function StoryCard({ story, isPlaying, hasAudio, onPlay, onPause, onTap }
               if (placeholder) placeholder.style.display = "flex";
             }}
           />
-          {/* Fallback icon shown on image error */}
           <div
-            className="hidden h-[52px] w-[52px] items-center justify-center rounded-xl bg-muted"
-            style={{ display: "none" }}
+            className="hidden h-[56px] w-[56px] items-center justify-center rounded-xl"
+            style={{ display: "none", backgroundColor: `${accent}18` }}
           >
-            {SECTION_ICON[story.section]}
+            <span style={{ color: accent }}>{SECTION_ICON[story.section]}</span>
           </div>
         </div>
       ) : (
-        <div className="flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-xl bg-muted">
-          {SECTION_ICON[story.section]}
+        <div
+          className="flex h-[56px] w-[56px] shrink-0 items-center justify-center rounded-xl"
+          style={{ backgroundColor: `${accent}18` }}
+        >
+          <span style={{ color: accent }}>{SECTION_ICON[story.section]}</span>
         </div>
       )}
 
       {/* Text — centre */}
       <div className="min-w-0 flex-1">
-        <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-widest text-primary/80">
+        <p
+          className="mb-0.5 text-[10px] font-bold uppercase tracking-widest"
+          style={{ color: accent }}
+        >
           {feed?.label ?? story.section}
         </p>
         <p className="text-sm font-medium leading-snug text-foreground line-clamp-2">
@@ -124,11 +146,12 @@ export function StoryCard({ story, isPlaying, hasAudio, onPlay, onPause, onTap }
           onClick={(e) => { e.stopPropagation(); isPlaying ? onPause() : onPlay(); }}
           aria-label={isPlaying ? "Pause" : "Play"}
           className={cn(
-            "flex size-9 shrink-0 items-center justify-center rounded-full border transition-colors",
+            "flex size-9 shrink-0 items-center justify-center rounded-full border transition-all",
             isPlaying
-              ? "border-primary bg-primary text-white"
-              : "border-border bg-background text-muted-foreground hover:border-border/80 hover:text-foreground",
+              ? "border-transparent text-white shadow-md"
+              : "border-border bg-background text-muted-foreground hover:text-foreground",
           )}
+          style={isPlaying ? { backgroundColor: accent } : undefined}
         >
           {isPlaying
             ? <WaveformIcon />
