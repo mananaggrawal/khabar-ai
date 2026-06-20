@@ -113,7 +113,7 @@ export function PlayerScreen({ mono, visible, onClose }: PlayerScreenProps) {
               {currentStory?.title ?? "—"}
             </p>
             <p className="mt-1.5 text-xs text-muted-foreground">
-              Khabar AI · Voice of Aanya
+              Today's news, <em className="font-semibold italic">spoken.</em>
             </p>
           </div>
 

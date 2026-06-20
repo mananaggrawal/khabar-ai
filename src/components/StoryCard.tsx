@@ -136,7 +136,7 @@ export function StoryCard({ story, isPlaying, hasAudio, onPlay, onPause, onTap }
           {story.title}
         </p>
         <p className="mt-0.5 text-[11px] text-muted-foreground/60">
-          {story.source} · {timeAgo(story.publishedAt)}
+          {timeAgo(story.publishedAt)}
         </p>
       </div>
 
