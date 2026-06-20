@@ -128,7 +128,7 @@ function TopicCard({ topic: t, index: i }: { topic: BriefingTopic; index: number
                   className="inline-flex items-center gap-1 text-[11px] text-muted-foreground/60 hover:text-muted-foreground transition-colors"
                 >
                   <ExternalLink className="size-3" />
-                  {t.sourceName ?? "Source"}
+                  Go to article
                 </a>
               )}
 
