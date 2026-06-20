@@ -42,11 +42,9 @@ function GoogleLogo() {
 
 function PerplexityLogo() {
   return (
-    <img
-      src="https://www.perplexity.ai/favicon.png"
-      alt="Perplexity"
-      className="size-5 rounded-sm"
-    />
+    <svg viewBox="0 0 24 24" className="size-5" xmlns="http://www.w3.org/2000/svg" fill="currentColor">
+      <path d="M21.991 16.765h-2.605v6.47h-2.03v-6.47H15.21v-1.856h6.782zm-9.045 6.47H10.9v-3.047l-3.36-3.423h2.71l1.695 1.76 1.696-1.76h2.71l-3.405 3.424zm9.045-11.777h-2.605V4.988h-2.03v6.47H15.21V9.602h-1.856V7.748h1.856V.765h2.03v6.984h4.752zm-9.045 0H10.9V7.748l-3.36-3.424h2.71l1.695 1.761 1.696-1.76h2.71l-3.405 3.423zM2.009 16.765v1.856H4.27v4.614h2.03v-4.614h2.261v-1.856zm0-5.307V9.602H4.27V4.988h2.03v4.614h2.261v1.856z"/>
+    </svg>
   );
 }
 

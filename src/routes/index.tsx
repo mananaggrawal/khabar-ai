@@ -205,7 +205,7 @@ function HomePage() {
     <div className="min-h-screen bg-background text-foreground flex flex-col">
       {/* Header — sticky so it stays visible while scrolling */}
       <header
-        className="sticky top-0 z-20 flex items-center justify-between px-5 pb-3 bg-background/95 backdrop-blur-sm border-b border-border/60"
+        className="sticky top-0 z-20 flex items-center justify-between px-5 pb-3 bg-background/95 backdrop-blur-sm"
         style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 1rem)" }}
       >
         <span className="font-serif text-xl tracking-tight">
@@ -306,7 +306,7 @@ function HomePage() {
           })()}
 
           {/* Section tabs */}
-          <div className="bg-background border-b border-border/40">
+          <div className="bg-background">
             <SectionTabs
               activeSection={activeSection}
               availableSections={availableSections}
