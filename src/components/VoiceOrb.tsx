@@ -144,7 +144,7 @@ export function VoiceOrb({
       aria-label="Voice orb"
       className={cn(
         "group relative inline-flex items-center justify-center rounded-full",
-        "cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-primary/60",
+        "cursor-pointer outline-none",
         "transition-transform active:scale-[0.98]",
       )}
       style={{ width: size, height: size }}

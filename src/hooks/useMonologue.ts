@@ -91,7 +91,9 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
   const topicsWithAudio = useMemo(
     () =>
       briefing?.sections.flatMap((s) =>
-        s.topics.filter((t) => (language === "hi" ? !!t.audioUrlHi : !!t.audioUrlEn)),
+        s.topics.filter((t) =>
+          language === "hi" ? !!t.audioUrlHi : !!(t.audioUrlEn ?? (t as any).audioUrl),
+        ),
       ) ?? [],
     [briefing, language],
   );
@@ -100,7 +102,9 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
   const sectionsWithAudio = useMemo(
     () =>
       briefing?.sections.filter((s) =>
-        s.topics.some((t) => (language === "hi" ? !!t.audioUrlHi : !!t.audioUrlEn)),
+        s.topics.some((t) =>
+          language === "hi" ? !!t.audioUrlHi : !!(t.audioUrlEn ?? (t as any).audioUrl),
+        ),
       ) ?? [],
     [briefing, language],
   );
@@ -179,7 +183,9 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
       const topic = topicsWithAudio[idx];
       if (!topic) { setState("idle"); setCurrentTopicIdx(-1); return; }
 
-      const url = language === "hi" ? topic.audioUrlHi! : topic.audioUrlEn!;
+      const url = language === "hi"
+        ? topic.audioUrlHi!
+        : (topic.audioUrlEn ?? (topic as any).audioUrl)!;
 
       setError(null);
       setCurrentTopicIdx(idx);
@@ -324,7 +330,9 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
     } else if (currentTopicIdx >= 0) {
       const topic = topicsWithAudio[currentTopicIdx];
       if (topic) {
-        const url = language === "hi" ? topic.audioUrlHi! : topic.audioUrlEn!;
+        const url = language === "hi"
+          ? topic.audioUrlHi!
+          : (topic.audioUrlEn ?? (topic as any).audioUrl)!;
         const audio = attachAudio(url, pauseTimeRef.current);
         await audio.play().catch(() => {});
       }

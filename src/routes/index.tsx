@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { createPortal } from "react-dom";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
@@ -288,7 +289,7 @@ function SectionGroup({
         const isPlaying = isActiveSection && mono.state === "playing";
         const isPaused  = isActiveSection && mono.state === "paused";
         const hasAudio  = section.topics.some((t) =>
-          mono.language === "hi" ? !!t.audioUrlHi : !!t.audioUrlEn,
+          mono.language === "hi" ? !!t.audioUrlHi : !!(t.audioUrlEn ?? (t as any).audioUrl),
         );
         return (
           <SectionRow
@@ -383,7 +384,6 @@ function SectionRow({
                 topics={section.topics}
                 currentTopicId={currentTopicId}
                 playingState={playingState ?? "idle"}
-                progress={progress}
                 onPlay={hasAudio ? onPlayTopic : undefined}
                 onPause={onPause}
               />
@@ -422,7 +422,9 @@ function PlayerCard({
   const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
   const visible = state === "playing" || state === "paused";
 
-  return (
+  if (typeof document === "undefined") return null;
+
+  return createPortal(
     <AnimatePresence>
       {visible && (
         <motion.div
@@ -487,7 +489,8 @@ function PlayerCard({
           </div>
         </motion.div>
       )}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body,
   );
 }
 
