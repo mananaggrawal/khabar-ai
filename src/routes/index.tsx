@@ -143,10 +143,10 @@ function SectionTabs({
             disabled={!hasContent}
             className={`shrink-0 rounded-full px-3.5 py-1.5 text-sm font-medium transition-all whitespace-nowrap border ${
               active
-                ? "bg-foreground text-background border-foreground"
+                ? "border-primary/40 bg-primary/10 text-foreground"
                 : hasContent
-                ? "bg-white border-border/50 text-foreground/60 hover:border-border hover:text-foreground/80"
-                : "bg-white border-border/20 text-muted-foreground/30 cursor-not-allowed"
+                ? "border-border text-foreground/70 hover:border-border/80 hover:bg-black/[0.02]"
+                : "border-border/30 text-muted-foreground/30 cursor-not-allowed"
             }`}
           >
             {language === "hi" ? feed.labelHi : feed.label}
