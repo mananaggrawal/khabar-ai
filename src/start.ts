@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { renderErrorPage } from "./lib/error-page";
 import { attachSupabaseAuth } from "@/integrations/supabase/auth-attacher";
-import { handleGenerate, handleAsk } from "@/lib/api/handlers";
+import { handleGenerate, handlePatchMissing, handleAsk } from "@/lib/api/handlers";
 
 // ── API route middleware ───────────────────────────────────────────────────
 // TanStack Start only picks up new route files after a dev-server restart.
@@ -38,6 +38,9 @@ const apiMiddleware = createMiddleware().server(async ({ next, request }) => {
   }
   if (url.pathname === "/api/admin/generate" && request.method === "POST") {
     return handleGenerate(request);
+  }
+  if (url.pathname === "/api/admin/patch-missing" && request.method === "POST") {
+    return handlePatchMissing(request);
   }
   if (url.pathname === "/api/ask" && request.method === "POST") {
     return handleAsk(request);
