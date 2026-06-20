@@ -355,6 +355,7 @@ async function generateAllTTS(
       const urls = await googleTTSBatch(
         batch.map(item => ({ text: item.text, filename: item.filename })),
         lang,
+        logger,
       );
 
       urls.forEach((url, j) => {
@@ -565,4 +566,96 @@ export async function generateMissingSections(
   const addedSections = [...new Set(withAudio.map((s) => FEED_MAP.get(s.section)?.label ?? s.section))];
   log(`Added ${withAudio.length} stories across: ${addedSections.join(", ")}`);
   return { added: addedSections, briefing: merged };
+}
+
+// ─── TTS-only patch: re-run TTS on stories with scripts but no audio ──────────
+
+export async function generateMissingTTS(
+  logger: Logger = () => {},
+): Promise<{ patched: number; briefing: DailyBriefing }> {
+  const log = (msg: string) => { console.log(`[generator] ${msg}`); logger(msg); };
+
+  const existing = await getLatestBriefing();
+  if (!existing) {
+    throw new Error("No existing briefing found — run full generation first");
+  }
+
+  const needsEn = existing.stories.filter((s) => s.scriptEn && !s.audioUrlEn);
+  const needsHi = existing.stories.filter((s) => s.scriptHi && !s.audioUrlHi);
+  const totalNeeded = needsEn.length + needsHi.length;
+
+  if (totalNeeded === 0) {
+    log("All stories already have audio — nothing to do");
+    return { patched: 0, briefing: existing };
+  }
+
+  const date = existing.date;
+  log(`TTS patch for ${date}: ${needsEn.length} EN + ${needsHi.length} HI files missing audio`);
+
+  const updated = existing.stories.map((s) => ({ ...s }));
+
+  type TtsItem = { text: string; filename: string; storyIdx: number };
+
+  const enItems: TtsItem[] = needsEn.map((story) => {
+    const storyIdx = existing.stories.findIndex((s) => s.id === story.id);
+    return { text: story.scriptEn, filename: `${date}-${story.id.slice(0, 16)}-en`, storyIdx };
+  });
+  const hiItems: TtsItem[] = needsHi.map((story) => {
+    const storyIdx = existing.stories.findIndex((s) => s.id === story.id);
+    return { text: story.scriptHi, filename: `${date}-${story.id.slice(0, 16)}-hi`, storyIdx };
+  });
+
+  const enBatches = Math.ceil(enItems.length / TTS_BATCH_SIZE);
+  const hiBatches = Math.ceil(hiItems.length / TTS_BATCH_SIZE);
+  log(`TTS: ${totalNeeded} files → ${enBatches + hiBatches} batch calls (${TTS_BATCH_SIZE} stories/batch)…`);
+
+  async function processStream(items: TtsItem[], lang: "en" | "hi") {
+    const total = Math.ceil(items.length / TTS_BATCH_SIZE);
+    for (let b = 0; b < items.length; b += TTS_BATCH_SIZE) {
+      const batch    = items.slice(b, b + TTS_BATCH_SIZE);
+      const batchNum = Math.floor(b / TTS_BATCH_SIZE) + 1;
+      log(`  TTS ${lang.toUpperCase()} batch ${batchNum}/${total} (${batch.length} stories)…`);
+
+      const urls = await googleTTSBatch(
+        batch.map((item) => ({ text: item.text, filename: item.filename })),
+        lang,
+        logger,
+      );
+
+      urls.forEach((url, j) => {
+        if (url) {
+          if (lang === "en") updated[batch[j].storyIdx].audioUrlEn = url;
+          else               updated[batch[j].storyIdx].audioUrlHi = url;
+          log(`    ✓ ${batch[j].filename}`);
+        } else {
+          log(`    ✗ ${batch[j].filename}: no audio`);
+        }
+      });
+
+      if (b + TTS_BATCH_SIZE < items.length) {
+        await new Promise((r) => setTimeout(r, 1_500));
+      }
+    }
+  }
+
+  await Promise.all([
+    processStream(enItems, "en"),
+    processStream(hiItems, "hi"),
+  ]);
+
+  const patched = updated.filter((s, i) => {
+    const orig = existing.stories[i];
+    return (!orig.audioUrlEn && s.audioUrlEn) || (!orig.audioUrlHi && s.audioUrlHi);
+  }).length;
+
+  const briefing: DailyBriefing = {
+    ...existing,
+    generatedAt: new Date().toISOString(),
+    stories: updated,
+  };
+
+  log(`Saving briefing…`);
+  await saveBriefing(briefing);
+  log(`Done — patched audio for ${patched} stories`);
+  return { patched, briefing };
 }

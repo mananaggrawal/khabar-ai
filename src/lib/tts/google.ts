@@ -311,10 +311,14 @@ function buildBatchPrompt(texts: string[], language: "en" | "hi"): string {
 /**
  * Synthesise a batch of story texts in one API call, split the resulting PCM,
  * and return individual WAV URLs. Falls back to individual calls on any error.
+ *
+ * @param log  Optional logger — errors are surfaced here so callers can show
+ *             them in the admin log stream instead of silently dropping them.
  */
 export async function googleTTSBatch(
   items: { text: string; filename: string }[],
   language: "en" | "hi",
+  log: (msg: string) => void = () => {},
 ): Promise<string[]> {
   if (items.length === 0) return [];
 
@@ -322,7 +326,8 @@ export async function googleTTSBatch(
   if (items.length === 1) {
     try {
       return [await googleTTS(items[0].text, items[0].filename, language)];
-    } catch {
+    } catch (err: any) {
+      log(`    ✗ ${items[0].filename}: ${err.message?.slice(0, 160)}`);
       return [""];
     }
   }
@@ -337,13 +342,15 @@ export async function googleTTSBatch(
     const pcm    = await synthesizeWithRetry(prompt, tag);
     segments     = splitPcmAtSilences(pcm, items.length);
   } catch (err: any) {
-    console.warn(`[tts:batch] ${tag} synthesis failed: ${err.message?.slice(0, 120)}`);
+    const msg = `[tts:batch] ${tag} synthesis failed: ${err.message?.slice(0, 200)}`;
+    console.warn(msg);
+    log(`  ⚠ ${msg}`);
   }
 
   // Fallback to individual calls if batch synthesis or splitting failed
   if (!segments) {
-    console.warn(`[tts:batch] ${tag} — falling back to individual calls`);
-    return individualFallback(items, language);
+    log(`  ↩ ${tag} — falling back to individual calls`);
+    return individualFallback(items, language, log);
   }
 
   // Save each segment
@@ -353,7 +360,9 @@ export async function googleTTSBatch(
       const url = await saveWav(pcmToWav(segments[i]), items[i].filename);
       urls.push(url);
     } catch (err: any) {
-      console.warn(`[tts:batch] save failed for ${items[i].filename}: ${err.message}`);
+      const msg = `save failed for ${items[i].filename}: ${err.message}`;
+      console.warn(`[tts:batch] ${msg}`);
+      log(`  ✗ ${msg}`);
       // Last-resort: synthesise this story individually
       try {
         urls.push(await googleTTS(items[i].text, items[i].filename, language));
@@ -372,13 +381,16 @@ export async function googleTTSBatch(
 async function individualFallback(
   items: { text: string; filename: string }[],
   language: "en" | "hi",
+  log: (msg: string) => void = () => {},
 ): Promise<string[]> {
   const urls: string[] = [];
   for (const item of items) {
     try {
       urls.push(await googleTTS(item.text, item.filename, language));
     } catch (err: any) {
-      console.warn(`[tts:fallback] ✗ ${item.filename}: ${err.message?.slice(0, 80)}`);
+      const msg = `✗ ${item.filename}: ${err.message?.slice(0, 160)}`;
+      console.warn(`[tts:fallback] ${msg}`);
+      log(`    ${msg}`);
       urls.push("");
     }
   }

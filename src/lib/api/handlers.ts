@@ -3,7 +3,7 @@
  * Mounted as request middleware in src/start.ts so they work without
  * needing routeTree.gen.ts to be updated.
  */
-import { generateDailyBriefing, generateMissingSections, getLatestBriefing as getTodayBriefing } from "@/lib/news/generator";
+import { generateDailyBriefing, generateMissingSections, generateMissingTTS, getLatestBriefing as getTodayBriefing } from "@/lib/news/generator";
 import { googleTTS } from "@/lib/tts/google";
 import { loadBriefingFromStorage } from "@/lib/supabase-storage";
 
@@ -166,6 +166,44 @@ export async function handlePatchMissing(request: Request): Promise<Response> {
       });
     } catch (err: any) {
       send({ type: "error", msg: err?.message ?? "Patch failed" });
+    } finally {
+      generating = false;
+      try { writer.close(); } catch {}
+    }
+  })();
+
+  return new Response(readable, {
+    headers: {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      "x-accel-buffering": "no",
+    },
+  });
+}
+
+// POST /api/admin/patch-tts — generate audio for stories that have scripts but no audio
+export async function handlePatchTTS(request: Request): Promise<Response> {
+  const adminKey = process.env.ADMIN_KEY;
+  if (!adminKey) return json({ error: "ADMIN_KEY not configured" }, 500);
+  if (request.headers.get("x-admin-key") !== adminKey)
+    return json({ error: "Unauthorized" }, 401);
+
+  if (generating) return json({ error: "Already generating" }, 409);
+
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = writable.getWriter();
+  const enc = new TextEncoder();
+  const send = (data: object) => {
+    try { writer.write(enc.encode(`data: ${JSON.stringify(data)}\n\n`)); } catch {}
+  };
+
+  generating = true;
+  (async () => {
+    try {
+      const { patched, briefing } = await generateMissingTTS((msg) => send({ type: "log", msg }));
+      send({ type: "done", patched, stories: briefing.stories.length });
+    } catch (err: any) {
+      send({ type: "error", msg: err?.message ?? "TTS patch failed" });
     } finally {
       generating = false;
       try { writer.close(); } catch {}

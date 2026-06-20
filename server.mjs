@@ -41,7 +41,7 @@ if (!existsSync(SERVER_BUNDLE)) {
 }
 
 const { default: ssrHandler } = await import(SERVER_BUNDLE);
-const { handleGenerate, handleAsk, handleStatus, handleDownload, handleCron, handlePatchMissing } = await import(API_BUNDLE);
+const { handleGenerate, handleAsk, handleStatus, handleDownload, handleCron, handlePatchMissing, handlePatchTTS } = await import(API_BUNDLE);
 
 // Convert Node.js IncomingMessage to a Web Fetch Request
 async function toRequest(req) {
@@ -220,6 +220,19 @@ self.addEventListener('fetch', e => {
       await sendResponse(response, res);
     } catch (err) {
       console.error("[khabar] /api/admin/patch-missing error:", err);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: String(err?.message ?? err) }));
+    }
+    return;
+  }
+
+  if (pathname === "/api/admin/patch-tts" && req.method === "POST") {
+    try {
+      const request = await toRequest(req);
+      const response = await handlePatchTTS(request);
+      await sendResponse(response, res);
+    } catch (err) {
+      console.error("[khabar] /api/admin/patch-tts error:", err);
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: String(err?.message ?? err) }));
     }
@@ -473,6 +486,12 @@ function adminPage(supabaseUrl, supabaseKey) {
         <div class="gen-sub">Generate only sections missing from today's briefing.</div>
         <button class="btn-primary" id="patch-btn" onclick="runPatch()">Patch missing sections</button>
         <div id="patch-log" class="log-terminal"></div>
+      </div>
+      <div style="height:12px;"></div>
+      <div class="group">
+        <div class="gen-sub">Generate audio for stories that already have scripts but no audio (e.g. after a quota reset).</div>
+        <button class="btn-primary" id="tts-btn" onclick="runPatchTTS()">Patch missing TTS</button>
+        <div id="tts-log" class="log-terminal"></div>
       </div>
     </div>
   </div>
@@ -761,6 +780,72 @@ function adminPage(supabaseUrl, supabaseKey) {
     line.textContent = ts + '  ' + msg;
     el.appendChild(line);
     el.scrollTop = el.scrollHeight;
+  }
+
+  function appendTTSLog(type, msg) {
+    const el = document.getElementById('tts-log');
+    const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const line = document.createElement('div');
+    line.className = 'log-line' + (type !== 'log' ? ' log-' + type : '');
+    line.textContent = ts + '  ' + msg;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  async function runPatchTTS() {
+    const btn = document.getElementById('tts-btn');
+    const logEl = document.getElementById('tts-log');
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin">&#9696;</span> Patching TTS…';
+    logEl.innerHTML = '';
+    logEl.classList.add('visible');
+
+    try {
+      const r = await fetch('/api/admin/patch-tts', { method: 'POST', headers: { 'x-admin-key': AKEY } });
+      if (r.status === 409) {
+        appendTTSLog('log', 'Generation already in progress — check back shortly.');
+        btn.disabled = false; btn.textContent = 'Patch missing TTS';
+        return;
+      }
+      if (!r.ok || !r.body) {
+        appendTTSLog('error', 'Request failed: HTTP ' + r.status);
+        btn.disabled = false; btn.textContent = 'Retry';
+        return;
+      }
+
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split('\\n\\n');
+        buffer = parts.pop() || '';
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const ev = JSON.parse(line.slice(6));
+            if (ev.type === 'log') {
+              appendTTSLog('log', ev.msg);
+            } else if (ev.type === 'done') {
+              appendTTSLog('done', 'Done — patched ' + ev.patched + ' stories (' + ev.stories + ' total)');
+              loadStatus();
+            } else if (ev.type === 'error') {
+              appendTTSLog('error', ev.msg);
+            }
+          } catch {}
+        }
+      }
+    } catch (err) {
+      appendTTSLog('error', 'Network error: ' + (err.message || err));
+    }
+
+    btn.disabled = false;
+    btn.textContent = 'Patch missing TTS';
   }
 
   init();
