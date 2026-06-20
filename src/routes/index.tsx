@@ -346,8 +346,8 @@ function SectionRow({
   const active = isPlaying || isPaused;
 
   return (
-    <div className={`transition-colors ${active ? "bg-primary/[0.07]" : ""}`}>
-      {showDivider && <div className="mx-4 h-px bg-white/[0.05]" />}
+    <div className={`transition-colors ${active ? "mx-2 my-1 rounded-2xl bg-primary/[0.04]" : ""}`}>
+      {showDivider && !active && <div className="mx-4 h-px bg-white/[0.05]" />}
 
       <div
         role="button" tabIndex={0}
