@@ -1,46 +1,104 @@
-import { useState, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import type { Story } from "@/lib/news/generator";
-
-const STORAGE_KEY = "khabar-saved-stories";
 
 export type SavedStory = Story & { savedAt: string };
 
-function load(): SavedStory[] {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]"); } catch { return []; }
+const LOCAL_KEY = "khabar-saved-stories";
+const IS_LOCAL = typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_LOCAL_MODE === "true";
+
+// ── localStorage fallback (local mode only) ────────────────────────────────
+
+function localLoad(): SavedStory[] {
+  try { return JSON.parse(localStorage.getItem(LOCAL_KEY) ?? "[]"); } catch { return []; }
+}
+function localSave(stories: SavedStory[]) {
+  try { localStorage.setItem(LOCAL_KEY, JSON.stringify(stories)); } catch {}
 }
 
-function persist(stories: SavedStory[]) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(stories)); } catch {}
-}
+// ── Hook ───────────────────────────────────────────────────────────────────
 
 export function useSavedStories() {
-  const [saved, setSaved] = useState<SavedStory[]>(() =>
-    typeof window !== "undefined" ? load() : [],
-  );
+  const [saved, setSaved] = useState<SavedStory[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const isSaved = useCallback(
-    (id: string) => saved.some((s) => s.id === id),
-    [saved],
-  );
-
-  const toggle = useCallback((story: Story) => {
-    setSaved((prev) => {
-      const exists = prev.some((s) => s.id === story.id);
-      const next = exists
-        ? prev.filter((s) => s.id !== story.id)
-        : [{ ...story, savedAt: new Date().toISOString() }, ...prev];
-      persist(next);
-      return next;
-    });
+  // Load on mount
+  useEffect(() => {
+    if (IS_LOCAL) {
+      setSaved(localLoad());
+      setLoading(false);
+      return;
+    }
+    (async () => {
+      try {
+        const { supabase } = await import("@/integrations/supabase/client");
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) { setLoading(false); return; }
+        const { data } = await supabase
+          .from("saved_stories")
+          .select("story_data, saved_at")
+          .eq("user_id", user.id)
+          .order("saved_at", { ascending: false });
+        if (data) {
+          setSaved(data.map((r) => ({ ...(r.story_data as Story), savedAt: r.saved_at })));
+        }
+      } catch (e) { console.error("useSavedStories load:", e); }
+      finally { setLoading(false); }
+    })();
   }, []);
 
-  const remove = useCallback((id: string) => {
-    setSaved((prev) => {
-      const next = prev.filter((s) => s.id !== id);
-      persist(next);
-      return next;
-    });
+  const isSaved = useCallback((id: string) => saved.some((s) => s.id === id), [saved]);
+
+  const toggle = useCallback(async (story: Story) => {
+    const exists = saved.some((s) => s.id === story.id);
+
+    if (IS_LOCAL) {
+      setSaved((prev) => {
+        const next = exists
+          ? prev.filter((s) => s.id !== story.id)
+          : [{ ...story, savedAt: new Date().toISOString() }, ...prev];
+        localSave(next);
+        return next;
+      });
+      return;
+    }
+
+    try {
+      const { supabase } = await import("@/integrations/supabase/client");
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      if (exists) {
+        await supabase
+          .from("saved_stories")
+          .delete()
+          .eq("user_id", user.id)
+          .eq("story_id", story.id);
+        setSaved((prev) => prev.filter((s) => s.id !== story.id));
+      } else {
+        const { data } = await supabase
+          .from("saved_stories")
+          .insert({ user_id: user.id, story_id: story.id, story_data: story as any })
+          .select("saved_at")
+          .single();
+        const savedAt = data?.saved_at ?? new Date().toISOString();
+        setSaved((prev) => [{ ...story, savedAt }, ...prev]);
+      }
+    } catch (e) { console.error("useSavedStories toggle:", e); }
+  }, [saved]);
+
+  const remove = useCallback(async (id: string) => {
+    if (IS_LOCAL) {
+      setSaved((prev) => { const n = prev.filter((s) => s.id !== id); localSave(n); return n; });
+      return;
+    }
+    try {
+      const { supabase } = await import("@/integrations/supabase/client");
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      await supabase.from("saved_stories").delete().eq("user_id", user.id).eq("story_id", id);
+      setSaved((prev) => prev.filter((s) => s.id !== id));
+    } catch (e) { console.error("useSavedStories remove:", e); }
   }, []);
 
-  return { saved, isSaved, toggle, remove };
+  return { saved, loading, isSaved, toggle, remove };
 }

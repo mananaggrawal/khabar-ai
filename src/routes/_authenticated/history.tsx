@@ -1,41 +1,101 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Bookmark, Trash2 } from "lucide-react";
+import { createPortal } from "react-dom";
+import { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "motion/react";
+import { Bookmark, Play, Pause, SkipBack, SkipForward } from "lucide-react";
 import { BottomNav } from "@/components/BottomNav";
+import { StoryCard } from "@/components/StoryCard";
+import { StoryDetailSheet } from "@/components/StoryDetailSheet";
+import { PlayerScreen } from "@/components/PlayerScreen";
 import { useSavedStories } from "@/hooks/useSavedStories";
-import { FEED_MAP } from "@/lib/news/sources";
-import { SECTION_COLOR } from "@/components/StoryCard";
+import { useMonologue } from "@/hooks/useMonologue";
+import type { DailyBriefing, Story } from "@/lib/news/generator";
 
 export const Route = createFileRoute("/_authenticated/history")({
   head: () => ({ meta: [{ title: "Saved · Khabar AI" }] }),
   component: SavedPage,
 });
 
-function formatDate(iso: string): string {
+function formatGroup(iso: string): string {
   const date = new Date(iso);
   const now = new Date();
-  const todayStr = now.toDateString();
-  const yesterdayStr = new Date(now.getTime() - 86_400_000).toDateString();
-  if (date.toDateString() === todayStr) return "Today";
-  if (date.toDateString() === yesterdayStr) return "Yesterday";
+  if (date.toDateString() === now.toDateString()) return "Today";
+  if (date.toDateString() === new Date(now.getTime() - 86_400_000).toDateString()) return "Yesterday";
   return date.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "long" });
 }
 
-function SavedPage() {
-  const { saved, remove } = useSavedStories();
+// Mini player for the saved page
+function SavedMiniPlayer({ mono, onOpen }: { mono: ReturnType<typeof useMonologue>; onOpen: () => void }) {
+  if (typeof document === "undefined") return null;
+  const { state, progress, currentStory, currentFeed, pause, resume, language } = mono;
+  const visible = state === "playing" || state === "paused";
+  const isPlaying = state === "playing";
 
-  // Group by saved date
+  return createPortal(
+    <AnimatePresence>
+      {visible && (
+        <motion.div
+          initial={{ y: 100, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 100, opacity: 0 }}
+          transition={{ type: "spring", damping: 28, stiffness: 320 }}
+          style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 62px)" }}
+          className="fixed inset-x-3 z-50"
+        >
+          <div className="relative overflow-hidden rounded-2xl border border-border bg-background/95 backdrop-blur-md shadow-xl cursor-pointer" onClick={onOpen}>
+            <div className="absolute top-0 left-0 h-[2px] bg-primary transition-all duration-300" style={{ width: `${progress * 100}%` }} />
+            <div className="flex items-center gap-3 px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[11px] text-muted-foreground">
+                  {currentFeed ? (language === "hi" ? currentFeed.labelHi : currentFeed.label) : "Playing"}
+                </p>
+                <p className="truncate text-sm font-medium text-foreground leading-tight">{currentStory?.title ?? "—"}</p>
+              </div>
+              <div className="flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                <button onClick={() => mono.prev()} className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:text-foreground">
+                  <SkipBack className="size-4 fill-current" />
+                </button>
+                <button onClick={isPlaying ? pause : resume}
+                  className="flex size-8 items-center justify-center rounded-full bg-primary text-white transition-transform active:scale-95">
+                  {isPlaying ? <Pause className="size-4 fill-current" /> : <Play className="size-4 fill-current ml-0.5" />}
+                </button>
+                <button onClick={() => mono.next()} className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:text-foreground">
+                  <SkipForward className="size-4 fill-current" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>,
+    document.body,
+  );
+}
+
+function SavedPage() {
+  const { saved, loading, isSaved, toggle, remove } = useSavedStories();
+  const [detailStory, setDetailStory] = useState<Story | null>(null);
+  const [playerOpen, setPlayerOpen] = useState(false);
+
+  // Build synthetic briefing from saved stories so useMonologue can play them
+  const syntheticBriefing: DailyBriefing | null = saved.length > 0
+    ? { date: new Date().toISOString().slice(0, 10), generatedAt: new Date().toISOString(), stories: saved }
+    : null;
+
+  const mono = useMonologue({ briefing: syntheticBriefing });
+
+  useEffect(() => { if (mono.state === "idle") setPlayerOpen(false); }, [mono.state]);
+
+  // Group by save date
   const groups: { label: string; stories: typeof saved }[] = [];
   for (const story of saved) {
-    const label = formatDate(story.savedAt);
-    const existing = groups.find((g) => g.label === label);
-    if (existing) existing.stories.push(story);
-    else groups.push({ label, stories: [story] });
+    const label = formatGroup(story.savedAt);
+    const g = groups.find((x) => x.label === label);
+    if (g) g.stories.push(story); else groups.push({ label, stories: [story] });
   }
 
   return (
     <div
       className="min-h-screen bg-background text-foreground flex flex-col"
-      style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 72px)" }}
+      style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 148px)" }}
     >
       {/* Header */}
       <header
@@ -53,18 +113,30 @@ function SavedPage() {
       <main className="flex-1 px-4 py-4">
         <h1 className="font-serif text-2xl mb-1">Saved</h1>
         <p className="text-xs text-muted-foreground mb-5">
-          {saved.length > 0 ? `${saved.length} saved ${saved.length === 1 ? "story" : "stories"}` : "Stories you save appear here"}
+          {saved.length > 0
+            ? `${saved.length} saved ${saved.length === 1 ? "story" : "stories"}`
+            : "Stories you save appear here"}
         </p>
 
-        {saved.length === 0 ? (
+        {loading && (
+          <div className="flex flex-col gap-2 mt-4">
+            {[...Array(4)].map((_, i) => (
+              <div key={i} className="h-[76px] rounded-2xl bg-black/[0.04] animate-pulse" />
+            ))}
+          </div>
+        )}
+
+        {!loading && saved.length === 0 && (
           <div className="flex flex-col items-center justify-center py-24 text-center gap-3">
             <Bookmark className="size-10 text-muted-foreground/25" />
             <p className="text-sm font-medium text-foreground/50">Nothing saved yet</p>
             <p className="text-xs text-muted-foreground/60">
-              Tap the bookmark on any story to save it here.
+              Tap the bookmark inside any story to save it here.
             </p>
           </div>
-        ) : (
+        )}
+
+        {!loading && groups.length > 0 && (
           <div className="flex flex-col gap-6">
             {groups.map(({ label, stories }) => (
               <section key={label}>
@@ -73,54 +145,19 @@ function SavedPage() {
                 </p>
                 <div className="flex flex-col gap-1.5">
                   {stories.map((story) => {
-                    const feed = FEED_MAP.get(story.section);
-                    const accent = SECTION_COLOR[story.section] ?? "#7B5CF0";
+                    const hasAudio = mono.language === "hi" ? !!story.audioUrlHi : !!story.audioUrlEn;
+                    const storyIdx = mono.storiesWithAudio.findIndex((s) => s.id === story.id);
+                    const isActive = mono.currentStory?.id === story.id;
                     return (
-                      <div
+                      <StoryCard
                         key={story.id}
-                        className="flex items-center gap-3 rounded-2xl bg-white shadow-sm px-3 py-3 border-l-[3px]"
-                        style={{ borderLeftColor: accent }}
-                      >
-                        {/* Thumbnail */}
-                        {story.imageUrl ? (
-                          <img
-                            src={story.imageUrl}
-                            alt=""
-                            className="h-[48px] w-[48px] shrink-0 rounded-xl object-cover shadow-sm"
-                            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
-                          />
-                        ) : (
-                          <div
-                            className="h-[48px] w-[48px] shrink-0 rounded-xl"
-                            style={{ backgroundColor: `${accent}18` }}
-                          />
-                        )}
-
-                        {/* Text */}
-                        <div className="min-w-0 flex-1">
-                          <p
-                            className="mb-0.5 text-[10px] font-bold uppercase tracking-widest"
-                            style={{ color: accent }}
-                          >
-                            {feed?.label ?? story.section}
-                          </p>
-                          <p className="text-sm font-medium leading-snug text-foreground line-clamp-2">
-                            {story.title}
-                          </p>
-                          <p className="mt-0.5 text-[10px] text-muted-foreground/50">
-                            Saved {new Date(story.savedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
-                          </p>
-                        </div>
-
-                        {/* Remove */}
-                        <button
-                          onClick={() => remove(story.id)}
-                          aria-label="Remove"
-                          className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground/40 hover:text-red-400 transition-colors"
-                        >
-                          <Trash2 className="size-3.5" />
-                        </button>
-                      </div>
+                        story={story}
+                        isPlaying={isActive && mono.state === "playing"}
+                        hasAudio={hasAudio}
+                        onPlay={() => storyIdx >= 0 && mono.playFromInSection(storyIdx, story.section)}
+                        onPause={mono.pause}
+                        onTap={() => setDetailStory(story)}
+                      />
                     );
                   })}
                 </div>
@@ -131,6 +168,31 @@ function SavedPage() {
       </main>
 
       <BottomNav />
+      <SavedMiniPlayer mono={mono} onOpen={() => setPlayerOpen(true)} />
+
+      <PlayerScreen
+        mono={mono}
+        visible={playerOpen}
+        onClose={() => setPlayerOpen(false)}
+        isSaved={mono.currentStory ? isSaved(mono.currentStory.id) : false}
+        onSave={() => mono.currentStory && toggle(mono.currentStory)}
+      />
+
+      <StoryDetailSheet
+        story={detailStory}
+        language={mono.language}
+        onClose={() => setDetailStory(null)}
+        onPlay={() => {
+          if (detailStory) {
+            const idx = mono.storiesWithAudio.findIndex((s) => s.id === detailStory.id);
+            if (idx >= 0) mono.playFromInSection(idx, detailStory.section);
+          }
+          setDetailStory(null);
+        }}
+        isPlaying={!!detailStory && mono.currentStory?.id === detailStory.id && mono.state === "playing"}
+        isSaved={detailStory ? isSaved(detailStory.id) : false}
+        onSave={() => detailStory && toggle(detailStory)}
+      />
     </div>
   );
 }

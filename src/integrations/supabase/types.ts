@@ -88,6 +88,30 @@ export type Database = {
           },
         ]
       }
+      saved_stories: {
+        Row: {
+          id: string
+          user_id: string
+          story_id: string
+          story_data: Json
+          saved_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          story_id: string
+          story_data: Json
+          saved_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          story_id?: string
+          story_data?: Json
+          saved_at?: string
+        }
+        Relationships: []
+      }
       preferences: {
         Row: {
           categories: string[]
