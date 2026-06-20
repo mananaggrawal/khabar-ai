@@ -1,22 +1,25 @@
 /**
- * useMonologue — section-aware briefing playback + voice Q&A.
+ * useMonologue — topic-aware briefing playback + voice Q&A.
  *
- * Music-player model:
- *   playAll()          — queue all sections, auto-advance
- *   playGroup(group)   — queue sections within one group only
- *   playSection(idx)   — play a specific section, no auto-advance
- *   nextSection()      — skip to next (maintains queue mode)
- *   prevSection()      — restart current if >3s in, else go to previous
+ * Playback model:
+ *   play()             — queue all topics across all sections, auto-advance
+ *   playGroup(group)   — queue topics within india or global only
+ *   playSection(idx)   — play all topics in a specific section
+ *   playTopic(idx)     — play a single topic (no auto-advance)
+ *   nextTopic()        — skip to next topic
+ *   prevTopic()        — restart if >3s in, else go to previous topic
  *   pause/resume/stop  — standard controls
- *   startListening()   — explicit voice Q&A trigger (NOT the orb when paused)
- *   orbTap()           — idle→play, playing→listen, paused→resume, listening→stop
+ *   orbTap()           — idle→play, playing→pause, paused→resume
+ *
+ * Language:
+ *   Reads 'khabar-language' from localStorage ('en' | 'hi').
+ *   Reacts to storage events so settings page can switch live.
  *
  * Resume from interruption:
  *   Position is saved to localStorage every 5s.
- *   Orb tap when idle resumes from saved position if available.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { DailyBriefing } from "@/lib/news/generator";
+import type { DailyBriefing, BriefingTopic, BriefingSection } from "@/lib/news/generator";
 
 export type MonologueState =
   | "idle"
@@ -26,7 +29,12 @@ export type MonologueState =
   | "answering"
   | "error";
 
-const RESUME_KEY = "khabar-resume-pos";
+const RESUME_KEY   = "khabar-resume-pos";
+const LANGUAGE_KEY = "khabar-language";
+
+function readLanguage(): "en" | "hi" {
+  try { return (localStorage.getItem(LANGUAGE_KEY) as "en" | "hi") || "en"; } catch { return "en"; }
+}
 
 export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
   const [state, setState] = useState<MonologueState>("idle");
@@ -34,32 +42,65 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
   const [duration, setDuration] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [transcript, setTranscript] = useState("");
-  const [currentSectionIdx, setCurrentSectionIdx] = useState<number>(-1);
+  const [currentTopicIdx, setCurrentTopicIdx] = useState(-1);
   const [queueAll, setQueueAll] = useState(false);
+  const [language, setLanguage] = useState<"en" | "hi">(readLanguage);
 
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const pauseTimeRef = useRef(0);
+  const audioRef      = useRef<HTMLAudioElement | null>(null);
+  const pauseTimeRef  = useRef(0);
   const recognitionRef = useRef<any>(null);
-  const queueAllRef = useRef(false);
+  const queueAllRef   = useRef(false);
   const currentIdxRef = useRef(-1);
   const groupLimitRef = useRef<"india" | "global" | null>(null);
-  const lastSaveRef = useRef(0);
+  const lastSaveRef   = useRef(0);
+  const playTopicAtRef = useRef<((idx: number, all: boolean, startAt?: number) => void) | null>(null);
 
   // Keep refs in sync
   useEffect(() => { queueAllRef.current = queueAll; }, [queueAll]);
-  useEffect(() => { currentIdxRef.current = currentSectionIdx; }, [currentSectionIdx]);
-  // playSectionAtRef is updated after playSectionAt is defined below
+  useEffect(() => { currentIdxRef.current = currentTopicIdx; }, [currentTopicIdx]);
 
-  const sectionsWithAudio = useMemo(
-    () => briefing?.sections.filter((s) => s.audioUrl) ?? [],
-    [briefing],
+  // React to language changes from settings page
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === LANGUAGE_KEY) setLanguage((e.newValue as "en" | "hi") || "en");
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  // Flat list of all topics that have audio in the current language
+  const topicsWithAudio = useMemo(
+    () =>
+      briefing?.sections.flatMap((s) =>
+        s.topics.filter((t) => (language === "hi" ? !!t.audioUrlHi : !!t.audioUrlEn)),
+      ) ?? [],
+    [briefing, language],
   );
 
-  // Stable ref so onEnded closures always call the latest playSectionAt
-  // (avoids stale closure when component re-renders mid-playback)
-  const playSectionAtRef = useRef<((idx: number, all: boolean, startAt?: number) => void) | null>(null);
+  // Sections that have at least one playable topic (for UI)
+  const sectionsWithAudio = useMemo(
+    () =>
+      briefing?.sections.filter((s) =>
+        s.topics.some((t) => (language === "hi" ? !!t.audioUrlHi : !!t.audioUrlEn)),
+      ) ?? [],
+    [briefing, language],
+  );
 
-  // ── Audio attachment ────────────────────────────────────────────────────
+  const currentTopic: BriefingTopic | null =
+    currentTopicIdx >= 0 ? topicsWithAudio[currentTopicIdx] ?? null : null;
+
+  const currentSection: BriefingSection | null =
+    currentTopic
+      ? briefing?.sections.find((s) => s.category === currentTopic.section) ?? null
+      : null;
+
+  // currentSectionIdx — index within sectionsWithAudio (backwards compat for UI)
+  const currentSectionIdx = useMemo(() => {
+    if (!currentTopic) return -1;
+    return sectionsWithAudio.findIndex((s) => s.category === currentTopic.section);
+  }, [currentTopic, sectionsWithAudio]);
+
+  // ── Audio attachment ───────────────────────────────────────────────────────
 
   const attachAudio = useCallback(
     (url: string, startAt = 0, onEnded?: () => void) => {
@@ -72,9 +113,7 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
 
       audio.ontimeupdate = () => {
         if (audio.duration > 0) {
-          const frac = audio.currentTime / audio.duration;
-          setProgress(frac);
-          // Save position every 5s for resume-from-interruption
+          setProgress(audio.currentTime / audio.duration);
           const now = Date.now();
           if (now - lastSaveRef.current > 5000) {
             lastSaveRef.current = now;
@@ -83,84 +122,73 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
                 idx: currentIdxRef.current,
                 time: audio.currentTime,
                 date: briefing?.date ?? "",
+                lang: language,
               }));
             } catch {}
           }
         }
       };
 
-      audio.onplay = () => setState("playing");
-
+      audio.onplay  = () => setState("playing");
       audio.onpause = () => {
-        // Save exact position so resume works after external interruption
         pauseTimeRef.current = audio.currentTime;
         setState((s) => (s === "listening" || s === "answering" ? s : "paused"));
       };
-
       audio.onended = () => {
         setProgress(0);
-        if (onEnded) {
-          onEnded();
-        } else {
-          setState("idle");
-        }
+        if (onEnded) onEnded();
+        else setState("idle");
       };
-
-      audio.onerror = () => {
-        setState("error");
-        setError("Audio playback failed.");
-      };
+      audio.onerror = () => { setState("error"); setError("Audio playback failed."); };
 
       return audio;
     },
-    [],
+    [briefing, language],
   );
 
-  // ── Section navigation ──────────────────────────────────────────────────
+  // ── Topic navigation ───────────────────────────────────────────────────────
 
-  const playSectionAt = useCallback(
+  const playTopicAt = useCallback(
     (idx: number, all: boolean, startAt = 0) => {
       if (!briefing) return;
-      const section = sectionsWithAudio[idx];
-      if (!section) { setState("idle"); setCurrentSectionIdx(-1); return; }
+      const topic = topicsWithAudio[idx];
+      if (!topic) { setState("idle"); setCurrentTopicIdx(-1); return; }
+
+      const url = language === "hi" ? topic.audioUrlHi! : topic.audioUrlEn!;
 
       setError(null);
-      setCurrentSectionIdx(idx);
+      setCurrentTopicIdx(idx);
       setQueueAll(all);
 
       const onEnded = all
         ? () => {
             const next = currentIdxRef.current + 1;
-            if (next >= sectionsWithAudio.length) {
-              setState("idle"); setCurrentSectionIdx(-1); setQueueAll(false);
+            if (next >= topicsWithAudio.length) {
+              setState("idle"); setCurrentTopicIdx(-1); setQueueAll(false);
               groupLimitRef.current = null;
               try { localStorage.removeItem(RESUME_KEY); } catch {}
               return;
             }
             const limit = groupLimitRef.current;
-            if (limit !== null && sectionsWithAudio[next]?.group !== limit) {
-              setState("idle"); setCurrentSectionIdx(-1); setQueueAll(false);
-              groupLimitRef.current = null;
-              try { localStorage.removeItem(RESUME_KEY); } catch {}
-              return;
+            if (limit !== null) {
+              const nextTopic = topicsWithAudio[next];
+              const nextSection = briefing.sections.find((s) => s.category === nextTopic?.section);
+              if (nextSection?.group !== limit) {
+                setState("idle"); setCurrentTopicIdx(-1); setQueueAll(false);
+                groupLimitRef.current = null;
+                try { localStorage.removeItem(RESUME_KEY); } catch {}
+                return;
+              }
             }
-            // Small delay lets iOS release the previous Audio element before
-            // creating the next one — prevents AbortError on auto-advance.
-            // Uses ref to avoid stale closure if component re-rendered.
-            setTimeout(() => playSectionAtRef.current?.(next, true), 150);
+            setTimeout(() => playTopicAtRef.current?.(next, true), 150);
           }
         : undefined;
 
-      const audio = attachAudio(section.audioUrl, startAt, onEnded);
+      const audio = attachAudio(url, startAt, onEnded);
       audio.play().catch((e: any) => {
         if (e?.name === "AbortError") {
-          // iOS may abort the play() call if audio engine is still releasing
-          // the previous element. Retry once after a short delay — but ONLY
-          // if this audio element is still the active one (guards against the
-          // retry firing after auto-next has moved to the next section, which
-          // would cause two voices playing simultaneously).
           setTimeout(() => {
-            if (audioRef.current !== audio) return; // stale — a new section started
+            if (audioRef.current !== audio) return;
             audio.play().catch(() => setState("paused"));
           }, 300);
           return;
@@ -169,43 +197,55 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
         setError(e?.message ?? "Playback blocked — tap again");
       });
     },
-    [briefing, sectionsWithAudio, attachAudio],
+    [briefing, topicsWithAudio, language, attachAudio],
   );
 
-  // Keep playSectionAtRef current so onEnded closures never go stale
-  useEffect(() => { playSectionAtRef.current = playSectionAt; }, [playSectionAt]);
+  useEffect(() => { playTopicAtRef.current = playTopicAt; }, [playTopicAt]);
+
+  // ── Public navigation API ──────────────────────────────────────────────────
 
   const playAll = useCallback(() => {
     groupLimitRef.current = null;
-    playSectionAt(0, true);
-  }, [playSectionAt]);
+    playTopicAt(0, true);
+  }, [playTopicAt]);
 
   const playGroup = useCallback((group: "india" | "global") => {
-    const firstIdx = sectionsWithAudio.findIndex((s) => s.group === group);
+    const firstIdx = topicsWithAudio.findIndex((t) => {
+      const sec = briefing?.sections.find((s) => s.category === t.section);
+      return sec?.group === group;
+    });
     if (firstIdx < 0) return;
     groupLimitRef.current = group;
-    playSectionAt(firstIdx, true);
-  }, [sectionsWithAudio, playSectionAt]);
+    playTopicAt(firstIdx, true);
+  }, [briefing, topicsWithAudio, playTopicAt]);
 
+  /** Play all topics in a section (by index in sectionsWithAudio) */
   const playSection = useCallback(
-    (idx: number) => {
+    (sectionIdx: number) => {
+      const section = sectionsWithAudio[sectionIdx];
+      if (!section) return;
       groupLimitRef.current = null;
-      playSectionAt(idx, false);
+      const firstTopicIdx = topicsWithAudio.findIndex((t) => t.section === section.category);
+      if (firstTopicIdx >= 0) playTopicAt(firstTopicIdx, true);
     },
-    [playSectionAt],
+    [sectionsWithAudio, topicsWithAudio, playTopicAt],
   );
 
-  // ── Skip controls (music player) ────────────────────────────────────────
+  /** Play a single topic by its index in topicsWithAudio */
+  const playTopic = useCallback(
+    (idx: number) => {
+      groupLimitRef.current = null;
+      playTopicAt(idx, false);
+    },
+    [playTopicAt],
+  );
 
-  const nextSection = useCallback(() => {
+  const nextTopic = useCallback(() => {
     const next = currentIdxRef.current + 1;
-    if (next < sectionsWithAudio.length) {
-      playSectionAt(next, queueAllRef.current);
-    }
-  }, [sectionsWithAudio, playSectionAt]);
+    if (next < topicsWithAudio.length) playTopicAt(next, queueAllRef.current);
+  }, [topicsWithAudio, playTopicAt]);
 
-  const prevSection = useCallback(() => {
-    // If >3s into section → restart; else → go to previous
+  const prevTopic = useCallback(() => {
     if (audioRef.current && audioRef.current.currentTime > 3) {
       audioRef.current.currentTime = 0;
       setProgress(0);
@@ -213,50 +253,47 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
     }
     const prev = currentIdxRef.current - 1;
     if (prev >= 0) {
-      playSectionAt(prev, queueAllRef.current);
+      playTopicAt(prev, queueAllRef.current);
     } else {
-      // Already at first — just restart
       if (audioRef.current) { audioRef.current.currentTime = 0; setProgress(0); }
     }
-  }, [playSectionAt]);
+  }, [playTopicAt]);
 
-  // ── Playback controls ───────────────────────────────────────────────────
+  // ── Playback controls ──────────────────────────────────────────────────────
 
   const play = useCallback(() => {
-    // Check for saved resume position
     try {
       const saved = localStorage.getItem(RESUME_KEY);
       if (saved) {
-        const { idx, time, date } = JSON.parse(saved) as { idx: number; time: number; date?: string };
+        const { idx, time, date, lang } = JSON.parse(saved) as { idx: number; time: number; date?: string; lang?: string };
         const currentDate = briefing?.date ?? "";
-        if (idx >= 0 && idx < sectionsWithAudio.length && time > 2 && (!date || date === currentDate)) {
-          playSectionAt(idx, true, time);
+        const langMatch = !lang || lang === language;
+        if (idx >= 0 && idx < topicsWithAudio.length && time > 2 && (!date || date === currentDate) && langMatch) {
+          playTopicAt(idx, true, time);
           return;
         }
       }
     } catch {}
     playAll();
-  }, [sectionsWithAudio, playSectionAt, playAll]);
+  }, [topicsWithAudio, language, playTopicAt, playAll]);
 
   const pause = useCallback(() => {
-    if (audioRef.current) {
-      pauseTimeRef.current = audioRef.current.currentTime;
-      audioRef.current.pause();
-    }
+    if (audioRef.current) { pauseTimeRef.current = audioRef.current.currentTime; audioRef.current.pause(); }
     setState("paused");
   }, []);
 
   const resume = useCallback(async () => {
     if (audioRef.current && audioRef.current.paused) {
       await audioRef.current.play().catch(() => {});
-    } else if (currentSectionIdx >= 0) {
-      const section = sectionsWithAudio[currentSectionIdx];
-      if (section) {
-        const audio = attachAudio(section.audioUrl, pauseTimeRef.current);
+    } else if (currentTopicIdx >= 0) {
+      const topic = topicsWithAudio[currentTopicIdx];
+      if (topic) {
+        const url = language === "hi" ? topic.audioUrlHi! : topic.audioUrlEn!;
+        const audio = attachAudio(url, pauseTimeRef.current);
         await audio.play().catch(() => {});
       }
     }
-  }, [currentSectionIdx, sectionsWithAudio, attachAudio]);
+  }, [currentTopicIdx, topicsWithAudio, language, attachAudio]);
 
   const stop = useCallback(() => {
     audioRef.current?.pause();
@@ -264,29 +301,23 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
     setState("idle");
     setProgress(0);
     setDuration(0);
-    setCurrentSectionIdx(-1);
+    setCurrentTopicIdx(-1);
     setQueueAll(false);
     groupLimitRef.current = null;
     pauseTimeRef.current = 0;
     try { localStorage.removeItem(RESUME_KEY); } catch {}
   }, []);
 
-  const seek = useCallback(
-    (fraction: number) => {
-      if (audioRef.current && duration > 0) {
-        audioRef.current.currentTime = fraction * duration;
-        setProgress(fraction);
-      }
-    },
-    [duration],
-  );
+  const seek = useCallback((fraction: number) => {
+    if (audioRef.current && duration > 0) {
+      audioRef.current.currentTime = fraction * duration;
+      setProgress(fraction);
+    }
+  }, [duration]);
 
-  const seekForward = useCallback((seconds = 10) => {
+  const seekForward  = useCallback((seconds = 10) => {
     if (!audioRef.current) return;
-    audioRef.current.currentTime = Math.min(
-      audioRef.current.currentTime + seconds,
-      audioRef.current.duration || 0,
-    );
+    audioRef.current.currentTime = Math.min(audioRef.current.currentTime + seconds, audioRef.current.duration || 0);
   }, []);
 
   const seekBackward = useCallback((seconds = 10) => {
@@ -294,20 +325,12 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
     audioRef.current.currentTime = Math.max(audioRef.current.currentTime - seconds, 0);
   }, []);
 
-  // ── Voice Q&A ───────────────────────────────────────────────────────────
+  // ── Voice Q&A ──────────────────────────────────────────────────────────────
 
   const startListening = useCallback(() => {
-    const SR =
-      (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
-    if (!SR) {
-      setError("Voice input not supported in this browser.");
-      setState("error");
-      return;
-    }
-    if (audioRef.current) {
-      pauseTimeRef.current = audioRef.current.currentTime;
-      audioRef.current.pause();
-    }
+    const SR = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
+    if (!SR) { setError("Voice input not supported in this browser."); setState("error"); return; }
+    if (audioRef.current) { pauseTimeRef.current = audioRef.current.currentTime; audioRef.current.pause(); }
     setState("listening");
     setTranscript("");
 
@@ -324,14 +347,8 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
       else setState("paused");
     };
     recognition.onerror = (e: any) => {
-      console.error("[speech]", e.error);
-      const msg = e.error === "not-allowed"
-        ? "Microphone access denied — check browser permissions."
-        : e.error === "no-speech"
-        ? "No speech detected — try again."
-        : `Voice error: ${e.error}`;
-      setError(msg);
-      setState("paused");
+      const msg = e.error === "not-allowed" ? "Microphone access denied." : e.error === "no-speech" ? "No speech detected." : `Voice error: ${e.error}`;
+      setError(msg); setState("paused");
     };
     recognition.onend = () => { recognitionRef.current = null; };
     recognition.start();
@@ -347,8 +364,7 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
     setState("answering");
     try {
       const res = await fetch("/api/ask", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question }),
       });
       if (!res.ok) throw new Error(`API error ${res.status}`);
@@ -356,17 +372,13 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
       const answerAudio = new Audio(audioUrl);
       answerAudio.onended = () => resume();
       answerAudio.onerror = () => { setError("Answer audio failed."); setState("paused"); };
-      await answerAudio.play().catch((e: any) => {
-        setError(e?.message ?? "Could not play answer.");
-        setState("paused");
-      });
+      await answerAudio.play().catch((e: any) => { setError(e?.message ?? "Could not play answer."); setState("paused"); });
     } catch (e: any) {
       setError(e?.message ?? "Could not get an answer");
       setState("paused");
     }
   }
 
-  // Orb: idle→play, playing→pause, paused→resume, listening→stop
   const orbTap = useCallback(() => {
     switch (state) {
       case "idle":      play(); break;
@@ -389,14 +401,28 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
     duration,
     error,
     transcript,
+    language,
+
+    // Topic-level
+    currentTopicIdx,
+    currentTopic,
+    topicsWithAudio,
+
+    // Section-level (derived, for UI)
     currentSectionIdx,
+    currentSection,
     sectionsWithAudio,
+
+    // Controls
     play,
     playAll,
     playGroup,
     playSection,
-    nextSection,
-    prevSection,
+    playTopic,
+    nextSection: nextTopic,   // alias so existing UI still works
+    prevSection: prevTopic,   // alias so existing UI still works
+    nextTopic,
+    prevTopic,
     pause,
     resume,
     stop,

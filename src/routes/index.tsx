@@ -149,12 +149,11 @@ function BriefingSurface() {
     return "idle" as const;
   })();
 
-  // Current playing section info
-  const nowPlayingSection = mono.currentSectionIdx >= 0
-    ? mono.sectionsWithAudio[mono.currentSectionIdx]
-    : null;
-  const hasPrev = mono.currentSectionIdx > 0 || (mono.currentSectionIdx === 0 && mono.progress > 0.05);
-  const hasNext = mono.currentSectionIdx >= 0 && mono.currentSectionIdx < mono.sectionsWithAudio.length - 1;
+  // Current playing info
+  const nowPlayingSection = mono.currentSection;
+  const nowPlayingTopic   = mono.currentTopic;
+  const hasPrev = mono.currentTopicIdx > 0 || (mono.currentTopicIdx === 0 && mono.progress > 0.05);
+  const hasNext = mono.currentTopicIdx >= 0 && mono.currentTopicIdx < mono.topicsWithAudio.length - 1;
 
   return (
     <>
@@ -175,12 +174,12 @@ function BriefingSurface() {
         <VoiceOrb state={orbState} size={200} onClick={mono.orbTap} />
 
         {/* App title / now-playing label */}
-        <div className="flex min-h-[2.5rem] flex-col items-center gap-0.5 text-center">
-          {nowPlayingSection ? (
+        <div className="flex min-h-[2.5rem] flex-col items-center gap-0.5 text-center px-6">
+          {nowPlayingTopic ? (
             <>
-              <p className="font-serif text-xl tracking-tight">{nowPlayingSection.label}</p>
+              <p className="font-serif text-base leading-snug tracking-tight line-clamp-2">{nowPlayingTopic.headline}</p>
               <p className="text-xs text-muted-foreground">
-                {mono.currentSectionIdx + 1} of {mono.sectionsWithAudio.length} sections
+                {nowPlayingSection?.label} · {mono.currentTopicIdx + 1} of {mono.topicsWithAudio.length}
               </p>
             </>
           ) : (
@@ -317,7 +316,7 @@ function SectionGroup({
   title: string;
   sections: BriefingSection[];
   mono: ReturnType<typeof useMonologue>;
-  allSections: BriefingSection[];
+  allSections: ReturnType<typeof useMonologue>["sectionsWithAudio"];
 }) {
   if (sections.length === 0) return null;
   const anyAudio = sections.some((s) => s.audioUrl);
@@ -332,17 +331,22 @@ function SectionGroup({
 
       {/* Section rows */}
       {sections.map((section, i) => {
-        const globalIdx = allSections.findIndex((s) => s.category === section.category);
-        const isPlaying = mono.currentSectionIdx === globalIdx && mono.state === "playing";
-        const isPaused = mono.currentSectionIdx === globalIdx && mono.state === "paused";
+        const sectionIdx = allSections.findIndex((s) => s.category === section.category);
+        const isActiveSection = mono.currentSection?.category === section.category;
+        const isPlaying = isActiveSection && mono.state === "playing";
+        const isPaused  = isActiveSection && mono.state === "paused";
+        const hasAudio  = section.topics.some((t) =>
+          mono.language === "hi" ? !!t.audioUrlHi : !!t.audioUrlEn,
+        );
         return (
           <SectionRow
             key={section.category}
             section={section}
             isPlaying={isPlaying}
             isPaused={isPaused}
-            hasAudio={!!section.audioUrl}
-            onPlay={() => globalIdx >= 0 ? mono.playSection(globalIdx) : undefined}
+            hasAudio={hasAudio}
+            currentTopicId={isActiveSection ? mono.currentTopic?.id : undefined}
+            onPlay={() => sectionIdx >= 0 ? mono.playSection(sectionIdx) : undefined}
             onPause={mono.pause}
             progress={isPlaying || isPaused ? mono.progress : 0}
             showDivider={i > 0}
@@ -360,6 +364,7 @@ function SectionRow({
   isPlaying,
   isPaused,
   hasAudio,
+  currentTopicId,
   onPlay,
   onPause,
   progress,
@@ -369,6 +374,7 @@ function SectionRow({
   isPlaying: boolean;
   isPaused: boolean;
   hasAudio: boolean;
+  currentTopicId?: string;
   onPlay: () => void;
   onPause: () => void;
   progress: number;

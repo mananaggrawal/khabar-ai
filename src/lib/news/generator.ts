@@ -2,10 +2,11 @@
  * Daily briefing generator — single-pull + categorise pipeline.
  *
  *  1. Fetch TOP_FEEDS (India + multi-region global) in parallel
- *  2. Gemini categorises all headlines into sections in one call
- *  3. Each section's selected stories → Gemini search research → spoken script
- *  4. Google TTS (Gemini 3.1 Flash) synthesises audio per section
- *  5. Persist to .local-data/briefings.json
+ *  2. Gemini categorises ALL headlines (no count cap — filter noise/clickbait only)
+ *  3. Each section: Gemini search research → per-story scripts (60-80 words each)
+ *  4. Translate all scripts to Hindi (one Gemini call per section)
+ *  5. Google TTS (Gemini Flash) per story × 2 languages (EN + HI) in parallel batches
+ *  6. Persist to Supabase / .local-data/briefings.json
  */
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
@@ -27,6 +28,9 @@ export type BriefingTopic = {
   section: SectionCategory;
   sourceUrl?: string;
   sourceName?: string;
+  monologueScript?: string;  // English spoken script (per story)
+  audioUrlEn?: string;       // English TTS audio URL
+  audioUrlHi?: string;       // Hindi TTS audio URL
 };
 
 export type BriefingSection = {
@@ -35,7 +39,9 @@ export type BriefingSection = {
   emoji: string;
   group: "india" | "global";
   topics: BriefingTopic[];
+  /** @deprecated — audio is now per-topic. Kept for backwards compat. */
   monologueScript: string;
+  /** @deprecated — audio is now per-topic. Kept for backwards compat. */
   audioUrl: string;
 };
 
@@ -63,10 +69,7 @@ function parseGeminiJson(raw: string): any {
     .replace(/\s*```$/, "")
     .trim();
 
-  // Strip trailing commas before } or ]
   const stripTrailing = (s: string) => s.replace(/,(\s*[}\]])/g, "$1");
-
-  // Convert JS-style single-quoted keys/values to double-quoted JSON
   const fixQuotes = (s: string) =>
     s.replace(/(['"])?([a-zA-Z_$][a-zA-Z0-9_$]*)(['"])?\s*:/g, '"$2":')
      .replace(/:\s*'([^'\\]*(\\.[^'\\]*)*)'/g, ': "$1"');
@@ -149,10 +152,7 @@ function findSource(
     if (!best || score > best.score) best = { score, item };
   }
   if (best && best.score >= 0.35) {
-    const sourceTitle = best.item.description
-      ? best.item.description.match(/[-–]\s*([^-–\n]{3,60})\s*$/)?.[1]?.trim()
-      : undefined;
-    return { sourceUrl: best.item.link, sourceName: sourceTitle ?? best.item.source };
+    return { sourceUrl: best.item.link, sourceName: best.item.source };
   }
   return {};
 }
@@ -185,12 +185,12 @@ async function fetchAllFeeds(): Promise<{ india: RssItem[]; global: RssItem[] }>
   }
 
   return {
-    india:  dedupeByTitle(india).slice(0, 60),
-    global: dedupeByTitle(global).slice(0, 80),
+    india:  dedupeByTitle(india).slice(0, 80),
+    global: dedupeByTitle(global).slice(0, 100),
   };
 }
 
-// ─── Step 2: Categorise ──────────────────────────────────────────────────────
+// ─── Step 2: Categorise (no story count cap — filter noise only) ─────────────
 
 type CategoryPicks = Map<SectionCategory, RssItem[]>;
 
@@ -199,17 +199,13 @@ async function geminiCategorise(
   global: RssItem[],
   dateLabel: string,
 ): Promise<CategoryPicks> {
-  const indiaSections  = SECTIONS.filter((s) => s.group === "india");
-  const globalSections = SECTIONS.filter((s) => s.group === "global");
-
-  // Offset global indices so they don't clash with india indices
   const GLOBAL_OFFSET = india.length;
 
   const indiaLines  = india.map((it, i) => `${i + 1}. ${it.title}`).join("\n");
   const globalLines = global.map((it, i) => `${GLOBAL_OFFSET + i + 1}. ${it.title}`).join("\n");
 
   const sectionDefs = SECTIONS.map(
-    (s) => `  "${s.category}" — ${s.label} [${s.group}]: ${s.description} (pick up to ${s.storyCount})`,
+    (s) => `  "${s.category}" — ${s.label} [${s.group}]: ${s.description}`,
   ).join("\n");
 
   const prompt = `Today is ${dateLabel}. You are a senior news editor categorising headlines.
@@ -221,7 +217,7 @@ RULES:
 - India sections (india-*): ONLY assign stories whose primary subject is India, Indian people, or events inside India.
 - Global sections (global-*): ONLY assign non-India international stories.
 - Each story goes in AT MOST ONE section — the best fit.
-- Within each section pick the most newsworthy, varied stories up to the limit shown.
+- Include ALL newsworthy stories. Filter out ONLY: (a) obvious duplicates of the same event, (b) clickbait/gossip with no news value, (c) celebrity rumours, (d) promotional content.
 - Leave a section empty ([]) if no stories fit it well.
 
 INDIA HEADLINES (indices 1–${india.length}):
@@ -230,7 +226,7 @@ ${indiaLines}
 GLOBAL HEADLINES (indices ${GLOBAL_OFFSET + 1}–${GLOBAL_OFFSET + global.length}):
 ${globalLines}
 
-Return JSON with one key per section, value = array of 1-based indices from the lists above:
+Return JSON with one key per section, value = array of 1-based indices:
 {
   "india-national": [1, 5, 12],
   "india-business": [3, 8],
@@ -247,9 +243,7 @@ Return JSON with one key per section, value = array of 1-based indices from the 
 
   for (const [cat, indices] of Object.entries(result)) {
     if (!SECTION_MAP.has(cat as SectionCategory)) continue;
-    const cfg = SECTION_MAP.get(cat as SectionCategory)!;
     const items: RssItem[] = ((indices as number[]) ?? [])
-      .slice(0, cfg.storyCount)
       .map((n) => all[n - 1])
       .filter(Boolean);
     if (items.length > 0) picks.set(cat as SectionCategory, items);
@@ -258,20 +252,21 @@ Return JSON with one key per section, value = array of 1-based indices from the 
   return picks;
 }
 
-// ─── Step 3: Research + assemble per section ─────────────────────────────────
+// ─── Step 3: Research + per-story scripts ────────────────────────────────────
 
 async function processSection(
   cfg: SectionConfig,
   selected: RssItem[],
   dateLabel: string,
-): Promise<Omit<BriefingSection, "audioUrl">> {
+): Promise<Omit<BriefingSection, "audioUrl" | "monologueScript">> {
   const isIndia = cfg.group === "india";
 
   const entityRule = isIndia
     ? "Cover these stories from an Indian perspective."
     : `CRITICAL: Every sentence must name the specific country, institution, company, or person involved.
-NEVER say "the central bank", "the government", "the markets", or "the company" without naming WHICH one.
-Example: WRONG → "The central bank held rates." RIGHT → "The US Federal Reserve held rates."`;
+NEVER say "the central bank", "the government", "the markets", or "the company" without naming WHICH one.`;
+
+  const wordTarget = Math.max(200, selected.length * 80);
 
   // Research via Gemini search grounding
   const prose = await geminiSearch(
@@ -279,16 +274,16 @@ Example: WRONG → "The central bank held rates." RIGHT → "The US Federal Rese
 Use Google Search to find full details about each story.
 Write in spoken broadcast English — no bullet points, no markdown, no headers. Pure flowing prose.`,
     `Research ONLY the following ${cfg.label} news stories using Google Search, then write a spoken segment covering exactly these stories and no others.
-CRITICAL: Do NOT introduce, mention, or weave in any additional stories, events, companies, or people that are not in the list below. Stick strictly to what is listed.
+CRITICAL: Do NOT introduce, mention, or weave in any additional stories, events, companies, or people not in the list below.
 ${entityRule}
-Target: ~${cfg.wordTarget} words total. Cover each story with appropriate depth.
-Preserve the original headline wording. Use smooth, conversational transitions between stories.
+Target: ~${wordTarget} words total. Cover each story with appropriate depth.
+Preserve the original headline wording.
 
-Stories to cover (cover ALL of these, and ONLY these):
+Stories to cover (ALL of these, ONLY these):
 ${selected.map((it, i) => `${i + 1}. ${it.title}`).join("\n")}`,
   );
 
-  // Assemble topics + script
+  // Assemble per-story topics + individual scripts
   const assembled = await geminiJson(
     `You are Khabar AI — a sharp, warm news voice. Output strict JSON only.`,
     `Today is ${dateLabel}. Section: "${cfg.label}".
@@ -296,18 +291,19 @@ ${selected.map((it, i) => `${i + 1}. ${it.title}`).join("\n")}`,
 Pre-researched content:
 ${prose}
 
-Return JSON with exactly two keys:
-1. "topics": array of objects, one per story covered.
-   Each: { "id": "kebab-slug", "headline": "VERBATIM headline from the stories list — do NOT rephrase", "hook": "teaser ≤18 words — MUST name the specific country/institution/company", "explanation": "40-60 word summary — MUST name every country, institution, and entity by full name. Never use vague terms like 'the central bank' or 'the government' without specifying which one." }
-   IMPORTANT: headline must be copied word-for-word from the original stories list.
+Return JSON with one key:
+"topics": array of objects, one per story covered (cover ALL stories from the research).
+Each object:
+{
+  "id": "kebab-slug",
+  "headline": "VERBATIM headline from the stories list — do NOT rephrase",
+  "hook": "teaser ≤18 words — MUST name the specific country/company/person",
+  "explanation": "40-60 word summary — name every entity by full name, never use vague terms",
+  "script": "spoken script for THIS story only — 60-80 words, conversational Khabar AI voice, jump straight into the story, no greeting or sign-off, no section title announcement${!isIndia ? ", always name the specific country/institution/entity" : ""}"
+}
 
-2. "script": single STRING — the spoken script for this section.
-   ~${cfg.wordTarget} words. Pure flowing prose. Jump straight into the first story — no greeting, no "good morning/evening", no "welcome to Khabar AI", no section title announcement.
-   CRITICAL: Cover ONLY the stories listed in the topics array above — do NOT introduce, reference, or mention any additional stories, companies, events, or people that are not in the topics list.
-   Transition between stories naturally mid-flow, the way a friend would — not with "moving on" or "next up" markers.
-   Do NOT end with a closing line or sign-off. Just finish the last story and stop — the next section will continue seamlessly.
-   NO markdown, NO headers, NO bullet points.
-   ${!isIndia ? "ALWAYS name the specific country, institution, or entity in every sentence — never leave the listener guessing which bank, government, or market you mean." : ""}`,
+IMPORTANT: headline must be copied word-for-word from the original stories list.
+Cover ALL stories from the research, not just a subset.`,
   );
 
   const rawTopics: any[] = Array.isArray(assembled.topics) ? assembled.topics : [];
@@ -317,16 +313,12 @@ Return JSON with exactly two keys:
     hook: String(t.hook ?? ""),
     explanation: String(t.explanation ?? ""),
     section: cfg.category,
+    monologueScript: String(t.script ?? t.monologueScript ?? ""),
     ...findSource(
       { headline: String(t.headline ?? ""), hook: String(t.hook ?? ""), explanation: String(t.explanation ?? "") },
       selected,
     ),
   }));
-
-  const monologueScript =
-    typeof assembled.script === "string" && assembled.script.length > 50
-      ? assembled.script
-      : prose;
 
   return {
     category: cfg.category,
@@ -334,8 +326,63 @@ Return JSON with exactly two keys:
     emoji: cfg.emoji,
     group: cfg.group,
     topics,
-    monologueScript,
   };
+}
+
+// ─── Step 4: Translate scripts to Hindi ──────────────────────────────────────
+
+async function translateSectionScripts(
+  topics: BriefingTopic[],
+): Promise<Map<string, string>> {
+  const withScripts = topics.filter((t) => t.monologueScript);
+  if (withScripts.length === 0) return new Map();
+
+  const inputJson = Object.fromEntries(
+    withScripts.map((t) => [t.id, t.monologueScript!]),
+  );
+
+  try {
+    const result = await geminiJson(
+      "You are a professional Hindi translator. Output strict JSON only.",
+      `Translate each of these English news scripts to natural, conversational Hindi.
+
+RULES:
+- Keep proper nouns (person names, place names, company names, organization names) in English as-is
+- Numbers and dates can stay in English
+- The tone should be warm and conversational — like a friend sharing news, not a formal broadcaster
+- Each translation should be roughly the same length as the original
+
+Return JSON with the same keys as input, values replaced with Hindi translations:
+${JSON.stringify(inputJson, null, 2)}`,
+    );
+
+    return new Map(
+      Object.entries(result).map(([id, text]) => [id, String(text)]),
+    );
+  } catch (err: any) {
+    console.warn(`[generator] Hindi translation failed: ${err.message}`);
+    return new Map();
+  }
+}
+
+// ─── Step 5: TTS with parallelisation ────────────────────────────────────────
+
+async function batchRun<T, R>(
+  items: T[],
+  fn: (item: T) => Promise<R>,
+  concurrency = 5,
+  delayMs = 800,
+): Promise<(R | null)[]> {
+  const results: (R | null)[] = [];
+  for (let i = 0; i < items.length; i += concurrency) {
+    const batch = items.slice(i, i + concurrency);
+    const batchResults = await Promise.allSettled(batch.map(fn));
+    results.push(...batchResults.map((r) => (r.status === "fulfilled" ? r.value : null)));
+    if (i + concurrency < items.length) {
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  return results;
 }
 
 // ─── Local DB ────────────────────────────────────────────────────────────────
@@ -376,6 +423,9 @@ function normalizeBriefing(raw: any): DailyBriefing {
     section: cat,
     sourceUrl: t.sourceUrl ?? t.source_url,
     sourceName: t.sourceName ?? t.source_name,
+    monologueScript: t.monologueScript ?? "",
+    audioUrlEn: t.audioUrlEn,
+    audioUrlHi: t.audioUrlHi,
   });
   const sections: BriefingSection[] = [
     {
@@ -417,7 +467,6 @@ export async function getTodayBriefing(): Promise<DailyBriefing | null> {
 
 export async function getLatestBriefing(): Promise<DailyBriefing | null> {
   if (!LOCAL_MODE) {
-    // Try today first, then yesterday (up to 3 days back)
     for (let i = 0; i < 3; i++) {
       const d = new Date();
       d.setDate(d.getDate() - i);
@@ -454,20 +503,20 @@ export async function generateDailyBriefing(logger: Logger = () => {}): Promise<
   const { india, global } = await fetchAllFeeds();
   log(`Fetched ${india.length} India + ${global.length} global headlines`);
 
-  // Step 2: Categorise in one Gemini call
+  // Step 2: Categorise (no story count cap)
   log(`Categorising headlines into ${SECTIONS.length} sections…`);
   const picks = await geminiCategorise(india, global, dateLabel);
   for (const [cat, items] of picks) {
     log(`  ${cat}: ${items.length} ${items.length === 1 ? "story" : "stories"} selected`);
   }
 
-  // Step 3: Research + assemble (parallel Gemini calls per section)
-  log(`Researching ${picks.size} sections in parallel (Gemini + web search)…`);
+  // Step 3: Research + per-story scripts (parallel per section)
+  log(`Researching ${picks.size} sections in parallel…`);
   const sectionEntries = [...picks.entries()];
   const sectionResults = await Promise.all(
     sectionEntries.map(([cat, items]) => {
       const cfg = SECTION_MAP.get(cat)!;
-      log(`  Research started: ${cfg.label}`);
+      log(`  Research started: ${cfg.label} (${items.length} stories)`);
       return processSection(cfg, items, dateLabel)
         .then((result) => {
           log(`  Research done: ${cfg.label} — ${result.topics.length} topics`);
@@ -475,13 +524,12 @@ export async function generateDailyBriefing(logger: Logger = () => {}): Promise<
         })
         .catch((err) => {
           log(`  Research failed: ${cat} — ${err.message}`);
-          console.error(`[generator] section ${cat} failed:`, err.message);
           return null;
         });
     }),
   );
 
-  // Cross-section dedup — remove repeated headlines across sections
+  // Cross-section dedup
   const seenHeadlines = new Set<string>();
   const dedupedResults = sectionResults.map((data) => {
     if (!data) return null;
@@ -494,23 +542,78 @@ export async function generateDailyBriefing(logger: Logger = () => {}): Promise<
     return unique.length > 0 ? { ...data, topics: unique } : null;
   });
 
-  // Step 4: TTS — sequential to stay within rate limits
+  const totalTopics = dedupedResults.reduce((n, d) => n + (d?.topics.length ?? 0), 0);
+  log(`Total stories after dedup: ${totalTopics}`);
+
+  // Step 4: Translate all section scripts to Hindi (parallel per section)
+  log(`Translating ${totalTopics} story scripts to Hindi…`);
+  const hindiMaps = await Promise.all(
+    dedupedResults.map((data) =>
+      data ? translateSectionScripts(data.topics) : Promise.resolve(new Map<string, string>()),
+    ),
+  );
+
+  // Step 5: TTS per story — collect all EN + HI jobs then run in batches
+  type TtsJob = {
+    text: string;
+    filename: string;
+    language: "en" | "hi";
+    sectionIdx: number;
+    topicIdx: number;
+  };
+
+  const jobs: TtsJob[] = [];
+  dedupedResults.forEach((data, sectionIdx) => {
+    if (!data) return;
+    const hindiMap = hindiMaps[sectionIdx];
+    data.topics.forEach((topic, topicIdx) => {
+      if (topic.monologueScript) {
+        const base = `briefing-${date}-${data.category}-${topic.id}`;
+        jobs.push({ text: topic.monologueScript, filename: `${base}-en`, language: "en", sectionIdx, topicIdx });
+        const hiScript = hindiMap.get(topic.id);
+        if (hiScript) {
+          jobs.push({ text: hiScript, filename: `${base}-hi`, language: "hi", sectionIdx, topicIdx });
+        }
+      }
+    });
+  });
+
+  log(`Running TTS for ${jobs.length} audio files (EN + HI)…`);
+
+  // Store results keyed by "sectionIdx-topicIdx-language"
+  const audioResults = new Map<string, string>();
+
+  await batchRun(
+    jobs,
+    async (job) => {
+      try {
+        const url = await googleTTS(job.text, job.filename, job.language);
+        audioResults.set(`${job.sectionIdx}-${job.topicIdx}-${job.language}`, url);
+        log(`  TTS done: ${job.filename}`);
+      } catch (err: any) {
+        log(`  TTS failed: ${job.filename} — ${err.message}`);
+      }
+    },
+    5,  // 5 concurrent TTS calls
+    800, // 800ms between batches
+  );
+
+  // Assemble final sections with audio URLs on topics
   const sections: BriefingSection[] = [];
-  let ttsIndex = 0;
-  for (const data of dedupedResults) {
-    if (!data) continue;
-    ttsIndex++;
-    log(`TTS ${ttsIndex}/${dedupedResults.filter(Boolean).length}: ${data.label}…`);
-    try {
-      const audioUrl = await googleTTS(data.monologueScript, `briefing-${date}-${data.category}`);
-      sections.push({ ...data, audioUrl });
-      log(`  TTS done: ${data.label}`);
-    } catch (err: any) {
-      log(`  TTS failed: ${data.label} — ${err.message}`);
-      console.error(`[generator] TTS failed for ${data.category}:`, err.message);
-      sections.push({ ...data, audioUrl: "" });
-    }
-  }
+  dedupedResults.forEach((data, sectionIdx) => {
+    if (!data) return;
+    const topicsWithAudio: BriefingTopic[] = data.topics.map((topic, topicIdx) => ({
+      ...topic,
+      audioUrlEn: audioResults.get(`${sectionIdx}-${topicIdx}-en`),
+      audioUrlHi: audioResults.get(`${sectionIdx}-${topicIdx}-hi`),
+    }));
+    sections.push({
+      ...data,
+      topics: topicsWithAudio,
+      monologueScript: "",  // deprecated — audio is per-topic now
+      audioUrl: "",         // deprecated — audio is per-topic now
+    });
+  });
 
   const briefing: DailyBriefing = {
     id: `briefing-${date}`,

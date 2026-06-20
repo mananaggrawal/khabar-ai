@@ -36,7 +36,7 @@ function getKey() {
 // Per Google docs, label the transcript section clearly to avoid the model
 // reading the instructions aloud.
 
-const STYLE_INSTRUCTIONS = `# AUDIO PROFILE: Khabar AI — Daily News Briefing
+const STYLE_INSTRUCTIONS_EN = `# AUDIO PROFILE: Khabar AI — Daily News Briefing
 
 ## THE SCENE
 A quiet, well-lit home studio. One person preparing to share today's news with a friend over the phone. Warm, unhurried, human.
@@ -68,10 +68,31 @@ Never: Sound robotic, overly dramatic, like a presenter, or like you're performi
 ### TRANSCRIPT
 `;
 
+const STYLE_INSTRUCTIONS_HI = `# AUDIO PROFILE: Khabar AI — दैनिक समाचार
+
+## THE SCENE
+एक शांत होम स्टूडियो। एक पढ़ा-लिखा दोस्त जो आज की ख़बरें किसी क़रीबी को फ़ोन पर बता रहा हो।
+
+### DIRECTOR'S NOTES
+
+Style: एक समझदार, जानकार दोस्त की तरह बोलें जो आज की ख़बरें share कर रहा हो — न news anchor की तरह, न AI की तरह। गर्मजोशी, स्वाभाविकता, भरोसा।
+
+Pacing: जल्दबाज़ी नहीं। स्वाभाविक हिंदी की रफ़्तार। महत्वपूर्ण तथ्यों के बाद थोड़ा रुकें।
+
+Proper nouns: नाम, जगह, कंपनियाँ, organizations — इन्हें अंग्रेज़ी में ही बोलें जैसा वो naturally बोले जाते हैं।
+
+Tone: तथ्यों पर ध्यान दें। Dramatic नहीं।
+
+Never: Robotic, overly formal news anchor style, या performance जैसा न लगे।
+
+### TRANSCRIPT
+`;
+
 // ── Synthesis ─────────────────────────────────────────────────────────────────
 
-async function synthesize(text: string): Promise<Buffer> {
-  const fullPrompt = STYLE_INSTRUCTIONS + text;
+async function synthesize(text: string, language: 'en' | 'hi' = 'en'): Promise<Buffer> {
+  const styleInstructions = language === 'hi' ? STYLE_INSTRUCTIONS_HI : STYLE_INSTRUCTIONS_EN;
+  const fullPrompt = styleInstructions + text;
 
   const res = await fetch(GEMINI_TTS_URL(getKey()), {
     method: "POST",
@@ -134,11 +155,11 @@ function pcmToWav(pcm: Buffer): Buffer {
 // Gemini TTS occasionally returns text tokens instead of audio (500 error).
 // Docs recommend automated retry logic.
 
-async function synthesizeWithRetry(text: string, maxAttempts = 3): Promise<Buffer> {
+async function synthesizeWithRetry(text: string, language: 'en' | 'hi' = 'en', maxAttempts = 3): Promise<Buffer> {
   let lastErr: Error | null = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      return await synthesize(text);
+      return await synthesize(text, language);
     } catch (err: any) {
       lastErr = err;
       console.warn(`[tts] attempt ${attempt}/${maxAttempts} failed: ${err.message}`);
@@ -155,10 +176,10 @@ async function synthesizeWithRetry(text: string, maxAttempts = 3): Promise<Buffe
  * Returns the public URL path e.g. "/audio/briefing-2026-06-18-india-national.wav"
  * Exported as `googleTTS` to keep the rest of the codebase unchanged.
  */
-export async function googleTTS(text: string, filename: string): Promise<string> {
-  console.log(`[tts] ${filename}: ${text.length} chars, voice=${VOICE}`);
+export async function googleTTS(text: string, filename: string, language: 'en' | 'hi' = 'en'): Promise<string> {
+  console.log(`[tts] ${filename} (${language}): ${text.length} chars, voice=${VOICE}`);
 
-  const pcm = await synthesizeWithRetry(text);
+  const pcm = await synthesizeWithRetry(text, language);
   const wav = pcmToWav(pcm);
   const durationSec = (pcm.length / 2 / SAMPLE_RATE).toFixed(1);
 
