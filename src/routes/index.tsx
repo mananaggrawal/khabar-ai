@@ -266,7 +266,7 @@ function HomePage() {
               <div
                 className="mx-4 mb-4 relative overflow-hidden rounded-3xl"
                 style={{
-                  height: 240,
+                  height: 190,
                   background: bgImage
                     ? undefined
                     : "linear-gradient(135deg, oklch(0.18 0.05 295) 0%, oklch(0.28 0.14 300) 50%, oklch(0.20 0.10 310) 100%)",
