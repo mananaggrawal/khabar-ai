@@ -42,10 +42,11 @@ function GoogleLogo() {
 
 function PerplexityLogo() {
   return (
-    <svg viewBox="0 0 24 24" className="size-5" xmlns="http://www.w3.org/2000/svg" fill="currentColor">
-      <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
-      <path d="M13.5 4.5v15M10.5 4.5v15M7 6.5l5-2.5 5 2.5M7 17.5l5 2.5 5-2.5" stroke="currentColor" strokeWidth="1.2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
-    </svg>
+    <img
+      src="https://www.perplexity.ai/favicon.png"
+      alt="Perplexity"
+      className="size-5 rounded-sm"
+    />
   );
 }
 
