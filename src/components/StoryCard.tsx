@@ -135,9 +135,6 @@ export function StoryCard({ story, isPlaying, hasAudio, onPlay, onPause, onTap }
         <p className="text-sm font-medium leading-snug text-foreground line-clamp-2">
           {story.title}
         </p>
-        <p className="mt-0.5 text-[11px] text-muted-foreground/60">
-          {timeAgo(story.publishedAt)}
-        </p>
       </div>
 
       {/* Play / pause — right circle */}
