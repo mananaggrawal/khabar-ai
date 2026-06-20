@@ -5,7 +5,7 @@
  *  1. Fetch 10 Google News topic feeds in parallel
  *  2. Parse + deduplicate stories (URL-hash + title-prefix)
  *  3. Batch-generate spoken scripts via Gemini Flash (20 stories / call, EN+HI together)
- *  4. TTS per story × 2 languages via Gemini TTS
+ *  4. Batch TTS: merge BATCH_SIZE stories per call, split at silence boundaries
  *  5. Save flat DailyBriefing { stories[] } to Supabase Storage
  */
 
@@ -14,7 +14,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fetchRss, type RssItem } from "./rss";
 import { FEEDS, FEED_MAP, DEFAULT_CITY, type SectionId } from "./sources";
-import { googleTTS } from "@/lib/tts/google";
+import { googleTTSBatch, TTS_BATCH_SIZE } from "@/lib/tts/google";
 import { saveBriefingToStorage, loadBriefingFromStorage } from "@/lib/supabase-storage";
 
 const LOCAL_MODE = process.env.LOCAL_MODE === "true";
@@ -315,63 +315,70 @@ async function generateAllScripts(stories: Story[], logger: Logger): Promise<Sto
   return updated;
 }
 
-// ─── Step 4: TTS ──────────────────────────────────────────────────────────────
-
-type TtsJob = {
-  storyIdx: number;
-  language: "en" | "hi";
-  text: string;
-  filename: string;
-};
-
-async function batchRun<T>(
-  items: T[],
-  fn: (item: T) => Promise<void>,
-  concurrency = 2,
-  delayMs = 1200,
-): Promise<void> {
-  for (let i = 0; i < items.length; i += concurrency) {
-    await Promise.allSettled(items.slice(i, i + concurrency).map(fn));
-    if (i + concurrency < items.length) {
-      await new Promise((r) => setTimeout(r, delayMs));
-    }
-  }
-}
+// ─── Step 4: TTS (batch mode) ─────────────────────────────────────────────────
+//
+// Merges BATCH_SIZE stories into one TTS call, then splits at silence
+// boundaries. Reduces API calls from (stories × 2) to ceil(stories/BATCH) × 2.
+// Example: 400 stories → 54 calls instead of 800.
 
 async function generateAllTTS(
   stories: Story[],
   date: string,
   logger: Logger,
 ): Promise<Story[]> {
-  const jobs: TtsJob[] = [];
-  stories.forEach((story, idx) => {
-    const safeId = story.id.slice(0, 16);
-    if (story.scriptEn) {
-      jobs.push({ storyIdx: idx, language: "en", text: story.scriptEn, filename: `${date}-${safeId}-en` });
-    }
-    if (story.scriptHi) {
-      jobs.push({ storyIdx: idx, language: "hi", text: story.scriptHi, filename: `${date}-${safeId}-hi` });
-    }
-  });
-
-  logger(`TTS: ${jobs.length} files for ${stories.length} stories…`);
   const updated = stories.map((s) => ({ ...s }));
 
-  await batchRun(
-    jobs,
-    async (job) => {
-      try {
-        const url = await googleTTS(job.text, job.filename, job.language);
-        if (job.language === "en") updated[job.storyIdx].audioUrlEn = url;
-        else updated[job.storyIdx].audioUrlHi = url;
-        logger(`  ✓ ${job.filename}`);
-      } catch (err: any) {
-        logger(`  ✗ ${job.filename}: ${err.message}`);
+  type TtsItem = { text: string; filename: string; storyIdx: number };
+
+  // Build per-language item lists
+  const enItems: TtsItem[] = [];
+  const hiItems: TtsItem[] = [];
+  stories.forEach((story, idx) => {
+    const safeId = story.id.slice(0, 16);
+    if (story.scriptEn) enItems.push({ text: story.scriptEn, filename: `${date}-${safeId}-en`, storyIdx: idx });
+    if (story.scriptHi) hiItems.push({ text: story.scriptHi, filename: `${date}-${safeId}-hi`, storyIdx: idx });
+  });
+
+  const totalFiles  = enItems.length + hiItems.length;
+  const enBatches   = Math.ceil(enItems.length / TTS_BATCH_SIZE);
+  const hiBatches   = Math.ceil(hiItems.length / TTS_BATCH_SIZE);
+  logger(`TTS: ${totalFiles} files → ${enBatches + hiBatches} batch calls (${TTS_BATCH_SIZE} stories/batch)…`);
+
+  /** Process one language stream sequentially, batch by batch. */
+  async function processStream(items: TtsItem[], lang: "en" | "hi") {
+    const total = Math.ceil(items.length / TTS_BATCH_SIZE);
+    for (let b = 0; b < items.length; b += TTS_BATCH_SIZE) {
+      const batch    = items.slice(b, b + TTS_BATCH_SIZE);
+      const batchNum = Math.floor(b / TTS_BATCH_SIZE) + 1;
+      logger(`  TTS ${lang.toUpperCase()} batch ${batchNum}/${total} (${batch.length} stories)…`);
+
+      const urls = await googleTTSBatch(
+        batch.map(item => ({ text: item.text, filename: item.filename })),
+        lang,
+      );
+
+      urls.forEach((url, j) => {
+        if (url) {
+          if (lang === "en") updated[batch[j].storyIdx].audioUrlEn = url;
+          else               updated[batch[j].storyIdx].audioUrlHi = url;
+          logger(`    ✓ ${batch[j].filename}`);
+        } else {
+          logger(`    ✗ ${batch[j].filename}: no audio`);
+        }
+      });
+
+      // Brief pause between batches to avoid per-minute rate limits
+      if (b + TTS_BATCH_SIZE < items.length) {
+        await new Promise(r => setTimeout(r, 1_500));
       }
-    },
-    2,    // 2 concurrent TTS calls (rate-limit safe)
-    1200, // 1.2s between batches
-  );
+    }
+  }
+
+  // Run EN and HI streams in parallel — independent, no shared state
+  await Promise.all([
+    processStream(enItems, "en"),
+    processStream(hiItems, "hi"),
+  ]);
 
   return updated;
 }

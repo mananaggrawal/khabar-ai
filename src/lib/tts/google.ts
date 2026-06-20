@@ -1,11 +1,12 @@
 /**
- * Gemini 3.1 Flash TTS — natural language style control.
- * Voice: Algieba (Smooth, Indian English)
- * Output: PCM → WAV, saved to public/audio/
+ * Gemini TTS — single-story and batch synthesis.
  *
- * Pricing (paid tier): $1.00/1M input tokens · $20.00/1M audio output tokens
- * (25 audio tokens/sec → ~$0.03 per minute of speech)
- * Free tier: no charge, rate-limited.
+ * Batch mode merges N story scripts into one API call, splits the resulting
+ * PCM at silence boundaries, and saves individual WAVs. This keeps daily API
+ * call counts well under quota regardless of story count.
+ *
+ * Voice: Algieba (Smooth — Indian English)
+ * Output: 16-bit signed LE PCM @ 24 kHz → WAV
  */
 
 import { writeFile, mkdir } from "node:fs/promises";
@@ -16,25 +17,20 @@ const LOCAL_MODE = process.env.LOCAL_MODE === "true";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const MODEL   = "gemini-3.1-flash-tts-preview";
-const VOICE   = "Algieba";   // Smooth — Indian English
-const SAMPLE_RATE = 24000;   // Hz (Gemini TTS always outputs 24kHz PCM)
+const MODEL       = "gemini-3.1-flash-tts-preview";
+const VOICE       = "Algieba";
+const SAMPLE_RATE = 24_000; // Hz — Gemini TTS always outputs 24 kHz PCM
 
 const GEMINI_TTS_URL = (key: string) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${key}`;
 
-function getKey() {
+function getKey(): string {
   const k = process.env.GEMINI_API_KEY;
   if (!k) throw new Error("GEMINI_API_KEY is not set");
   return k;
 }
 
-// ── Style prompt ──────────────────────────────────────────────────────────────
-//
-// Gemini TTS is "controllable" — style instructions embedded in the content
-// tell the model HOW to speak the transcript.
-// Per Google docs, label the transcript section clearly to avoid the model
-// reading the instructions aloud.
+// ── Style instructions ────────────────────────────────────────────────────────
 
 const STYLE_INSTRUCTIONS_EN = `# AUDIO PROFILE: Khabar AI — Daily News Briefing
 
@@ -88,125 +84,303 @@ Never: Robotic, overly formal news anchor style, या performance जैसा
 ### TRANSCRIPT
 `;
 
-// ── Synthesis ─────────────────────────────────────────────────────────────────
+// ── Core synthesis ────────────────────────────────────────────────────────────
 
-async function synthesize(text: string, language: 'en' | 'hi' = 'en'): Promise<Buffer> {
-  const styleInstructions = language === 'hi' ? STYLE_INSTRUCTIONS_HI : STYLE_INSTRUCTIONS_EN;
-  const fullPrompt = styleInstructions + text;
-
+async function synthesizeRaw(prompt: string): Promise<Buffer> {
   const res = await fetch(GEMINI_TTS_URL(getKey()), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      contents: [{ parts: [{ text: fullPrompt }], role: "user" }],
+      contents: [{ parts: [{ text: prompt }], role: "user" }],
       generationConfig: {
         responseModalities: ["AUDIO"],
         speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: VOICE },
-          },
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } },
         },
       },
     }),
   });
 
   if (!res.ok) {
-    const errBody = (await res.text()).slice(0, 400);
-    throw new Error(`Gemini TTS ${res.status}: ${errBody}`);
+    const body = (await res.text()).slice(0, 400);
+    throw new Error(`Gemini TTS ${res.status}: ${body}`);
   }
 
   const data = await res.json();
   const part = data.candidates?.[0]?.content?.parts?.[0];
   if (!part?.inlineData?.data) {
-    throw new Error(`Gemini TTS: no audio data in response. Finish reason: ${data.candidates?.[0]?.finishReason}`);
+    throw new Error(
+      `Gemini TTS: no audio in response. Finish reason: ${data.candidates?.[0]?.finishReason}`,
+    );
   }
   return Buffer.from(part.inlineData.data, "base64");
 }
 
-// ── PCM → WAV ─────────────────────────────────────────────────────────────────
-// Gemini TTS returns raw 16-bit signed little-endian PCM at 24kHz.
-// Wrap it in a standard WAV header so browsers can play it.
-
-function pcmToWav(pcm: Buffer): Buffer {
-  const dataSize   = pcm.length;
-  const byteRate   = SAMPLE_RATE * 1 * 2; // sampleRate × channels × bytesPerSample
-  const blockAlign = 1 * 2;               // channels × bytesPerSample
-  const wav        = Buffer.alloc(44 + dataSize);
-
-  wav.write("RIFF",   0, "ascii");
-  wav.writeUInt32LE(36 + dataSize, 4);
-  wav.write("WAVE",   8, "ascii");
-  wav.write("fmt ",  12, "ascii");
-  wav.writeUInt32LE(16,           16); // PCM chunk size
-  wav.writeUInt16LE(1,            20); // PCM format
-  wav.writeUInt16LE(1,            22); // mono
-  wav.writeUInt32LE(SAMPLE_RATE,  24);
-  wav.writeUInt32LE(byteRate,     28);
-  wav.writeUInt16LE(blockAlign,   32);
-  wav.writeUInt16LE(16,           34); // 16-bit
-  wav.write("data",  36, "ascii");
-  wav.writeUInt32LE(dataSize,     40);
-  pcm.copy(wav, 44);
-
-  return wav;
-}
-
-// ── Retry wrapper ─────────────────────────────────────────────────────────────
-// Gemini TTS occasionally returns text tokens instead of audio (500 error).
-// Docs recommend automated retry logic.
-
-async function synthesizeWithRetry(text: string, language: 'en' | 'hi' = 'en', maxAttempts = 4): Promise<Buffer> {
+/** Retry wrapper — bails immediately on daily quota errors. */
+async function synthesizeWithRetry(
+  prompt: string,
+  tag: string,
+  maxAttempts = 4,
+): Promise<Buffer> {
   let lastErr: Error | null = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      return await synthesize(text, language);
+      return await synthesizeRaw(prompt);
     } catch (err: any) {
       lastErr = err;
       const msg: string = err.message ?? "";
-      const is429 = msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED");
-      // Daily quota exhausted — retrying won't help, bail immediately
-      const isDailyQuota = msg.includes("per_day") || msg.includes("per_model_per_day");
-      console.warn(`[tts] attempt ${attempt}/${maxAttempts} failed${is429 ? " (rate limit)" : ""}: ${msg}`);
-      if (isDailyQuota) {
-        console.warn("[tts] daily quota exhausted — skipping retries");
-        break;
-      }
+      const isDaily = msg.includes("per_day") || msg.includes("per_model_per_day");
+      const is429   = msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED");
+      console.warn(`[tts] ${tag} attempt ${attempt}/${maxAttempts}: ${msg.slice(0, 120)}`);
+      if (isDaily) { console.warn("[tts] daily quota exhausted — aborting retries"); break; }
       if (attempt < maxAttempts) {
-        // Transient 429 = per-minute rate limit: back off (10s, 20s)
-        const delay = is429 ? 10_000 * attempt : 1000 * attempt;
-        console.warn(`[tts] waiting ${delay / 1000}s before retry…`);
-        await new Promise((r) => setTimeout(r, delay));
+        await new Promise(r => setTimeout(r, is429 ? 10_000 * attempt : 1_500 * attempt));
       }
     }
   }
   throw lastErr!;
 }
 
-// ── Public API ────────────────────────────────────────────────────────────────
+// ── PCM → WAV ─────────────────────────────────────────────────────────────────
 
-/**
- * Synthesise `text` → WAV saved at public/audio/{filename}.wav
- * Returns the public URL path e.g. "/audio/briefing-2026-06-18-india-national.wav"
- * Exported as `googleTTS` to keep the rest of the codebase unchanged.
- */
-export async function googleTTS(text: string, filename: string, language: 'en' | 'hi' = 'en'): Promise<string> {
-  console.log(`[tts] ${filename} (${language}): ${text.length} chars, voice=${VOICE}`);
+function pcmToWav(pcm: Buffer): Buffer {
+  const dataSize   = pcm.length;
+  const byteRate   = SAMPLE_RATE * 1 * 2;
+  const blockAlign = 1 * 2;
+  const wav        = Buffer.alloc(44 + dataSize);
+  wav.write("RIFF",  0, "ascii"); wav.writeUInt32LE(36 + dataSize,  4);
+  wav.write("WAVE",  8, "ascii"); wav.write("fmt ", 12, "ascii");
+  wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1,  20); wav.writeUInt16LE(1,  22);
+  wav.writeUInt32LE(SAMPLE_RATE, 24); wav.writeUInt32LE(byteRate, 28);
+  wav.writeUInt16LE(blockAlign,  32); wav.writeUInt16LE(16, 34);
+  wav.write("data", 36, "ascii"); wav.writeUInt32LE(dataSize, 40);
+  pcm.copy(wav, 44);
+  return wav;
+}
 
-  const pcm = await synthesizeWithRetry(text, language);
-  const wav = pcmToWav(pcm);
-  const durationSec = (pcm.length / 2 / SAMPLE_RATE).toFixed(1);
+// ── WAV save / upload ─────────────────────────────────────────────────────────
 
+async function saveWav(wav: Buffer, filename: string): Promise<string> {
+  const durationSec = ((wav.length - 44) / 2 / SAMPLE_RATE).toFixed(1);
+  const kb = (wav.length / 1024).toFixed(0);
   if (LOCAL_MODE) {
-    // Local dev — write to public/audio/ (served by Vite)
-    const audioDir = join(process.cwd(), "public", "audio");
-    await mkdir(audioDir, { recursive: true });
-    await writeFile(join(audioDir, `${filename}.wav`), wav);
-    console.log(`[tts] saved local ${filename}.wav — ${(wav.length / 1024).toFixed(0)} KB, ~${durationSec}s`);
+    const dir = join(process.cwd(), "public", "audio");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, `${filename}.wav`), wav);
+    console.log(`[tts] saved ${filename}.wav — ${kb}KB ~${durationSec}s`);
     return `/audio/${filename}.wav`;
   }
-
-  // Production — upload to Supabase Storage
   const url = await uploadAudio(`${filename}.wav`, wav);
-  console.log(`[tts] uploaded ${filename}.wav to storage — ${(wav.length / 1024).toFixed(0)} KB, ~${durationSec}s`);
+  console.log(`[tts] uploaded ${filename}.wav — ${kb}KB ~${durationSec}s`);
   return url;
+}
+
+// ── Single-story public API ───────────────────────────────────────────────────
+
+export async function googleTTS(
+  text: string,
+  filename: string,
+  language: "en" | "hi" = "en",
+): Promise<string> {
+  const style = language === "hi" ? STYLE_INSTRUCTIONS_HI : STYLE_INSTRUCTIONS_EN;
+  const pcm = await synthesizeWithRetry(style + text, filename);
+  return saveWav(pcmToWav(pcm), filename);
+}
+
+// ── Batch TTS ─────────────────────────────────────────────────────────────────
+//
+// Merges N story scripts into one API call, splits the resulting PCM at the
+// N-1 longest silence regions, and saves individual WAV files.
+//
+// API call count: ceil(stories / BATCH_SIZE) × 2 languages
+// Example: 400 stories → 27 batches × 2 = 54 calls (vs. 800 individual calls)
+
+/** Stories per batch call — ~60 s of audio per call at ~4 s/story. */
+export const TTS_BATCH_SIZE = 15;
+
+/** Text injected between stories; produces ~1 s silence in TTS output. */
+const BATCH_SEPARATOR = "\n---\n";
+
+// Silence-detection constants
+const SILENCE_RMS_THRESHOLD    = 400;  // amplitude floor  (0 – 32 767)
+const MIN_SILENCE_MS           = 300;  // shortest qualifying silence
+const ANALYSIS_WINDOW_MS       = 10;   // RMS window
+
+const MIN_SILENCE_SAMPLES      = Math.floor(SAMPLE_RATE * MIN_SILENCE_MS    / 1000); // 7 200
+const ANALYSIS_WINDOW_SAMPLES  = Math.floor(SAMPLE_RATE * ANALYSIS_WINDOW_MS / 1000); //   240
+
+interface SilentRegion {
+  startSample: number;
+  endSample:   number;
+  durationMs:  number;
+}
+
+/** Scan PCM and return all contiguous silent runs ≥ MIN_SILENCE_MS. */
+function findSilentRegions(pcm: Buffer): SilentRegion[] {
+  const numSamples = Math.floor(pcm.length / 2);
+  const regions: SilentRegion[] = [];
+  let silenceStart = -1;
+
+  for (let s = 0; s + ANALYSIS_WINDOW_SAMPLES <= numSamples; s += ANALYSIS_WINDOW_SAMPLES) {
+    let sum = 0;
+    for (let j = 0; j < ANALYSIS_WINDOW_SAMPLES; j++) {
+      const v = pcm.readInt16LE((s + j) * 2);
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / ANALYSIS_WINDOW_SAMPLES);
+
+    if (rms < SILENCE_RMS_THRESHOLD) {
+      if (silenceStart < 0) silenceStart = s;
+    } else {
+      if (silenceStart >= 0) {
+        const dur = s - silenceStart;
+        if (dur >= MIN_SILENCE_SAMPLES) {
+          regions.push({
+            startSample: silenceStart,
+            endSample:   s,
+            durationMs:  Math.round(dur / SAMPLE_RATE * 1_000),
+          });
+        }
+        silenceStart = -1;
+      }
+    }
+  }
+  // Trailing silence
+  if (silenceStart >= 0) {
+    const dur = numSamples - silenceStart;
+    if (dur >= MIN_SILENCE_SAMPLES) {
+      regions.push({
+        startSample: silenceStart,
+        endSample:   numSamples,
+        durationMs:  Math.round(dur / SAMPLE_RATE * 1_000),
+      });
+    }
+  }
+  return regions;
+}
+
+/**
+ * Split `pcm` into `storyCount` segments using the N-1 longest silence regions
+ * as cut points. Returns null if splitting is not possible (triggers fallback).
+ */
+function splitPcmAtSilences(pcm: Buffer, storyCount: number): Buffer[] | null {
+  if (storyCount === 1) return [pcm];
+
+  const needed  = storyCount - 1;
+  const regions = findSilentRegions(pcm);
+
+  if (regions.length < needed) {
+    console.warn(`[tts:split] need ${needed} boundaries, found ${regions.length} — fallback`);
+    return null;
+  }
+
+  // Pick the N-1 longest silences, sort them back into timeline order
+  const cuts = [...regions]
+    .sort((a, b) => b.durationMs - a.durationMs)
+    .slice(0, needed)
+    .sort((a, b) => a.startSample - b.startSample)
+    .map(r => Math.floor((r.startSample + r.endSample) / 2) * 2); // byte offset at midpoint
+
+  // Validate: every segment must be ≥ 0.3 s (14 400 bytes at 24 kHz 16-bit)
+  const MIN_SEG_BYTES = SAMPLE_RATE * 2 * 0.3;
+  const edges = [0, ...cuts, pcm.length];
+  for (let i = 0; i < edges.length - 1; i++) {
+    if (edges[i + 1] - edges[i] < MIN_SEG_BYTES) {
+      console.warn(`[tts:split] segment ${i} too short (${edges[i+1]-edges[i]} bytes) — fallback`);
+      return null;
+    }
+  }
+
+  return edges.slice(0, -1).map((start, i) => pcm.subarray(start, edges[i + 1]));
+}
+
+/** Build merged prompt with batch-mode instructions. */
+function buildBatchPrompt(texts: string[], language: "en" | "hi"): string {
+  const base = language === "hi" ? STYLE_INSTRUCTIONS_HI : STYLE_INSTRUCTIONS_EN;
+
+  const batchNote =
+    `\nThis recording contains ${texts.length} independent news stories ` +
+    `separated by "---". At each "---", pause silently for 1 second. ` +
+    `Do NOT speak "---" aloud. Do NOT add transitions between stories.\n`;
+
+  // Inject note right before the TRANSCRIPT marker
+  const instructions = base.replace("### TRANSCRIPT\n", `### TRANSCRIPT${batchNote}`);
+  return instructions + texts.join(BATCH_SEPARATOR);
+}
+
+/**
+ * Synthesise a batch of story texts in one API call, split the resulting PCM,
+ * and return individual WAV URLs. Falls back to individual calls on any error.
+ */
+export async function googleTTSBatch(
+  items: { text: string; filename: string }[],
+  language: "en" | "hi",
+): Promise<string[]> {
+  if (items.length === 0) return [];
+
+  // Single-item shortcut — no splitting needed
+  if (items.length === 1) {
+    try {
+      return [await googleTTS(items[0].text, items[0].filename, language)];
+    } catch {
+      return [""];
+    }
+  }
+
+  const tag = `${language.toUpperCase()} batch(${items.length})`;
+  console.log(`[tts:batch] ${tag} starting`);
+
+  let segments: Buffer[] | null = null;
+
+  try {
+    const prompt = buildBatchPrompt(items.map(i => i.text), language);
+    const pcm    = await synthesizeWithRetry(prompt, tag);
+    segments     = splitPcmAtSilences(pcm, items.length);
+  } catch (err: any) {
+    console.warn(`[tts:batch] ${tag} synthesis failed: ${err.message?.slice(0, 120)}`);
+  }
+
+  // Fallback to individual calls if batch synthesis or splitting failed
+  if (!segments) {
+    console.warn(`[tts:batch] ${tag} — falling back to individual calls`);
+    return individualFallback(items, language);
+  }
+
+  // Save each segment
+  const urls: string[] = [];
+  for (let i = 0; i < items.length; i++) {
+    try {
+      const url = await saveWav(pcmToWav(segments[i]), items[i].filename);
+      urls.push(url);
+    } catch (err: any) {
+      console.warn(`[tts:batch] save failed for ${items[i].filename}: ${err.message}`);
+      // Last-resort: synthesise this story individually
+      try {
+        urls.push(await googleTTS(items[i].text, items[i].filename, language));
+      } catch {
+        urls.push("");
+      }
+    }
+  }
+
+  const ok = urls.filter(Boolean).length;
+  console.log(`[tts:batch] ${tag} done — ${ok}/${items.length} saved`);
+  return urls;
+}
+
+/** Individual-call fallback used when batch synthesis or splitting fails. */
+async function individualFallback(
+  items: { text: string; filename: string }[],
+  language: "en" | "hi",
+): Promise<string[]> {
+  const urls: string[] = [];
+  for (const item of items) {
+    try {
+      urls.push(await googleTTS(item.text, item.filename, language));
+    } catch (err: any) {
+      console.warn(`[tts:fallback] ✗ ${item.filename}: ${err.message?.slice(0, 80)}`);
+      urls.push("");
+    }
+  }
+  return urls;
 }
