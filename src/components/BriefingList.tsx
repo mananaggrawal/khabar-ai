@@ -87,6 +87,7 @@ const SERVICES: {
   },
 ];
 
+
 function buildQuery(t: BriefingTopic): string {
   // Concise but context-rich prompt — auto-submitted as-is
   const base = t.explanation
