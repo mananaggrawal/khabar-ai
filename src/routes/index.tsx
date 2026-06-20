@@ -239,37 +239,6 @@ function HomePage() {
         </div>
       )}
 
-      {/* Orb — reflects play state */}
-      {!briefingQuery.isLoading && (
-        <div className="flex flex-col items-center pt-2 pb-1">
-          <VoiceOrb
-            state={
-              mono.state === "playing" ? "speaking" :
-              mono.state === "paused"  ? "listening" : "idle"
-            }
-            size={160}
-            onClick={mono.orbTap}
-          />
-          <div className="mt-1 min-h-[2.5rem] flex flex-col items-center gap-0.5 px-6 text-center">
-            {mono.currentStory ? (
-              <>
-                <p className="font-serif text-base leading-snug tracking-tight line-clamp-2">
-                  {mono.currentStory.title}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {mono.currentFeed ? (mono.language === "hi" ? mono.currentFeed.labelHi : mono.currentFeed.label) : ""}
-                  {" · "}
-                  {mono.currentStoryIdx + 1} of {mono.storiesWithAudio.length}
-                </p>
-              </>
-            ) : (
-              <p className="font-serif text-2xl tracking-tight">
-                {briefingQuery.isError ? "Couldn't load briefing." : !briefing ? "" : "Khabar AI"}
-              </p>
-            )}
-          </div>
-        </div>
-      )}
 
       {briefing && (
         <>
