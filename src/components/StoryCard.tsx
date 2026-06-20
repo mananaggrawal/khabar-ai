@@ -79,8 +79,8 @@ export function StoryCard({ story, isPlaying, hasAudio, onPlay, onPause, onTap }
         "flex items-center gap-3 rounded-2xl px-3 py-3 transition-all duration-150 cursor-pointer overflow-hidden",
         "border-l-[3px]",
         isPlaying
-          ? "bg-primary/[0.06] shadow-sm"
-          : "bg-white hover:bg-white/90 active:scale-[0.99] shadow-sm",
+          ? "bg-primary/[0.06] ring-1 ring-primary/20"
+          : "bg-white ring-1 ring-black/[0.07] active:scale-[0.99]",
       )}
       style={{ borderLeftColor: accent }}
     >

@@ -1,6 +1,6 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
+import { Check } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import { CITY_KEY, DEFAULT_CITY, MAJOR_CITIES } from "@/lib/news/sources";
@@ -127,7 +127,7 @@ function SettingsPage() {
                       : "border-border text-foreground/70 hover:border-border/80 hover:bg-black/[0.02]",
                   )}
                 >
-                  {active && <span className="text-primary">✓</span>}
+                  {active && <Check className="size-3.5 text-primary" />}
                   {city}
                 </button>
               );
@@ -138,9 +138,12 @@ function SettingsPage() {
         {/* Account */}
         <section>
           <h2 className="font-serif text-lg">Account</h2>
-          <Button onClick={signOut} variant="outline" className="mt-4 rounded-full">
+          <button
+            onClick={signOut}
+            className="mt-4 flex items-center rounded-2xl border border-destructive/30 px-5 py-2.5 text-sm font-medium text-destructive/80 hover:bg-destructive/5 transition-colors"
+          >
             Sign out
-          </Button>
+          </button>
         </section>
 
 

@@ -114,7 +114,7 @@ export function StoryDetailSheet({
             animate={{ y: 0 }}
             exit={{ y: "100%" }}
             transition={{ type: "spring", damping: 32, stiffness: 300 }}
-            className="fixed inset-x-0 bottom-0 z-[56] flex max-h-[85vh] flex-col rounded-t-3xl bg-background shadow-2xl"
+            className="fixed inset-x-0 bottom-0 z-[56] flex max-h-[85vh] flex-col rounded-t-3xl bg-white shadow-2xl"
             style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
           >
             {/* Drag handle */}

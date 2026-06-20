@@ -205,7 +205,7 @@ function HomePage() {
     <div className="min-h-screen bg-background text-foreground flex flex-col">
       {/* Header — sticky so it stays visible while scrolling */}
       <header
-        className="sticky top-0 z-20 flex items-center justify-between px-5 pb-2 bg-background/95 backdrop-blur-sm"
+        className="sticky top-0 z-20 flex items-center justify-between px-5 pb-3 bg-background/95 backdrop-blur-sm border-b border-border/60"
         style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 1rem)" }}
       >
         <span className="font-serif text-xl tracking-tight">
@@ -264,9 +264,9 @@ function HomePage() {
 
             return (
               <div
-                className="mx-4 mb-3 relative overflow-hidden rounded-2xl"
+                className="mx-4 mb-4 relative overflow-hidden rounded-3xl"
                 style={{
-                  height: 220,
+                  height: 240,
                   background: bgImage
                     ? undefined
                     : "linear-gradient(135deg, oklch(0.18 0.05 295) 0%, oklch(0.28 0.14 300) 50%, oklch(0.20 0.10 310) 100%)",
@@ -306,7 +306,7 @@ function HomePage() {
           })()}
 
           {/* Section tabs */}
-          <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b border-border/50">
+          <div className="bg-background border-b border-border/40">
             <SectionTabs
               activeSection={activeSection}
               availableSections={availableSections}
@@ -317,7 +317,7 @@ function HomePage() {
 
           {/* Story list */}
           <div
-            className="flex-1 overflow-y-auto px-4 py-3 space-y-1.5"
+            className="flex-1 overflow-y-auto px-4 py-4 space-y-2"
             style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 148px)" }}
           >
 

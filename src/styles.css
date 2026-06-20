@@ -91,12 +91,12 @@
 
 /* Light mode overrides */
 html.light {
-  --background: oklch(0.97 0.008 295);
+  --background: oklch(0.98 0.003 280);
   --foreground: oklch(0.18 0.04 295);
 
-  --card: oklch(0.92 0.012 295);
+  --card: oklch(0.94 0.006 280);
   --card-foreground: oklch(0.18 0.04 295);
-  --popover: oklch(0.92 0.012 295);
+  --popover: oklch(0.94 0.006 280);
   --popover-foreground: oklch(0.18 0.04 295);
 
   --primary: oklch(0.50 0.20 300);

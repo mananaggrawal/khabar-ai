@@ -73,7 +73,7 @@ export function PlayerScreen({ mono, visible, onClose, isSaved, onSave }: Player
           animate={{ y: 0 }}
           exit={{ y: "100%" }}
           transition={{ type: "spring", damping: 32, stiffness: 300 }}
-          className="fixed inset-0 z-[60] flex flex-col bg-background"
+          className="fixed inset-0 z-[60] flex flex-col bg-white"
           style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
         >
           {/* Header row */}
