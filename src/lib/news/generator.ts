@@ -159,6 +159,81 @@ function buildStories(feedMap: Map<SectionId, RssItem[]>): Story[] {
   return stories;
 }
 
+// ─── Step 2b: Fetch OG images from publisher pages ───────────────────────────
+
+/** Extract og:image or twitter:image from raw HTML head. */
+function extractOgImage(html: string): string | undefined {
+  // Only scan the first 20KB — OG tags live in <head>
+  const head = html.slice(0, 20_000);
+  const patterns = [
+    /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i,
+    /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i,
+    /<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i,
+    /<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image["']/i,
+  ];
+  for (const re of patterns) {
+    const m = head.match(re);
+    if (m?.[1] && m[1].startsWith("http")) return m[1];
+  }
+  return undefined;
+}
+
+async function fetchOgImage(url: string): Promise<string | undefined> {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    const res = await fetch(url, {
+      signal: ctrl.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+        "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+      },
+      redirect: "follow",
+    });
+    clearTimeout(timer);
+    if (!res.ok) return undefined;
+    // Read in chunks until we have 20KB or stream ends
+    const reader = res.body?.getReader();
+    if (!reader) return undefined;
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    while (total < 20_000) {
+      const { done, value } = await reader.read();
+      if (done || !value) break;
+      chunks.push(value);
+      total += value.byteLength;
+    }
+    reader.cancel().catch(() => {});
+    const html = new TextDecoder().decode(
+      chunks.reduce((acc, c) => { const a = new Uint8Array(acc.length + c.length); a.set(acc); a.set(c, acc.length); return a; }, new Uint8Array(0))
+    );
+    return extractOgImage(html);
+  } catch {
+    return undefined;
+  }
+}
+
+async function fetchAllOgImages(stories: Story[], logger: Logger): Promise<Story[]> {
+  logger(`Fetching OG images for ${stories.length} stories (10 concurrent)…`);
+  const updated = stories.map((s) => ({ ...s }));
+  const CONCURRENCY = 10;
+
+  for (let i = 0; i < stories.length; i += CONCURRENCY) {
+    const slice = stories.slice(i, i + CONCURRENCY);
+    await Promise.allSettled(
+      slice.map(async (story, j) => {
+        if (updated[i + j].imageUrl) return; // already have one from RSS
+        const img = await fetchOgImage(story.link);
+        if (img) updated[i + j] = { ...updated[i + j], imageUrl: img };
+      }),
+    );
+  }
+
+  const withImages = updated.filter((s) => s.imageUrl).length;
+  logger(`OG images: ${withImages}/${stories.length} fetched`);
+  return updated;
+}
+
 // ─── Step 3: Batch generate spoken scripts ────────────────────────────────────
 
 const SCRIPT_BATCH_SIZE = 20;
@@ -407,11 +482,21 @@ export async function generateDailyBriefing(
     if (n > 0) log(`  ${feed.emoji} ${feed.label}: ${n}`);
   }
 
-  // Step 3: Batch generate scripts
-  const withScripts = await generateAllScripts(stories, log);
+  // Steps 2b + 3 run in parallel — OG images and scripts are independent
+  log(`Fetching OG images and scripts in parallel…`);
+  const [withImages, withScripts] = await Promise.all([
+    fetchAllOgImages(stories, log),
+    generateAllScripts(stories, log),
+  ]);
+
+  // Merge: scripts take priority; images fill in imageUrl
+  const merged = withScripts.map((s, i) => ({
+    ...s,
+    imageUrl: s.imageUrl ?? withImages[i]?.imageUrl,
+  }));
 
   // Step 4: TTS
-  const withAudio = await generateAllTTS(withScripts, date, log);
+  const withAudio = await generateAllTTS(merged, date, log);
 
   const briefing: DailyBriefing = {
     date,
@@ -452,9 +537,16 @@ export async function generateMissingSections(
     return { added: [], briefing: existing };
   }
 
-  log(`Found ${newStories.length} new stories — generating scripts + TTS…`);
-  const withScripts = await generateAllScripts(newStories, log);
-  const withAudio = await generateAllTTS(withScripts, existing.date, log);
+  log(`Found ${newStories.length} new stories — generating scripts + OG images + TTS…`);
+  const [withImages, withScripts] = await Promise.all([
+    fetchAllOgImages(newStories, log),
+    generateAllScripts(newStories, log),
+  ]);
+  const mergedNew = withScripts.map((s, i) => ({
+    ...s,
+    imageUrl: s.imageUrl ?? withImages[i]?.imageUrl,
+  }));
+  const withAudio = await generateAllTTS(mergedNew, existing.date, log);
 
   const merged: DailyBriefing = {
     ...existing,
