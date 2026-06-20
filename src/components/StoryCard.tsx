@@ -71,18 +71,23 @@ interface StoryCardProps {
   hasAudio: boolean;
   onPlay: () => void;
   onPause: () => void;
+  onTap?: () => void;
 }
 
-export function StoryCard({ story, isPlaying, hasAudio, onPlay, onPause }: StoryCardProps) {
+export function StoryCard({ story, isPlaying, hasAudio, onPlay, onPause, onTap }: StoryCardProps) {
   const feed = FEED_MAP.get(story.section);
 
   return (
     <div
+      role="button"
+      tabIndex={0}
+      onClick={onTap}
+      onKeyDown={(e) => e.key === "Enter" && onTap?.()}
       className={cn(
-        "flex items-center gap-3 rounded-2xl px-3 py-3 transition-colors",
+        "flex items-center gap-3 rounded-2xl px-3 py-3 transition-colors cursor-pointer",
         isPlaying
           ? "bg-primary/[0.12]"
-          : "bg-card hover:bg-card/80",
+          : "bg-card hover:bg-muted/50",
       )}
     >
       {/* Thumbnail — left */}
@@ -135,7 +140,7 @@ export function StoryCard({ story, isPlaying, hasAudio, onPlay, onPause }: Story
       {/* Play / pause — right circle */}
       {hasAudio && (
         <button
-          onClick={() => isPlaying ? onPause() : onPlay()}
+          onClick={(e) => { e.stopPropagation(); isPlaying ? onPause() : onPlay(); }}
           aria-label={isPlaying ? "Pause" : "Play"}
           className={cn(
             "flex size-9 shrink-0 items-center justify-center rounded-full border transition-colors",

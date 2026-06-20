@@ -7,11 +7,14 @@ import { motion, AnimatePresence } from "motion/react";
 import { Settings, Play, Pause, SkipBack, SkipForward } from "lucide-react";
 import { VoiceOrb } from "@/components/VoiceOrb";
 
-import { StoryCard }    from "@/components/StoryCard";
-import { PlayerScreen } from "@/components/PlayerScreen";
-import { fetchBriefing } from "@/lib/news/briefing.functions";
-import { useMonologue } from "@/hooks/useMonologue";
-import { FEEDS, FEED_MAP, readCity, type SectionId } from "@/lib/news/sources";
+import { StoryCard }         from "@/components/StoryCard";
+import { PlayerScreen }      from "@/components/PlayerScreen";
+import { StoryDetailSheet }  from "@/components/StoryDetailSheet";
+import { BottomNav }         from "@/components/BottomNav";
+import { fetchBriefing }     from "@/lib/news/briefing.functions";
+import { useMonologue }      from "@/hooks/useMonologue";
+import { FEEDS, readCity, type SectionId } from "@/lib/news/sources";
+import type { Story } from "@/lib/news/generator";
 
 // ── Route ─────────────────────────────────────────────────────────────────────
 
@@ -47,7 +50,7 @@ function MiniPlayer({
           className="fixed inset-x-3 z-50"
         >
           <div
-            className="relative overflow-hidden rounded-2xl border border-white/[0.12] bg-background/95 backdrop-blur-md shadow-2xl cursor-pointer"
+            className="relative overflow-hidden rounded-2xl border border-border bg-background/95 backdrop-blur-md shadow-xl cursor-pointer"
             onClick={onOpen}
           >
             {/* Progress bar */}
@@ -126,7 +129,7 @@ function SectionTabs({
   return (
     <div
       ref={tabsRef}
-      className="flex gap-1 overflow-x-auto px-4 py-2 scrollbar-hide"
+      className="flex gap-1.5 overflow-x-auto px-4 py-2 scrollbar-hide"
       style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
     >
       {FEEDS.map((feed) => {
@@ -140,10 +143,10 @@ function SectionTabs({
             disabled={!hasContent}
             className={`shrink-0 rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors whitespace-nowrap ${
               active
-                ? "bg-primary text-white"
+                ? "bg-primary text-primary-foreground"
                 : hasContent
-                ? "bg-white/[0.06] text-foreground/80 hover:bg-white/[0.10]"
-                : "bg-white/[0.02] text-muted-foreground/30 cursor-not-allowed"
+                ? "bg-muted text-foreground/80 hover:bg-muted/80"
+                : "bg-muted/40 text-muted-foreground/40 cursor-not-allowed"
             }`}
           >
             {language === "hi" ? feed.labelHi : feed.label}
@@ -169,6 +172,7 @@ function HomePage() {
 
   const [activeSection, setActiveSection] = useState<SectionId>("headlines");
   const [playerOpen, setPlayerOpen] = useState(false);
+  const [detailStory, setDetailStory] = useState<Story | null>(null);
 
   // City for local section label
   const city = typeof window !== "undefined" ? readCity() : "Mumbai";
@@ -202,7 +206,9 @@ function HomePage() {
         className="flex items-center justify-between px-5 pb-2"
         style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 1rem)" }}
       >
-        <span className="font-serif text-xl tracking-tight">Khabar <em className="italic text-primary">AI</em></span>
+        <span className="font-serif text-xl tracking-tight">
+          Khabar <em className="italic text-primary">AI</em>
+        </span>
         <Link
           to="/settings"
           aria-label="Settings"
@@ -233,7 +239,7 @@ function HomePage() {
         </div>
       )}
 
-      {/* Orb — always visible, reflects play state */}
+      {/* Orb — reflects play state */}
       {!briefingQuery.isLoading && (
         <div className="flex flex-col items-center pt-2 pb-1">
           <VoiceOrb
@@ -258,7 +264,7 @@ function HomePage() {
               </>
             ) : (
               <p className="font-serif text-2xl tracking-tight">
-                {briefingQuery.isError ? "Couldn't load briefing." : !briefing ? "No briefing yet" : "Khabar AI"}
+                {briefingQuery.isError ? "Couldn't load briefing." : !briefing ? "" : "Khabar AI"}
               </p>
             )}
           </div>
@@ -267,44 +273,8 @@ function HomePage() {
 
       {briefing && (
         <>
-          {/* Hero card */}
-          {(() => {
-            const withAudio = briefing.stories.filter((s) =>
-              mono.language === "hi" ? !!s.audioUrlHi : !!s.audioUrlEn,
-            );
-            const listenMins = Math.max(1, Math.round(withAudio.length * 1.5));
-            const today = new Date().toLocaleDateString("en-IN", {
-              weekday: "short", day: "numeric", month: "long",
-            });
-            const topStory = briefing.stories[0];
-            const isPlayingAll = mono.state === "playing";
-            const firstSection: SectionId = availableSections.has("headlines")
-              ? "headlines"
-              : ([...availableSections][0] as SectionId);
-            return (
-              <div className="mx-4 mb-3 rounded-2xl bg-foreground px-4 py-4 text-background">
-                <p className="text-[10px] font-semibold uppercase tracking-wider opacity-50 mb-2">
-                  {today} · {listenMins} min
-                </p>
-                {topStory && (
-                  <p className="font-serif text-sm leading-snug mb-3 line-clamp-2 opacity-85">
-                    {topStory.title}
-                  </p>
-                )}
-                <button
-                  onClick={() => isPlayingAll ? mono.pause() : mono.playSection(firstSection)}
-                  className="flex items-center gap-1.5 rounded-full bg-primary px-4 py-1.5 text-[12px] font-semibold text-white transition-transform active:scale-95"
-                >
-                  {isPlayingAll
-                    ? <><Pause className="size-3 fill-current" />Pause</>
-                    : <><Play className="size-3 fill-current ml-0.5" />Play briefing</>}
-                </button>
-              </div>
-            );
-          })()}
-
           {/* Section tabs */}
-          <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b border-white/[0.05]">
+          <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b border-border/50">
             <SectionTabs
               activeSection={activeSection}
               availableSections={availableSections}
@@ -318,7 +288,7 @@ function HomePage() {
             className="flex-1 overflow-y-auto px-4 py-3 space-y-1.5"
             style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 148px)" }}
           >
-            {/* Section play-all button */}
+            {/* Section play-all header */}
             {activeStories.some((s) =>
               mono.language === "hi" ? !!s.audioUrlHi : !!s.audioUrlEn,
             ) && (
@@ -364,6 +334,7 @@ function HomePage() {
                     hasAudio={hasAudio}
                     onPlay={() => storyIdx >= 0 && mono.playFromInSection(storyIdx, activeSection)}
                     onPause={mono.pause}
+                    onTap={() => setDetailStory(story)}
                   />
                 );
               })
@@ -372,7 +343,10 @@ function HomePage() {
         </>
       )}
 
-      {/* Mini player */}
+      {/* Bottom nav */}
+      <BottomNav />
+
+      {/* Mini player — sits above bottom nav */}
       <MiniPlayer mono={mono} onOpen={() => setPlayerOpen(true)} />
 
       {/* Full player screen */}
@@ -380,6 +354,21 @@ function HomePage() {
         mono={mono}
         visible={playerOpen}
         onClose={() => setPlayerOpen(false)}
+      />
+
+      {/* Story detail sheet */}
+      <StoryDetailSheet
+        story={detailStory}
+        language={mono.language}
+        onClose={() => setDetailStory(null)}
+        onPlay={() => {
+          if (detailStory) {
+            const idx = mono.storiesWithAudio.findIndex((s) => s.id === detailStory.id);
+            if (idx >= 0) mono.playFromInSection(idx, detailStory.section);
+          }
+          setDetailStory(null);
+        }}
+        isPlaying={!!detailStory && mono.currentStory?.id === detailStory.id && mono.state === "playing"}
       />
     </div>
   );
