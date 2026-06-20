@@ -1,10 +1,10 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { createPortal } from "react-dom";
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { motion, AnimatePresence } from "motion/react";
-import { Settings, Play, Pause, SkipBack, SkipForward } from "lucide-react";
+import { Play, Pause, SkipBack, SkipForward } from "lucide-react";
 import { VoiceOrb } from "@/components/VoiceOrb";
 
 import { StoryCard }         from "@/components/StoryCard";
@@ -209,13 +209,9 @@ function HomePage() {
         <span className="font-serif text-xl tracking-tight">
           Khabar <em className="italic text-primary">AI</em>
         </span>
-        <Link
-          to="/settings"
-          aria-label="Settings"
-          className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-black/5 hover:text-foreground transition-colors"
-        >
-          <Settings className="size-4" />
-        </Link>
+        <span className="text-xs text-muted-foreground italic">
+          Today's news, spoken.
+        </span>
       </header>
 
       {/* Loading state */}
