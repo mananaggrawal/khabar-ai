@@ -14,7 +14,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fetchRss, type RssItem } from "./rss";
 import { FEEDS, FEED_MAP, DEFAULT_CITY, type SectionId } from "./sources";
-import { googleTTS } from "@/lib/tts/google";
+import { googleTTS, googleTTSSection } from "@/lib/tts/google";
 import { saveBriefingToStorage, loadBriefingFromStorage } from "@/lib/supabase-storage";
 
 const LOCAL_MODE = process.env.LOCAL_MODE === "true";
@@ -345,16 +345,12 @@ async function generateAllTTS(
     if (enScripts.length > 0) {
       const filename = `${date}-${sectionId}-en`;
       try {
-        const { url, durationSec } = await googleTTS(enScripts.join("\n\n"), filename);
-        const wordCounts = enScripts.map(s => s.split(/\s+/).length);
-        const totalWords = wordCounts.reduce((a, b) => a + b, 0);
-        let wordsSoFar = 0;
+        const { url, durationSec, storyStartSecs } = await googleTTSSection(enScripts, filename);
         let scriptIdx = 0;
         indices.forEach((storyIdx) => {
           if (!stories[storyIdx].scriptEn) return;
           updated[storyIdx].audioUrlEn = url;
-          updated[storyIdx].audioStartSec = totalWords > 0 ? (wordsSoFar / totalWords) * durationSec : 0;
-          wordsSoFar += wordCounts[scriptIdx++];
+          updated[storyIdx].audioStartSec = storyStartSecs[scriptIdx++] ?? 0;
         });
         logger(`    ✓ ${filename} (${enScripts.length} stories, ${durationSec.toFixed(1)}s)`);
       } catch (err: any) {
@@ -367,19 +363,11 @@ async function generateAllTTS(
     if (hiScripts.length > 0) {
       const filename = `${date}-${sectionId}-hi`;
       try {
-        const { url, durationSec } = await googleTTS(hiScripts.join("\n\n"), filename);
-        const wordCounts = hiScripts.map(s => s.split(/\s+/).length);
-        const totalWords = wordCounts.reduce((a, b) => a + b, 0);
-        let wordsSoFar = 0;
-        let scriptIdx = 0;
+        const { url, durationSec } = await googleTTSSection(hiScripts, filename);
+        // HI uses EN audioStartSec (already set above); just store the URL
         indices.forEach((storyIdx) => {
           if (!stories[storyIdx].scriptHi) return;
           updated[storyIdx].audioUrlHi = url;
-          // Only set audioStartSec if EN didn't already set it
-          if (updated[storyIdx].audioStartSec === undefined) {
-            updated[storyIdx].audioStartSec = totalWords > 0 ? (wordsSoFar / totalWords) * durationSec : 0;
-          }
-          wordsSoFar += wordCounts[scriptIdx++];
         });
         logger(`    ✓ ${filename} (${hiScripts.length} stories, ${durationSec.toFixed(1)}s)`);
       } catch (err: any) {
@@ -621,16 +609,12 @@ export async function generateMissingTTS(
     if (enScripts.length > 0) {
       const filename = `${date}-${sectionId}-en`;
       try {
-        const { url, durationSec } = await googleTTS(enScripts.join("\n\n"), filename);
-        const wordCounts = enScripts.map(s => s.split(/\s+/).length);
-        const totalWords = wordCounts.reduce((a, b) => a + b, 0);
-        let wordsSoFar = 0;
+        const { url, durationSec, storyStartSecs } = await googleTTSSection(enScripts, filename);
         let scriptIdx = 0;
         sectionIndices.forEach((storyIdx) => {
           if (!existing.stories[storyIdx].scriptEn) return;
           updated[storyIdx].audioUrlEn = url;
-          updated[storyIdx].audioStartSec = totalWords > 0 ? (wordsSoFar / totalWords) * durationSec : 0;
-          wordsSoFar += wordCounts[scriptIdx++];
+          updated[storyIdx].audioStartSec = storyStartSecs[scriptIdx++] ?? 0;
         });
         log(`    ✓ ${filename} (${enScripts.length} stories, ${durationSec.toFixed(1)}s)`);
       } catch (err: any) {
@@ -643,12 +627,12 @@ export async function generateMissingTTS(
     if (hiScripts.length > 0) {
       const filename = `${date}-${sectionId}-hi`;
       try {
-        const { url } = await googleTTS(hiScripts.join("\n\n"), filename);
+        const { url, durationSec } = await googleTTSSection(hiScripts, filename);
         sectionIndices.forEach((storyIdx) => {
           if (!existing.stories[storyIdx].scriptHi) return;
           updated[storyIdx].audioUrlHi = url;
         });
-        log(`    ✓ ${filename} (${hiScripts.length} stories)`);
+        log(`    ✓ ${filename} (${hiScripts.length} stories, ${durationSec.toFixed(1)}s)`);
       } catch (err: any) {
         log(`    ✗ ${filename}: ${err.message?.slice(0, 160)}`);
       }

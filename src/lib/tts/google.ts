@@ -133,6 +133,86 @@ async function saveWav(wav: Buffer, filename: string): Promise<{ url: string; du
   return { url, durationSec };
 }
 
+// ── Silence detection ─────────────────────────────────────────────────────────
+
+const SILENCE_RMS_THRESHOLD   = 400;  // 0–32767
+const MIN_SILENCE_MS          = 250;
+const ANALYSIS_WINDOW_MS      = 10;
+const MIN_SILENCE_SAMPLES     = Math.floor(SAMPLE_RATE * MIN_SILENCE_MS    / 1000);
+const ANALYSIS_WINDOW_SAMPLES = Math.floor(SAMPLE_RATE * ANALYSIS_WINDOW_MS / 1000);
+
+interface SilentRegion { startSample: number; endSample: number; durationMs: number; }
+
+function findSilentRegions(pcm: Buffer): SilentRegion[] {
+  const numSamples = Math.floor(pcm.length / 2);
+  const regions: SilentRegion[] = [];
+  let silenceStart = -1;
+
+  for (let s = 0; s + ANALYSIS_WINDOW_SAMPLES <= numSamples; s += ANALYSIS_WINDOW_SAMPLES) {
+    let sum = 0;
+    for (let j = 0; j < ANALYSIS_WINDOW_SAMPLES; j++) {
+      const v = pcm.readInt16LE((s + j) * 2);
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / ANALYSIS_WINDOW_SAMPLES);
+    if (rms < SILENCE_RMS_THRESHOLD) {
+      if (silenceStart < 0) silenceStart = s;
+    } else {
+      if (silenceStart >= 0) {
+        const dur = s - silenceStart;
+        if (dur >= MIN_SILENCE_SAMPLES)
+          regions.push({ startSample: silenceStart, endSample: s, durationMs: Math.round(dur / SAMPLE_RATE * 1000) });
+        silenceStart = -1;
+      }
+    }
+  }
+  if (silenceStart >= 0) {
+    const dur = numSamples - silenceStart;
+    if (dur >= MIN_SILENCE_SAMPLES)
+      regions.push({ startSample: silenceStart, endSample: numSamples, durationMs: Math.round(dur / SAMPLE_RATE * 1000) });
+  }
+  return regions;
+}
+
+/**
+ * Find per-story start times (seconds) within a section PCM.
+ * Uses silence boundaries for the N-1 gaps between stories.
+ * Falls back to word-count proportion if not enough silences found.
+ */
+function findStoryBoundaries(pcm: Buffer, wordCounts: number[]): number[] {
+  const storyCount  = wordCounts.length;
+  const totalDurSec = pcm.length / 2 / SAMPLE_RATE;
+
+  const wordCountFallback = (): number[] => {
+    const total = wordCounts.reduce((a, b) => a + b, 0);
+    let acc = 0;
+    return wordCounts.map(wc => {
+      const start = total > 0 ? (acc / total) * totalDurSec : 0;
+      acc += wc;
+      return start;
+    });
+  };
+
+  if (storyCount <= 1) return [0];
+
+  const needed  = storyCount - 1;
+  const regions = findSilentRegions(pcm);
+
+  if (regions.length < needed) {
+    console.warn(`[tts:silence] need ${needed} boundaries, found ${regions.length} — word-count fallback`);
+    return wordCountFallback();
+  }
+
+  const cuts = [...regions]
+    .sort((a, b) => b.durationMs - a.durationMs)
+    .slice(0, needed)
+    .sort((a, b) => a.startSample - b.startSample)
+    .map(r => Math.floor((r.startSample + r.endSample) / 2) / SAMPLE_RATE);
+
+  console.log(`[tts:silence] found ${regions.length} silences, using ${needed} as boundaries`);
+  return [0, ...cuts];
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export async function googleTTS(
@@ -141,5 +221,22 @@ export async function googleTTS(
 ): Promise<{ url: string; durationSec: number }> {
   const pcm = await synthesizeWithRetry(text, filename);
   return saveWav(pcmToWav(pcm), filename);
+}
+
+/**
+ * Synthesise a full section (multiple story scripts joined with \n\n).
+ * Returns the audio URL, total duration, and per-story start times
+ * derived from silence detection (falls back to word-count proportion).
+ */
+export async function googleTTSSection(
+  scripts: string[],
+  filename: string,
+): Promise<{ url: string; durationSec: number; storyStartSecs: number[] }> {
+  const wordCounts = scripts.map(s => s.split(/\s+/).length);
+  const combined   = scripts.join("\n\n");
+  const pcm        = await synthesizeWithRetry(combined, filename);
+  const storyStartSecs = findStoryBoundaries(pcm, wordCounts);
+  const { url, durationSec } = await saveWav(pcmToWav(pcm), filename);
+  return { url, durationSec, storyStartSecs };
 }
 
