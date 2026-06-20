@@ -1,5 +1,4 @@
-import { Play, Pause } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { Play, Pause, ExternalLink } from "lucide-react";
 import type { Story } from "@/lib/news/generator";
 
 function timeAgo(iso: string): string {
@@ -12,6 +11,31 @@ function timeAgo(iso: string): string {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
+function WaveformIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="size-4" fill="currentColor">
+      {[2, 5, 8, 11, 14].map((x, i) => (
+        <rect
+          key={x}
+          x={x - 1} y={0} width={2} rx={1}
+          style={{
+            animation: `waveform 0.9s ease-in-out ${i * 0.12}s infinite alternate`,
+            transformOrigin: "center bottom",
+          } as React.CSSProperties}
+          height={8 + (i % 2) * 4}
+          transform={`translate(0, ${4 - (i % 2) * 2})`}
+        />
+      ))}
+      <style>{`
+        @keyframes waveform {
+          from { transform: scaleY(0.3); }
+          to   { transform: scaleY(1); }
+        }
+      `}</style>
+    </svg>
+  );
+}
+
 interface StoryCardProps {
   story: Story;
   isPlaying: boolean;
@@ -22,58 +46,66 @@ interface StoryCardProps {
 
 export function StoryCard({ story, isPlaying, hasAudio, onPlay, onPause }: StoryCardProps) {
   return (
-    <div className={cn(
-      "relative flex gap-3 rounded-2xl border px-4 py-3 transition-colors",
-      isPlaying
-        ? "border-primary/30 bg-primary/[0.06]"
-        : "border-white/[0.07] bg-white/[0.02]",
-    )}>
-      {/* Text block */}
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <span className="font-medium text-foreground/70 truncate max-w-[120px]">{story.source}</span>
-          <span>·</span>
-          <span className="shrink-0">{timeAgo(story.publishedAt)}</span>
+    <div className="rounded-2xl border border-white/5 bg-white/[0.02] overflow-hidden">
+      <div className="flex w-full items-stretch">
+
+        {/* Play / pause — full-height tap zone on the left */}
+        {hasAudio ? (
+          <button
+            onClick={() => isPlaying ? onPause() : onPlay()}
+            aria-label={isPlaying ? "Pause" : "Play"}
+            className={`flex w-14 shrink-0 items-center justify-start pl-4 outline-none transition-colors ${
+              isPlaying ? "text-primary" : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {isPlaying ? <WaveformIcon /> : <Play className="size-4 ml-0.5" />}
+          </button>
+        ) : (
+          <span className="flex w-14 shrink-0 items-center justify-center text-xs tabular-nums text-muted-foreground/40">
+            —
+          </span>
+        )}
+
+        {/* Content */}
+        <div className="flex min-w-0 flex-1 items-start gap-3 py-3 pr-4">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5 mb-0.5">
+              <span className="text-[11px] text-muted-foreground/70 truncate max-w-[110px]">{story.source}</span>
+              <span className="text-muted-foreground/40 text-[11px]">·</span>
+              <span className="text-[11px] text-muted-foreground/50 shrink-0">{timeAgo(story.publishedAt)}</span>
+            </div>
+            <p className="font-serif text-base leading-snug">{story.title}</p>
+          </div>
+
+          {/* Thumbnail */}
+          {story.imageUrl && (
+            <div className="shrink-0 self-start">
+              <img
+                src={story.imageUrl}
+                alt=""
+                className="h-14 w-[4.5rem] rounded-xl object-cover"
+                onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+              />
+            </div>
+          )}
         </div>
-        <a
-          href={story.link}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-sm font-medium leading-snug text-foreground/90 hover:text-foreground line-clamp-3 transition-colors"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {story.title}
-        </a>
+
       </div>
 
-      {/* Thumbnail */}
-      {story.imageUrl && (
-        <div className="shrink-0 self-start">
-          <img
-            src={story.imageUrl}
-            alt=""
-            className="h-16 w-20 rounded-xl object-cover"
-            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
-          />
+      {/* Article link — bottom strip */}
+      {story.link && (
+        <div className="border-t border-white/[0.04] px-4 py-2 pl-[3.5rem]">
+          <a
+            href={story.link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-[11px] text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <ExternalLink className="size-3" />
+            Go to article
+          </a>
         </div>
-      )}
-
-      {/* Play button — pinned bottom-right */}
-      {hasAudio && (
-        <button
-          onClick={(e) => { e.stopPropagation(); isPlaying ? onPause() : onPlay(); }}
-          aria-label={isPlaying ? "Pause" : "Play"}
-          className={cn(
-            "absolute bottom-3 right-3 flex size-7 shrink-0 items-center justify-center rounded-full transition-colors",
-            isPlaying
-              ? "bg-primary text-white"
-              : "bg-white/[0.08] text-muted-foreground hover:bg-white/[0.14] hover:text-foreground",
-          )}
-        >
-          {isPlaying
-            ? <Pause className="size-3.5 fill-current" />
-            : <Play  className="size-3.5 fill-current ml-0.5" />}
-        </button>
       )}
     </div>
   );

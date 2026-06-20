@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { motion, AnimatePresence } from "motion/react";
-import { Settings, Play, Pause, SkipBack, SkipForward, ChevronRight } from "lucide-react";
+import { Settings, Play, Pause, SkipBack, SkipForward, ChevronRight, Sun, Moon } from "lucide-react";
+import { VoiceOrb } from "@/components/VoiceOrb";
 
 import { StoryCard }    from "@/components/StoryCard";
 import { PlayerScreen } from "@/components/PlayerScreen";
@@ -228,14 +229,14 @@ function HomePage() {
         className="flex items-center justify-between px-5 pb-2"
         style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 1rem)" }}
       >
-        <span className="font-serif text-xl tracking-tight">Khabar AI</span>
+        <span className="font-serif text-xl tracking-tight">Khabar <em className="italic text-primary">AI</em></span>
         <div className="flex items-center gap-1">
           <button
             onClick={toggle}
             aria-label="Toggle theme"
             className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-white/5 hover:text-foreground transition-colors"
           >
-            {isDark ? "☀️" : "🌙"}
+            {isDark ? <Sun className="size-4" /> : <Moon className="size-4" />}
           </button>
           <Link
             to="/settings"
@@ -249,7 +250,8 @@ function HomePage() {
 
       {/* Loading state */}
       {briefingQuery.isLoading && (
-        <div className="flex flex-1 items-center justify-center">
+        <div className="flex flex-col flex-1 items-center justify-center gap-4">
+          <VoiceOrb state="idle" size={160} />
           <p className="text-sm text-muted-foreground animate-pulse">Loading briefing…</p>
         </div>
       )}
@@ -263,6 +265,38 @@ function HomePage() {
               Generate one from the{" "}
               <a href="/admin" className="text-primary underline">admin panel</a>.
             </p>
+          </div>
+        </div>
+      )}
+
+      {/* Orb — always visible, reflects play state */}
+      {!briefingQuery.isLoading && (
+        <div className="flex flex-col items-center pt-2 pb-1">
+          <VoiceOrb
+            state={
+              mono.state === "playing" ? "speaking" :
+              mono.state === "paused"  ? "listening" : "idle"
+            }
+            size={160}
+            onClick={mono.orbTap}
+          />
+          <div className="mt-1 min-h-[2.5rem] flex flex-col items-center gap-0.5 px-6 text-center">
+            {mono.currentStory ? (
+              <>
+                <p className="font-serif text-base leading-snug tracking-tight line-clamp-2">
+                  {mono.currentStory.title}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {mono.currentFeed ? (mono.language === "hi" ? mono.currentFeed.labelHi : mono.currentFeed.label) : ""}
+                  {" · "}
+                  {mono.currentStoryIdx + 1} of {mono.storiesWithAudio.length}
+                </p>
+              </>
+            ) : (
+              <p className="font-serif text-2xl tracking-tight">
+                {briefingQuery.isError ? "Couldn't load briefing." : !briefing ? "No briefing yet" : "Khabar AI"}
+              </p>
+            )}
           </div>
         </div>
       )}

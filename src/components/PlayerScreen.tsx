@@ -112,7 +112,7 @@ export function PlayerScreen({ mono, visible, onClose }: PlayerScreenProps) {
               )}
             </div>
 
-            <p className="text-base font-semibold leading-snug text-foreground line-clamp-3">
+            <p className="font-serif text-xl leading-snug text-foreground line-clamp-3">
               {currentStory?.title ?? "—"}
             </p>
             <p className="mt-1 text-sm text-muted-foreground">
