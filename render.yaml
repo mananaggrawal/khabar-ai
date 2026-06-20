@@ -2,7 +2,7 @@ services:
   - type: web
     name: khabar-ai
     runtime: node
-    buildCommand: npm ci && npm run build
+    buildCommand: npm install && npm run build
     startCommand: node server.mjs
     healthCheckPath: /api/health
     envVars:
