@@ -117,14 +117,6 @@ async function fetchAllFeeds(city: string): Promise<Map<SectionId, RssItem[]>> {
 
 // ─── Step 2: Deduplicate into flat Story list ─────────────────────────────────
 
-/**
- * Max stories kept per section.
- * Gemini TTS free tier = 100 req/day.
- * 10 sections × 5 stories × 2 languages = 100 TTS calls exactly.
- * Raise this if you're on a paid Gemini API plan.
- */
-const MAX_PER_SECTION = 5;
-
 function normalize(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
 }
@@ -142,15 +134,12 @@ function buildStories(feedMap: Map<SectionId, RssItem[]>): Story[] {
 
   for (const sectionId of order) {
     const items = feedMap.get(sectionId) ?? [];
-    let sectionCount = 0;
     for (const item of items) {
-      if (sectionCount >= MAX_PER_SECTION) break;
       const id = storyId(item.link);
       const titleKey = normalize(item.title).slice(0, 60);
       if (seenIds.has(id) || seenTitles.has(titleKey)) continue;
       seenIds.add(id);
       seenTitles.add(titleKey);
-      sectionCount++;
       stories.push({
         id,
         title: item.title,
