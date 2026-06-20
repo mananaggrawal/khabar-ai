@@ -41,7 +41,7 @@ if (!existsSync(SERVER_BUNDLE)) {
 }
 
 const { default: ssrHandler } = await import(SERVER_BUNDLE);
-const { handleGenerate, handleAsk, handleStatus, handleDownload, handleCron } = await import(API_BUNDLE);
+const { handleGenerate, handleAsk, handleStatus, handleDownload, handleCron, handlePatchMissing } = await import(API_BUNDLE);
 
 // Convert Node.js IncomingMessage to a Web Fetch Request
 async function toRequest(req) {
@@ -168,6 +168,19 @@ const server = createServer(async (req, res) => {
       await sendResponse(response, res);
     } catch (err) {
       console.error("[khabar] /api/admin/generate error:", err);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: String(err?.message ?? err) }));
+    }
+    return;
+  }
+
+  if (pathname === "/api/admin/patch-missing" && req.method === "POST") {
+    try {
+      const request = await toRequest(req);
+      const response = await handlePatchMissing(request);
+      await sendResponse(response, res);
+    } catch (err) {
+      console.error("[khabar] /api/admin/patch-missing error:", err);
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: String(err?.message ?? err) }));
     }
@@ -410,6 +423,12 @@ function adminPage(supabaseUrl, supabaseKey) {
         <button class="btn-primary" id="gen-btn" onclick="runGenerate()">Generate now</button>
         <div id="gen-log" class="log-terminal"></div>
       </div>
+      <div style="height:12px;"></div>
+      <div class="group">
+        <div class="gen-sub">Generate only sections missing from today's briefing.</div>
+        <button class="btn-primary" id="patch-btn" onclick="runPatch()">Patch missing sections</button>
+        <div id="patch-log" class="log-terminal"></div>
+      </div>
     </div>
   </div>
 
@@ -630,6 +649,73 @@ function adminPage(supabaseUrl, supabaseKey) {
 
     btn.disabled = false;
     btn.textContent = 'Regenerate';
+  }
+
+  async function runPatch() {
+    const btn = document.getElementById('patch-btn');
+    const logEl = document.getElementById('patch-log');
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin">&#9696;</span> Patching…';
+    logEl.innerHTML = '';
+    logEl.classList.add('visible');
+
+    try {
+      const r = await fetch('/api/admin/patch-missing', { method: 'POST', headers: { 'x-admin-key': AKEY } });
+      if (r.status === 409) {
+        appendPatchLog('log', 'Generation already in progress — check back in a few minutes.');
+        btn.disabled = false; btn.textContent = 'Patch missing sections';
+        return;
+      }
+      if (!r.ok || !r.body) {
+        appendPatchLog('error', 'Request failed: HTTP ' + r.status);
+        btn.disabled = false; btn.textContent = 'Retry';
+        return;
+      }
+
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split('\\n\\n');
+        buffer = parts.pop() || '';
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const ev = JSON.parse(line.slice(6));
+            if (ev.type === 'log') {
+              appendPatchLog('log', ev.msg);
+            } else if (ev.type === 'done') {
+              const added = ev.added?.length ? ev.added.join(', ') : 'none';
+              appendPatchLog('done', 'Done — added: ' + added + ' · ' + ev.sections + ' sections total');
+              loadStatus();
+            } else if (ev.type === 'error') {
+              appendPatchLog('error', ev.msg);
+            }
+          } catch {}
+        }
+      }
+    } catch (err) {
+      appendPatchLog('error', 'Network error: ' + (err.message || err));
+    }
+
+    btn.disabled = false;
+    btn.textContent = 'Patch missing sections';
+  }
+
+  function appendPatchLog(type, msg) {
+    const el = document.getElementById('patch-log');
+    const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const line = document.createElement('div');
+    line.className = 'log-line' + (type !== 'log' ? ' log-' + type : '');
+    line.textContent = ts + '  ' + msg;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
   }
 
   init();
