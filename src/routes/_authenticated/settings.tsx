@@ -1,11 +1,9 @@
-import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
+import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
-import { useServerFn } from "@tanstack/react-start";
-import { patchMissingSections } from "@/lib/news/briefing.functions";
 
 const LANGUAGE_KEY = "khabar-language";
 
@@ -21,28 +19,11 @@ export const Route = createFileRoute("/_authenticated/settings")({
 function SettingsPage() {
   const router = useRouter();
   const [selectedLang, setSelectedLang] = useState<string>(readLanguage);
-  const [patchStatus, setPatchStatus] = useState<"idle" | "running" | "done" | "error">("idle");
-  const [patchMsg, setPatchMsg] = useState("");
-  const patchFn = useServerFn(patchMissingSections);
-
-  async function runPatch() {
-    setPatchStatus("running");
-    setPatchMsg("Generating missing sections…");
-    try {
-      const { added } = await patchFn({ data: undefined as never });
-      setPatchStatus("done");
-      setPatchMsg(added.length > 0 ? `Added: ${added.join(", ")}` : "All sections already present.");
-    } catch (e: any) {
-      setPatchStatus("error");
-      setPatchMsg(e?.message ?? "Failed");
-    }
-  }
 
   function selectLanguage(code: string) {
     setSelectedLang(code);
     try {
       localStorage.setItem(LANGUAGE_KEY, code);
-      // Notify any open tabs (useMonologue listens for this)
       window.dispatchEvent(new StorageEvent("storage", { key: LANGUAGE_KEY, newValue: code }));
     } catch {}
   }
@@ -54,14 +35,20 @@ function SettingsPage() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="mx-auto flex max-w-2xl items-center gap-3 px-6 pt-6">
-        <Link
-          to="/"
-          className="inline-flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-white/5 hover:text-foreground"
+      <header
+        className="flex items-center justify-between px-6"
+        style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 1.5rem)" }}
+      >
+        <button
+          onClick={() => router.navigate({ to: "/" })}
+          aria-label="Back"
+          className="inline-flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
         >
           <ArrowLeft className="size-4" />
-        </Link>
-        <h1 className="font-serif text-2xl tracking-tight">Settings</h1>
+        </button>
+        <span className="font-serif text-xl tracking-tight">Settings</span>
+        {/* spacer to balance back button */}
+        <div className="size-9" />
       </header>
 
       <main className="mx-auto max-w-2xl space-y-10 px-6 py-10">
@@ -74,10 +61,10 @@ function SettingsPage() {
           </p>
           <div className="mt-4 space-y-2">
             {[
-              { code: "en", label: "English", available: true  },
-              { code: "hi", label: "हिंदी (Hindi)", available: true  },
-              { code: "ta", label: "Tamil",   available: false },
-              { code: "mr", label: "Marathi", available: false },
+              { code: "en", label: "English",        available: true  },
+              { code: "hi", label: "हिंदी (Hindi)",  available: true  },
+              { code: "ta", label: "Tamil",           available: false },
+              { code: "mr", label: "Marathi",         available: false },
             ].map((lang) => {
               const active = lang.available && selectedLang === lang.code;
               return (
@@ -110,29 +97,6 @@ function SettingsPage() {
           </div>
         </section>
 
-        {/* Briefing */}
-        <section>
-          <h2 className="font-serif text-lg">Briefing</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Generate content for any sections missing from today's briefing.
-          </p>
-          <div className="mt-4 flex items-center gap-3">
-            <Button
-              onClick={runPatch}
-              disabled={patchStatus === "running"}
-              variant="outline"
-              className="rounded-full"
-            >
-              {patchStatus === "running" ? "Generating…" : "Generate missing sections"}
-            </Button>
-          </div>
-          {patchMsg && (
-            <p className={`mt-2 text-sm ${patchStatus === "error" ? "text-red-500" : "text-muted-foreground"}`}>
-              {patchMsg}
-            </p>
-          )}
-        </section>
-
         {/* Account */}
         <section>
           <h2 className="font-serif text-lg">Account</h2>
@@ -140,6 +104,7 @@ function SettingsPage() {
             Sign out
           </Button>
         </section>
+
 
       </main>
     </div>

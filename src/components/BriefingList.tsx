@@ -177,7 +177,7 @@ function TopicCard({ topic: t, index: i, isActive, playingState = "idle", onPlay
 
         <div className="min-w-0 flex-1">
           <p className="font-serif text-base leading-snug">{t.headline}</p>
-          {t.hook && <p className="mt-0.5 text-sm text-muted-foreground line-clamp-2">{t.hook}</p>}
+          {t.hook && <p className="mt-0.5 text-sm text-muted-foreground">{t.hook}</p>}
         </div>
         <ChevronDown className={`mt-1 size-4 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} />
       </div>

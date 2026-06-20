@@ -29,8 +29,27 @@ export type MonologueState =
   | "answering"
   | "error";
 
-const RESUME_KEY   = "khabar-resume-pos";
-const LANGUAGE_KEY = "khabar-language";
+const RESUME_KEY      = "khabar-resume-pos";
+const STORY_POS_KEY   = "khabar-story-pos";   // { [topicId]: seconds }
+const LANGUAGE_KEY    = "khabar-language";
+
+function readStoryPositions(): Record<string, number> {
+  try { return JSON.parse(localStorage.getItem(STORY_POS_KEY) ?? "{}"); } catch { return {}; }
+}
+function saveStoryPosition(topicId: string, time: number) {
+  try {
+    const pos = readStoryPositions();
+    pos[topicId] = time;
+    localStorage.setItem(STORY_POS_KEY, JSON.stringify(pos));
+  } catch {}
+}
+function clearStoryPosition(topicId: string) {
+  try {
+    const pos = readStoryPositions();
+    delete pos[topicId];
+    localStorage.setItem(STORY_POS_KEY, JSON.stringify(pos));
+  } catch {}
+}
 
 function readLanguage(): "en" | "hi" {
   try { return (localStorage.getItem(LANGUAGE_KEY) as "en" | "hi") || "en"; } catch { return "en"; }
@@ -125,6 +144,9 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
                 lang: language,
               }));
             } catch {}
+            // Save per-story position
+            const topic = topicsWithAudio[currentIdxRef.current];
+            if (topic && audio.currentTime > 2) saveStoryPosition(topic.id, audio.currentTime);
           }
         }
       };
@@ -136,6 +158,9 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
       };
       audio.onended = () => {
         setProgress(0);
+        // Clear saved position — story finished, next play restarts from 0
+        const topic = topicsWithAudio[currentIdxRef.current];
+        if (topic) clearStoryPosition(topic.id);
         if (onEnded) onEnded();
         else setState("idle");
       };
@@ -235,18 +260,20 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
   const playTopic = useCallback(
     (idx: number) => {
       groupLimitRef.current = null;
-      playTopicAt(idx, false);
+      const savedPos = readStoryPositions()[topicsWithAudio[idx]?.id ?? ""] ?? 0;
+      playTopicAt(idx, false, savedPos > 2 ? savedPos : 0);
     },
-    [playTopicAt],
+    [playTopicAt, topicsWithAudio],
   );
 
   /** Play from a topic and auto-advance through all remaining topics */
   const playFrom = useCallback(
     (idx: number) => {
       groupLimitRef.current = null;
-      playTopicAt(idx, true);
+      const savedPos = readStoryPositions()[topicsWithAudio[idx]?.id ?? ""] ?? 0;
+      playTopicAt(idx, true, savedPos > 2 ? savedPos : 0);
     },
-    [playTopicAt],
+    [playTopicAt, topicsWithAudio],
   );
 
   const nextTopic = useCallback(() => {
