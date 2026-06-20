@@ -1,39 +1,36 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
-import { useServerFn } from "@tanstack/react-start";
-import { Clock } from "lucide-react";
+import { Bookmark, Trash2 } from "lucide-react";
 import { BottomNav } from "@/components/BottomNav";
-import { fetchBriefing } from "@/lib/news/briefing.functions";
+import { useSavedStories } from "@/hooks/useSavedStories";
 import { FEED_MAP } from "@/lib/news/sources";
+import { SECTION_COLOR } from "@/components/StoryCard";
 
 export const Route = createFileRoute("/_authenticated/history")({
-  head: () => ({ meta: [{ title: "History · Khabar AI" }] }),
-  component: HistoryPage,
+  head: () => ({ meta: [{ title: "Saved · Khabar AI" }] }),
+  component: SavedPage,
 });
 
-function timeAgo(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 2) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
+function formatDate(iso: string): string {
+  const date = new Date(iso);
+  const now = new Date();
+  const todayStr = now.toDateString();
+  const yesterdayStr = new Date(now.getTime() - 86_400_000).toDateString();
+  if (date.toDateString() === todayStr) return "Today";
+  if (date.toDateString() === yesterdayStr) return "Yesterday";
+  return date.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "long" });
 }
 
-function HistoryPage() {
-  const fn = useServerFn(fetchBriefing);
-  const { data: briefing, isLoading } = useQuery({
-    queryKey: ["briefing"],
-    queryFn: () => fn({ data: undefined as never }),
-    staleTime: 5 * 60_000,
-  });
+function SavedPage() {
+  const { saved, remove } = useSavedStories();
 
-  const today = briefing
-    ? new Date(briefing.generatedAt).toLocaleDateString("en-IN", {
-        weekday: "long", day: "numeric", month: "long", year: "numeric",
-      })
-    : null;
+  // Group by saved date
+  const groups: { label: string; stories: typeof saved }[] = [];
+  for (const story of saved) {
+    const label = formatDate(story.savedAt);
+    const existing = groups.find((g) => g.label === label);
+    if (existing) existing.stories.push(story);
+    else groups.push({ label, stories: [story] });
+  }
 
   return (
     <div
@@ -54,59 +51,81 @@ function HistoryPage() {
       </header>
 
       <main className="flex-1 px-4 py-4">
-        <h1 className="font-serif text-2xl mb-1">History</h1>
-        <p className="text-xs text-muted-foreground mb-5">Your past briefings</p>
+        <h1 className="font-serif text-2xl mb-1">Saved</h1>
+        <p className="text-xs text-muted-foreground mb-5">
+          {saved.length > 0 ? `${saved.length} saved ${saved.length === 1 ? "story" : "stories"}` : "Stories you save appear here"}
+        </p>
 
-        {isLoading && (
-          <div className="flex flex-col gap-2 mt-6">
-            {[...Array(4)].map((_, i) => (
-              <div key={i} className="h-16 rounded-2xl bg-black/[0.04] animate-pulse" />
-            ))}
-          </div>
-        )}
-
-        {!isLoading && !briefing && (
-          <div className="flex flex-col items-center justify-center py-20 text-center gap-3">
-            <Clock className="size-10 text-muted-foreground/30" />
-            <p className="text-sm font-medium text-foreground/60">No briefings yet</p>
-            <p className="text-xs text-muted-foreground">
-              Generate one from the home screen.
+        {saved.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-24 text-center gap-3">
+            <Bookmark className="size-10 text-muted-foreground/25" />
+            <p className="text-sm font-medium text-foreground/50">Nothing saved yet</p>
+            <p className="text-xs text-muted-foreground/60">
+              Tap the bookmark on any story to save it here.
             </p>
           </div>
-        )}
+        ) : (
+          <div className="flex flex-col gap-6">
+            {groups.map(({ label, stories }) => (
+              <section key={label}>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50 mb-2 px-1">
+                  {label}
+                </p>
+                <div className="flex flex-col gap-1.5">
+                  {stories.map((story) => {
+                    const feed = FEED_MAP.get(story.section);
+                    const accent = SECTION_COLOR[story.section] ?? "#7B5CF0";
+                    return (
+                      <div
+                        key={story.id}
+                        className="flex items-center gap-3 rounded-2xl bg-white shadow-sm px-3 py-3 border-l-[3px]"
+                        style={{ borderLeftColor: accent }}
+                      >
+                        {/* Thumbnail */}
+                        {story.imageUrl ? (
+                          <img
+                            src={story.imageUrl}
+                            alt=""
+                            className="h-[48px] w-[48px] shrink-0 rounded-xl object-cover shadow-sm"
+                            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+                          />
+                        ) : (
+                          <div
+                            className="h-[48px] w-[48px] shrink-0 rounded-xl"
+                            style={{ backgroundColor: `${accent}18` }}
+                          />
+                        )}
 
-        {briefing && (
-          <div className="rounded-2xl border border-border/40 bg-white shadow-sm overflow-hidden">
-            {/* Briefing header */}
-            <div className="px-4 py-3 border-b border-border/30">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-primary/70 mb-0.5">
-                Latest Briefing
-              </p>
-              <p className="text-sm font-medium text-foreground">{today}</p>
-              <p className="text-[11px] text-muted-foreground mt-0.5">
-                {briefing.stories.length} stories · {timeAgo(briefing.generatedAt)}
-              </p>
-            </div>
+                        {/* Text */}
+                        <div className="min-w-0 flex-1">
+                          <p
+                            className="mb-0.5 text-[10px] font-bold uppercase tracking-widest"
+                            style={{ color: accent }}
+                          >
+                            {feed?.label ?? story.section}
+                          </p>
+                          <p className="text-sm font-medium leading-snug text-foreground line-clamp-2">
+                            {story.title}
+                          </p>
+                          <p className="mt-0.5 text-[10px] text-muted-foreground/50">
+                            Saved {new Date(story.savedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+                          </p>
+                        </div>
 
-            {/* Story list */}
-            <div className="divide-y divide-border/20">
-              {briefing.stories.map((story) => {
-                const feed = FEED_MAP.get(story.section);
-                return (
-                  <div key={story.id} className="flex items-center gap-3 px-4 py-3">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 mb-0.5">
-                        {feed?.label ?? story.section}
-                      </p>
-                      <p className="text-sm text-foreground line-clamp-1">{story.title}</p>
-                    </div>
-                    <p className="shrink-0 text-[10px] text-muted-foreground/50">
-                      {timeAgo(story.publishedAt)}
-                    </p>
-                  </div>
-                );
-              })}
-            </div>
+                        {/* Remove */}
+                        <button
+                          onClick={() => remove(story.id)}
+                          aria-label="Remove"
+                          className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground/40 hover:text-red-400 transition-colors"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            ))}
           </div>
         )}
       </main>

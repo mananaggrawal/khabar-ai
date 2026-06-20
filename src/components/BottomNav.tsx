@@ -1,10 +1,10 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { Home, Clock, Settings } from "lucide-react";
+import { Home, Bookmark, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const TABS = [
-  { to: "/",         label: "Home",     Icon: Home     },
-  { to: "/history",  label: "History",  Icon: Clock    },
+  { to: "/",         label: "Home",    Icon: Home     },
+  { to: "/history",  label: "Saved",   Icon: Bookmark },
   { to: "/settings", label: "Settings", Icon: Settings },
 ] as const;
 

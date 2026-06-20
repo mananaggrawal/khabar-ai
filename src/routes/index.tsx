@@ -13,6 +13,7 @@ import { StoryDetailSheet }  from "@/components/StoryDetailSheet";
 import { BottomNav }         from "@/components/BottomNav";
 import { fetchBriefing }     from "@/lib/news/briefing.functions";
 import { useMonologue }      from "@/hooks/useMonologue";
+import { useSavedStories }   from "@/hooks/useSavedStories";
 import { FEEDS, readCity, type SectionId } from "@/lib/news/sources";
 import type { Story } from "@/lib/news/generator";
 
@@ -169,6 +170,7 @@ function HomePage() {
 
   const briefing = briefingQuery.data ?? null;
   const mono = useMonologue({ briefing });
+  const savedStories = useSavedStories();
 
   const [activeSection, setActiveSection] = useState<SectionId>("headlines");
   const [playerOpen, setPlayerOpen] = useState(false);
@@ -365,6 +367,8 @@ function HomePage() {
                     onPlay={() => storyIdx >= 0 && mono.playFromInSection(storyIdx, activeSection)}
                     onPause={mono.pause}
                     onTap={() => setDetailStory(story)}
+                    isSaved={savedStories.isSaved(story.id)}
+                    onSave={() => savedStories.toggle(story)}
                   />
                 );
               })

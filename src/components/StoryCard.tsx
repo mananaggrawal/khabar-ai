@@ -1,4 +1,4 @@
-import { Play, Pause, Newspaper, Flag, Globe, TrendingUp, Laptop, Film, Trophy, Microscope, Heart, MapPin } from "lucide-react";
+import { Play, Pause, Bookmark, Newspaper, Flag, Globe, TrendingUp, Laptop, Film, Trophy, Microscope, Heart, MapPin } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Story } from "@/lib/news/generator";
 import { FEED_MAP, type SectionId } from "@/lib/news/sources";
@@ -30,16 +30,6 @@ const SECTION_ICON: Record<SectionId, React.ReactNode> = {
   health:        <Heart      className="size-5" />,
   local:         <MapPin     className="size-5" />,
 };
-
-function timeAgo(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 2)  return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24)  return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-}
 
 function WaveformIcon() {
   return (
@@ -73,9 +63,11 @@ interface StoryCardProps {
   onPlay: () => void;
   onPause: () => void;
   onTap?: () => void;
+  isSaved?: boolean;
+  onSave?: () => void;
 }
 
-export function StoryCard({ story, isPlaying, hasAudio, onPlay, onPause, onTap }: StoryCardProps) {
+export function StoryCard({ story, isPlaying, hasAudio, onPlay, onPause, onTap, isSaved, onSave }: StoryCardProps) {
   const feed = FEED_MAP.get(story.section);
   const accent = SECTION_COLOR[story.section] ?? "#7B5CF0";
 
@@ -137,24 +129,42 @@ export function StoryCard({ story, isPlaying, hasAudio, onPlay, onPause, onTap }
         </p>
       </div>
 
-      {/* Play / pause — right circle */}
-      {hasAudio && (
-        <button
-          onClick={(e) => { e.stopPropagation(); isPlaying ? onPause() : onPlay(); }}
-          aria-label={isPlaying ? "Pause" : "Play"}
-          className={cn(
-            "flex size-9 shrink-0 items-center justify-center rounded-full border transition-all",
-            isPlaying
-              ? "border-transparent text-white shadow-md"
-              : "border-border bg-background text-muted-foreground hover:text-foreground",
-          )}
-          style={isPlaying ? { backgroundColor: accent } : undefined}
-        >
-          {isPlaying
-            ? <WaveformIcon />
-            : <Play className="size-3.5 fill-current ml-0.5" />}
-        </button>
-      )}
+      {/* Right actions */}
+      <div className="flex shrink-0 flex-col items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+        {/* Bookmark */}
+        {onSave && (
+          <button
+            onClick={onSave}
+            aria-label={isSaved ? "Unsave" : "Save"}
+            className="flex size-7 items-center justify-center rounded-full transition-colors text-muted-foreground/50 hover:text-foreground"
+          >
+            <Bookmark
+              className="size-3.5"
+              fill={isSaved ? "currentColor" : "none"}
+              style={isSaved ? { color: accent } : undefined}
+            />
+          </button>
+        )}
+
+        {/* Play / pause */}
+        {hasAudio && (
+          <button
+            onClick={() => isPlaying ? onPause() : onPlay()}
+            aria-label={isPlaying ? "Pause" : "Play"}
+            className={cn(
+              "flex size-9 items-center justify-center rounded-full border transition-all",
+              isPlaying
+                ? "border-transparent text-white shadow-md"
+                : "border-border bg-background text-muted-foreground hover:text-foreground",
+            )}
+            style={isPlaying ? { backgroundColor: accent } : undefined}
+          >
+            {isPlaying
+              ? <WaveformIcon />
+              : <Play className="size-3.5 fill-current ml-0.5" />}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
