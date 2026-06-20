@@ -1,7 +1,34 @@
-import { Play, Pause } from "lucide-react";
+import { Play, Pause, Newspaper, Flag, Globe, TrendingUp, Laptop, Film, Trophy, Microscope, Heart, MapPin } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Story } from "@/lib/news/generator";
-import { FEED_MAP } from "@/lib/news/sources";
+import { FEED_MAP, type SectionId } from "@/lib/news/sources";
+
+// Lucide icon per section — replaces emoji fallback thumbnails
+const SECTION_COLORS: Record<SectionId, string> = {
+  headlines:     "bg-[#4A2FA0]",
+  india:         "bg-[#C94A1E]",
+  world:         "bg-[#0A6B5E]",
+  business:      "bg-[#2D6A1F]",
+  technology:    "bg-[#185FA5]",
+  entertainment: "bg-[#8E2A6E]",
+  sports:        "bg-[#A83020]",
+  science:       "bg-[#1A6B8A]",
+  health:        "bg-[#C44B6B]",
+  local:         "bg-[#6B4E1A]",
+};
+
+const SECTION_ICON: Record<SectionId, React.ReactNode> = {
+  headlines:     <Newspaper className="size-5 text-white" />,
+  india:         <Flag      className="size-5 text-white" />,
+  world:         <Globe     className="size-5 text-white" />,
+  business:      <TrendingUp className="size-5 text-white" />,
+  technology:    <Laptop    className="size-5 text-white" />,
+  entertainment: <Film      className="size-5 text-white" />,
+  sports:        <Trophy    className="size-5 text-white" />,
+  science:       <Microscope className="size-5 text-white" />,
+  health:        <Heart     className="size-5 text-white" />,
+  local:         <MapPin    className="size-5 text-white" />,
+};
 
 function timeAgo(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -72,17 +99,23 @@ export function StoryCard({ story, isPlaying, hasAudio, onPlay, onPause }: Story
               if (placeholder) placeholder.style.display = "flex";
             }}
           />
-          {/* Placeholder behind — shown on error */}
+          {/* Fallback icon shown on image error */}
           <div
-            className="hidden h-[52px] w-[52px] items-center justify-center rounded-xl bg-white/[0.06] text-xl"
+            className={cn(
+              "hidden h-[52px] w-[52px] items-center justify-center rounded-xl",
+              SECTION_COLORS[story.section] ?? "bg-muted",
+            )}
             style={{ display: "none" }}
           >
-            {feed?.emoji ?? "📰"}
+            {SECTION_ICON[story.section]}
           </div>
         </div>
       ) : (
-        <div className="flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-xl bg-white/[0.06] text-xl">
-          {feed?.emoji ?? "📰"}
+        <div className={cn(
+          "flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-xl",
+          SECTION_COLORS[story.section] ?? "bg-muted",
+        )}>
+          {SECTION_ICON[story.section]}
         </div>
       )}
 

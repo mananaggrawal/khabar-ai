@@ -1,10 +1,10 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { useState } from "react";
-import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import { CITY_KEY, DEFAULT_CITY, MAJOR_CITIES } from "@/lib/news/sources";
+import { BottomNav } from "@/components/BottomNav";
 
 const LANGUAGE_KEY = "khabar-language";
 
@@ -45,24 +45,20 @@ function SettingsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div
+      className="min-h-screen bg-background text-foreground flex flex-col"
+      style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 60px)" }}
+    >
       <header
-        className="flex items-center justify-between px-6"
-        style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 1.5rem)" }}
+        className="flex items-center justify-between px-5 pb-2"
+        style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 1rem)" }}
       >
-        <button
-          onClick={() => router.navigate({ to: "/" })}
-          aria-label="Back"
-          className="inline-flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
-        >
-          <ArrowLeft className="size-4" />
-        </button>
-        <span className="font-serif text-xl tracking-tight">Settings</span>
-        {/* spacer to balance back button */}
-        <div className="size-9" />
+        <span className="font-serif text-xl tracking-tight">
+          Khabar <em className="italic text-primary">AI</em>
+        </span>
       </header>
 
-      <main className="mx-auto max-w-2xl space-y-10 px-6 py-10">
+      <main className="flex-1 mx-auto w-full max-w-2xl space-y-10 px-6 py-4 overflow-y-auto">
 
         {/* Language */}
         <section>
@@ -88,8 +84,8 @@ function SettingsPage() {
                     active
                       ? "border-primary/40 bg-primary/10 text-foreground"
                       : lang.available
-                      ? "border-white/10 text-foreground/70 hover:border-white/20 hover:bg-white/[0.03]"
-                      : "border-white/10 text-muted-foreground/50 cursor-not-allowed",
+                      ? "border-border text-foreground/70 hover:border-border/80 hover:bg-black/[0.02]"
+                      : "border-border/40 text-muted-foreground/40 cursor-not-allowed",
                   )}
                 >
                   <span className="flex-1 text-sm font-medium">{lang.label}</span>
@@ -112,7 +108,7 @@ function SettingsPage() {
         <section>
           <h2 className="font-serif text-lg">Local News City</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Used for the 📍 Local section in your briefing.
+            Used for the Local section in your briefing.
           </p>
           <div className="mt-4 grid grid-cols-2 gap-2">
             {MAJOR_CITIES.map((city) => {
@@ -125,7 +121,7 @@ function SettingsPage() {
                     "flex items-center gap-2 rounded-2xl border px-4 py-2.5 text-left text-sm transition-colors",
                     active
                       ? "border-primary/40 bg-primary/10 text-foreground font-medium"
-                      : "border-white/10 text-foreground/70 hover:border-white/20 hover:bg-white/[0.03]",
+                      : "border-border text-foreground/70 hover:border-border/80 hover:bg-black/[0.02]",
                   )}
                 >
                   {active && <span className="text-primary">✓</span>}
@@ -146,6 +142,8 @@ function SettingsPage() {
 
 
       </main>
+
+      <BottomNav />
     </div>
   );
 }

@@ -7,7 +7,7 @@ import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
 import {
   ChevronDown, SkipBack, SkipForward, Play, Pause,
-  RotateCcw, RotateCw, ExternalLink,
+  RotateCcw, RotateCw, Bookmark,
 } from "lucide-react";
 import { VoiceOrb } from "./VoiceOrb";
 import type { useMonologue } from "@/hooks/useMonologue";
@@ -68,24 +68,19 @@ export function PlayerScreen({ mono, visible, onClose }: PlayerScreenProps) {
             <button
               onClick={onClose}
               aria-label="Close player"
-              className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-white/5 hover:text-foreground transition-colors"
+              className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-black/5 hover:text-foreground transition-colors"
             >
               <ChevronDown className="size-5" />
             </button>
-            <span className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
-              Now playing
+            <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground/60">
+              Today's Briefing
             </span>
-            {currentStory?.link ? (
-              <a
-                href={currentStory.link}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-white/5 hover:text-foreground transition-colors"
-                aria-label="Open article"
-              >
-                <ExternalLink className="size-4" />
-              </a>
-            ) : <div className="size-9" />}
+            <button
+              aria-label="Bookmark"
+              className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-black/5 hover:text-foreground transition-colors"
+            >
+              <Bookmark className="size-4" />
+            </button>
           </div>
 
           {/* Orb — centered */}
@@ -100,14 +95,16 @@ export function PlayerScreen({ mono, visible, onClose }: PlayerScreenProps) {
 
           {/* Story info */}
           <div className="px-6 pb-2">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
+            <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-primary/70 mb-2">
               {currentFeed && (
-                <span>{currentFeed.emoji} {language === "hi" ? currentFeed.labelHi : currentFeed.label}</span>
+                <span>{language === "hi" ? currentFeed.labelHi : currentFeed.label}</span>
               )}
               {sectionStories.length > 0 && (
                 <>
-                  <span>·</span>
-                  <span>{storyPosInSection} / {sectionStories.length}</span>
+                  <span className="text-muted-foreground/40">·</span>
+                  <span className="text-muted-foreground/60 normal-case font-normal tracking-normal">
+                    {storyPosInSection} of {sectionStories.length}
+                  </span>
                 </>
               )}
             </div>
@@ -115,8 +112,8 @@ export function PlayerScreen({ mono, visible, onClose }: PlayerScreenProps) {
             <p className="font-serif text-xl leading-snug text-foreground line-clamp-3">
               {currentStory?.title ?? "—"}
             </p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {currentStory?.source ?? ""}
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              Khabar AI · Voice of Aanya
             </p>
           </div>
 
@@ -131,7 +128,7 @@ export function PlayerScreen({ mono, visible, onClose }: PlayerScreenProps) {
               onChange={(e) => seek(parseFloat(e.target.value))}
               className="w-full h-1 cursor-pointer rounded-full accent-primary"
               style={{
-                background: `linear-gradient(to right, hsl(var(--primary)) ${progress * 100}%, rgba(255,255,255,0.15) ${progress * 100}%)`,
+                background: `linear-gradient(to right, var(--primary) ${progress * 100}%, oklch(0 0 0 / 0.12) ${progress * 100}%)`,
               }}
             />
             <div className="mt-1 flex justify-between text-[10px] text-muted-foreground/60">
@@ -156,10 +153,10 @@ export function PlayerScreen({ mono, visible, onClose }: PlayerScreenProps) {
             <button
               onClick={() => seekBackward(10)}
               aria-label="Rewind 10s"
-              className="flex size-10 items-center justify-center rounded-full text-muted-foreground hover:text-foreground transition-colors"
+              className="flex flex-col size-10 items-center justify-center gap-0.5 rounded-full text-muted-foreground hover:text-foreground transition-colors"
             >
               <RotateCcw className="size-5" />
-              <span className="sr-only">−10s</span>
+              <span className="text-[9px] font-semibold leading-none">10</span>
             </button>
 
             <button
@@ -175,10 +172,10 @@ export function PlayerScreen({ mono, visible, onClose }: PlayerScreenProps) {
             <button
               onClick={() => seekForward(10)}
               aria-label="Forward 10s"
-              className="flex size-10 items-center justify-center rounded-full text-muted-foreground hover:text-foreground transition-colors"
+              className="flex flex-col size-10 items-center justify-center gap-0.5 rounded-full text-muted-foreground hover:text-foreground transition-colors"
             >
               <RotateCw className="size-5" />
-              <span className="sr-only">+10s</span>
+              <span className="text-[9px] font-semibold leading-none">10</span>
             </button>
 
             <button

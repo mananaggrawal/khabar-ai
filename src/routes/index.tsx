@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { motion, AnimatePresence } from "motion/react";
-import { Settings, Play, Pause, SkipBack, SkipForward, ChevronRight, Sun, Moon } from "lucide-react";
+import { Settings, Play, Pause, SkipBack, SkipForward } from "lucide-react";
 import { VoiceOrb } from "@/components/VoiceOrb";
 
 import { StoryCard }    from "@/components/StoryCard";
@@ -19,27 +19,6 @@ export const Route = createFileRoute("/")({
   head: () => ({ meta: [{ title: "Khabar AI" }] }),
   component: HomePage,
 });
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function useTheme() {
-  const [isDark, setIsDark] = useState(false);
-  useEffect(() => {
-    const saved = localStorage.getItem("khabar-theme");
-    if (saved === "dark") { setIsDark(true); document.documentElement.classList.add("dark"); }
-  }, []);
-  return {
-    isDark,
-    toggle: () => {
-      setIsDark((d) => {
-        const next = !d;
-        document.documentElement.classList.toggle("dark", next);
-        try { localStorage.setItem("khabar-theme", next ? "dark" : "light"); } catch {}
-        return next;
-      });
-    },
-  };
-}
 
 // ── Mini Player (portal) ──────────────────────────────────────────────────────
 
@@ -64,7 +43,7 @@ function MiniPlayer({
           animate={{ y: 0, opacity: 1 }}
           exit={{ y: 100, opacity: 0 }}
           transition={{ type: "spring", damping: 28, stiffness: 320 }}
-          style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 12px)" }}
+          style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 68px)" }}
           className="fixed inset-x-3 z-50"
         >
           <div
@@ -78,11 +57,6 @@ function MiniPlayer({
             />
 
             <div className="flex items-center gap-3 px-4 py-3">
-              {/* Section emoji */}
-              <span className="shrink-0 text-lg">
-                {currentFeed?.emoji ?? "🎙️"}
-              </span>
-
               {/* Story info */}
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[11px] text-muted-foreground">
@@ -172,7 +146,7 @@ function SectionTabs({
                 : "bg-white/[0.02] text-muted-foreground/30 cursor-not-allowed"
             }`}
           >
-            {feed.emoji} {language === "hi" ? feed.labelHi : feed.label}
+            {language === "hi" ? feed.labelHi : feed.label}
           </button>
         );
       })}
@@ -183,7 +157,6 @@ function SectionTabs({
 // ── Home Page ─────────────────────────────────────────────────────────────────
 
 function HomePage() {
-  const { isDark, toggle } = useTheme();
   const fn = useServerFn(fetchBriefing);
   const briefingQuery = useQuery({
     queryKey: ["briefing"],
@@ -230,22 +203,13 @@ function HomePage() {
         style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 1rem)" }}
       >
         <span className="font-serif text-xl tracking-tight">Khabar <em className="italic text-primary">AI</em></span>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={toggle}
-            aria-label="Toggle theme"
-            className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-white/5 hover:text-foreground transition-colors"
-          >
-            {isDark ? <Sun className="size-4" /> : <Moon className="size-4" />}
-          </button>
-          <Link
-            to="/settings"
-            aria-label="Settings"
-            className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-white/5 hover:text-foreground transition-colors"
-          >
-            <Settings className="size-4" />
-          </Link>
-        </div>
+        <Link
+          to="/settings"
+          aria-label="Settings"
+          className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-black/5 hover:text-foreground transition-colors"
+        >
+          <Settings className="size-4" />
+        </Link>
       </header>
 
       {/* Loading state */}
@@ -303,6 +267,42 @@ function HomePage() {
 
       {briefing && (
         <>
+          {/* Hero card */}
+          {(() => {
+            const withAudio = briefing.stories.filter((s) =>
+              mono.language === "hi" ? !!s.audioUrlHi : !!s.audioUrlEn,
+            );
+            const listenMins = Math.max(1, Math.round(withAudio.length * 1.5));
+            const today = new Date().toLocaleDateString("en-IN", {
+              weekday: "short", day: "numeric", month: "long",
+            });
+            const topStory = briefing.stories[0];
+            const isPlayingAll = mono.state === "playing";
+            const firstSection: SectionId = availableSections.has("headlines")
+              ? "headlines"
+              : ([...availableSections][0] as SectionId);
+            return (
+              <div className="mx-4 mb-3 rounded-2xl bg-foreground px-4 py-4 text-background">
+                <p className="text-[10px] font-semibold uppercase tracking-wider opacity-50 mb-2">
+                  {today} · {listenMins} min
+                </p>
+                {topStory && (
+                  <p className="font-serif text-sm leading-snug mb-3 line-clamp-2 opacity-85">
+                    {topStory.title}
+                  </p>
+                )}
+                <button
+                  onClick={() => isPlayingAll ? mono.pause() : mono.playSection(firstSection)}
+                  className="flex items-center gap-1.5 rounded-full bg-primary px-4 py-1.5 text-[12px] font-semibold text-white transition-transform active:scale-95"
+                >
+                  {isPlayingAll
+                    ? <><Pause className="size-3 fill-current" />Pause</>
+                    : <><Play className="size-3 fill-current ml-0.5" />Play briefing</>}
+                </button>
+              </div>
+            );
+          })()}
+
           {/* Section tabs */}
           <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b border-white/[0.05]">
             <SectionTabs
@@ -316,7 +316,7 @@ function HomePage() {
           {/* Story list */}
           <div
             className="flex-1 overflow-y-auto px-4 py-3 space-y-1.5"
-            style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 96px)" }}
+            style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 148px)" }}
           >
             {/* Section play-all button */}
             {activeStories.some((s) =>
