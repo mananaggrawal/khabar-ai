@@ -16,7 +16,7 @@ export function BottomNav() {
       className="fixed bottom-0 left-0 right-0 z-40 border-t border-border/50 bg-background/95 backdrop-blur-sm"
       style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
     >
-      <div className="flex items-center justify-around">
+      <div className="h-[56px] flex items-center justify-around">
         {TABS.map(({ to, label, Icon }) => {
           const active = to === "/" ? pathname === "/" : pathname.startsWith(to);
           return (
@@ -24,7 +24,7 @@ export function BottomNav() {
               key={to}
               to={to}
               className={cn(
-                "flex flex-col items-center gap-1 py-2.5 px-6 text-[10px] font-medium transition-colors",
+                "flex flex-col items-center gap-1 px-6 text-[10px] font-medium transition-colors",
                 active ? "text-primary" : "text-muted-foreground hover:text-foreground",
               )}
             >
