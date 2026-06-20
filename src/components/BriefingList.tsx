@@ -153,16 +153,16 @@ function TopicCard({ topic: t, index: i, isActive, playingState = "idle", onPlay
         role="button" tabIndex={0}
         onClick={() => setOpen(!open)}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(!open); } }}
-        className="flex w-full cursor-pointer items-start gap-3 px-4 py-3 text-left"
+        className="flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left outline-none"
       >
         {/* Play / pause button (left) */}
         {hasAudio ? (
           <button
             onClick={handlePlayPause}
             aria-label={isPlaying ? "Pause" : "Play"}
-            className={`mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full transition-colors ${
+            className={`flex size-6 shrink-0 items-center justify-center rounded-full outline-none transition-colors ${
               isActive
-                ? "bg-primary/20 text-primary"
+                ? "text-primary"
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >

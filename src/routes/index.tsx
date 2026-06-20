@@ -351,7 +351,7 @@ function SectionGroup({
             onPause={mono.pause}
             onPlayTopic={(topicId) => {
               const idx = mono.topicsWithAudio.findIndex((t) => t.id === topicId);
-              if (idx >= 0) mono.playTopic(idx);
+              if (idx >= 0) mono.playFrom(idx);
             }}
             progress={isPlaying || isPaused ? mono.progress : 0}
             showDivider={i > 0}
@@ -400,21 +400,13 @@ function SectionRow({
         role="button" tabIndex={0}
         onClick={() => setExpanded((e) => !e)}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded((v) => !v); } }}
-        className="flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left"
+        className="flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left outline-none"
       >
-        {/* Active indicator */}
-        <div className="flex size-6 shrink-0 items-center justify-center">
-          {isPlaying ? (
-            <WaveformIcon />
-          ) : active ? (
-            <span className="size-1.5 rounded-full bg-primary" />
-          ) : null}
-        </div>
-
         {/* Section name */}
         <div className="flex-1 min-w-0">
-          <p className={`text-sm ${active ? "font-medium text-foreground" : "text-foreground/80"}`}>
+          <p className={`flex items-center gap-2 text-sm ${active ? "font-medium text-foreground" : "text-foreground/80"}`}>
             {section.label}
+            {isPlaying && <WaveformIcon />}
           </p>
           <p className="text-xs text-muted-foreground">
             {section.topics.length} {section.topics.length === 1 ? "story" : "stories"}

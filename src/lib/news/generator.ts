@@ -651,3 +651,115 @@ export async function generateDailyBriefing(logger: Logger = () => {}): Promise<
   log(`Done — ${sections.length} sections, ${sections.reduce((n, s) => n + s.topics.length, 0)} topics`);
   return briefing;
 }
+
+// ─── Patch missing sections into existing briefing ───────────────────────────
+
+export async function generateMissingSections(logger: Logger = () => {}): Promise<{ added: string[]; briefing: DailyBriefing }> {
+  const log = (msg: string) => { console.log(`[generator] ${msg}`); logger(msg); };
+
+  const existing = await getLatestBriefing();
+  if (!existing) throw new Error("No existing briefing found — run full generation first");
+
+  const presentCategories = new Set(existing.sections.map((s) => s.category));
+  const missingCfgs = SECTIONS.filter((s) => !presentCategories.has(s.category));
+
+  if (missingCfgs.length === 0) {
+    log("No missing sections — briefing is complete");
+    return { added: [], briefing: existing };
+  }
+  log(`Missing sections: ${missingCfgs.map((s) => s.label).join(", ")}`);
+
+  const date = existing.date;
+  const dateLabel = new Date(date + "T12:00:00").toLocaleDateString("en-US", {
+    weekday: "long", month: "long", day: "numeric", year: "numeric",
+  });
+
+  // Step 1: Fetch feeds
+  log("Fetching feeds…");
+  const { india, global } = await fetchAllFeeds();
+
+  // Step 2: Categorise — only look at missing categories
+  log("Categorising into missing sections only…");
+  const allPicks = await geminiCategorise(india, global, dateLabel);
+  const missingPicks: [SectionCategory, typeof india][] = missingCfgs
+    .map((cfg) => [cfg.category, allPicks.get(cfg.category) ?? []] as [SectionCategory, typeof india])
+    .filter(([, items]) => items.length > 0);
+
+  if (missingPicks.length === 0) {
+    log("No stories found for missing sections");
+    return { added: [], briefing: existing };
+  }
+
+  // Step 3: Process missing sections
+  log("Researching missing sections…");
+  const sectionResults = await Promise.all(
+    missingPicks.map(([cat, items]) => {
+      const cfg = SECTION_MAP.get(cat)!;
+      log(`  Research: ${cfg.label} (${items.length} stories)`);
+      return processSection(cfg, items, dateLabel)
+        .then((r) => { log(`  Done: ${cfg.label} — ${r.topics.length} topics`); return r; })
+        .catch((err) => { log(`  Failed: ${cat} — ${err.message}`); return null; });
+    }),
+  );
+
+  // Step 4: Translate to Hindi
+  const hindiMaps = await Promise.all(
+    sectionResults.map((data) =>
+      data ? translateSectionScripts(data.topics) : Promise.resolve(new Map<string, string>()),
+    ),
+  );
+
+  // Step 5: TTS
+  type TtsJob = { text: string; filename: string; language: "en" | "hi"; sectionIdx: number; topicIdx: number };
+  const jobs: TtsJob[] = [];
+  sectionResults.forEach((data, sIdx) => {
+    if (!data) return;
+    const hiMap = hindiMaps[sIdx];
+    data.topics.forEach((topic, tIdx) => {
+      if (topic.monologueScript) {
+        const safeId = topic.id.slice(0, 50).replace(/[^a-z0-9-]/g, "-");
+        const base = `briefing-${date}-${data.category}-${safeId}`;
+        jobs.push({ text: topic.monologueScript, filename: `${base}-en`, language: "en", sectionIdx: sIdx, topicIdx: tIdx });
+        const hi = hiMap.get(topic.id);
+        if (hi) jobs.push({ text: hi, filename: `${base}-hi`, language: "hi", sectionIdx: sIdx, topicIdx: tIdx });
+      }
+    });
+  });
+
+  log(`Running TTS for ${jobs.length} files…`);
+  const audioResults = new Map<string, string>();
+  await batchRun(
+    jobs,
+    async (job) => {
+      try {
+        const url = await googleTTS(job.text, job.filename, job.language);
+        audioResults.set(`${job.sectionIdx}-${job.topicIdx}-${job.language}`, url);
+      } catch (err: any) { log(`  TTS failed: ${job.filename} — ${err.message}`); }
+    },
+    2, 4000,
+  );
+
+  // Assemble new sections
+  const newSections: BriefingSection[] = [];
+  const addedLabels: string[] = [];
+  sectionResults.forEach((data, sIdx) => {
+    if (!data) return;
+    const topicsWithAudio: BriefingTopic[] = data.topics.map((t, tIdx) => ({
+      ...t,
+      audioUrlEn: audioResults.get(`${sIdx}-${tIdx}-en`),
+      audioUrlHi: audioResults.get(`${sIdx}-${tIdx}-hi`),
+    }));
+    newSections.push({ ...data, topics: topicsWithAudio, monologueScript: "", audioUrl: "" });
+    addedLabels.push(data.label);
+  });
+
+  // Merge + save
+  const merged: DailyBriefing = {
+    ...existing,
+    generatedAt: new Date().toISOString(),
+    sections: [...existing.sections, ...newSections],
+  };
+  await saveBriefing(merged);
+  log(`Added ${addedLabels.join(", ")} — saved`);
+  return { added: addedLabels, briefing: merged };
+}

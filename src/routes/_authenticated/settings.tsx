@@ -4,6 +4,8 @@ import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
+import { useServerFn } from "@tanstack/react-start";
+import { patchMissingSections } from "@/lib/news/briefing.functions";
 
 const LANGUAGE_KEY = "khabar-language";
 
@@ -19,6 +21,22 @@ export const Route = createFileRoute("/_authenticated/settings")({
 function SettingsPage() {
   const router = useRouter();
   const [selectedLang, setSelectedLang] = useState<string>(readLanguage);
+  const [patchStatus, setPatchStatus] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [patchMsg, setPatchMsg] = useState("");
+  const patchFn = useServerFn(patchMissingSections);
+
+  async function runPatch() {
+    setPatchStatus("running");
+    setPatchMsg("Generating missing sections…");
+    try {
+      const { added } = await patchFn({ data: undefined as never });
+      setPatchStatus("done");
+      setPatchMsg(added.length > 0 ? `Added: ${added.join(", ")}` : "All sections already present.");
+    } catch (e: any) {
+      setPatchStatus("error");
+      setPatchMsg(e?.message ?? "Failed");
+    }
+  }
 
   function selectLanguage(code: string) {
     setSelectedLang(code);
@@ -90,6 +108,29 @@ function SettingsPage() {
               );
             })}
           </div>
+        </section>
+
+        {/* Briefing */}
+        <section>
+          <h2 className="font-serif text-lg">Briefing</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Generate content for any sections missing from today's briefing.
+          </p>
+          <div className="mt-4 flex items-center gap-3">
+            <Button
+              onClick={runPatch}
+              disabled={patchStatus === "running"}
+              variant="outline"
+              className="rounded-full"
+            >
+              {patchStatus === "running" ? "Generating…" : "Generate missing sections"}
+            </Button>
+          </div>
+          {patchMsg && (
+            <p className={`mt-2 text-sm ${patchStatus === "error" ? "text-red-500" : "text-muted-foreground"}`}>
+              {patchMsg}
+            </p>
+          )}
         </section>
 
         {/* Account */}

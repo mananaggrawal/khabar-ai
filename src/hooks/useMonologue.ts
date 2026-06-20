@@ -240,6 +240,15 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
     [playTopicAt],
   );
 
+  /** Play from a topic and auto-advance through all remaining topics */
+  const playFrom = useCallback(
+    (idx: number) => {
+      groupLimitRef.current = null;
+      playTopicAt(idx, true);
+    },
+    [playTopicAt],
+  );
+
   const nextTopic = useCallback(() => {
     const next = currentIdxRef.current + 1;
     if (next < topicsWithAudio.length) playTopicAt(next, queueAllRef.current);
@@ -419,6 +428,7 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
     playGroup,
     playSection,
     playTopic,
+    playFrom,
     nextSection: nextTopic,   // alias so existing UI still works
     prevSection: prevTopic,   // alias so existing UI still works
     nextTopic,
