@@ -254,11 +254,42 @@ Return JSON with one key per section, value = array of 1-based indices:
 
 // ─── Step 3: Research + per-story scripts ────────────────────────────────────
 
+const SECTION_CHUNK_SIZE = 12; // max stories per Gemini call to avoid JSON truncation
+
 async function processSection(
   cfg: SectionConfig,
   selected: RssItem[],
   dateLabel: string,
 ): Promise<Omit<BriefingSection, "audioUrl" | "monologueScript">> {
+  // Chunk large sections to prevent Gemini JSON truncation
+  let topics: BriefingTopic[];
+  if (selected.length > SECTION_CHUNK_SIZE) {
+    const chunks: RssItem[][] = [];
+    for (let i = 0; i < selected.length; i += SECTION_CHUNK_SIZE) {
+      chunks.push(selected.slice(i, i + SECTION_CHUNK_SIZE));
+    }
+    console.log(`[generator] ${cfg.label}: ${selected.length} stories → ${chunks.length} chunks of ≤${SECTION_CHUNK_SIZE}`);
+    const chunkResults = await Promise.all(
+      chunks.map((chunk) => processSectionChunk(cfg, chunk, dateLabel)),
+    );
+    topics = chunkResults.flat();
+  } else {
+    topics = await processSectionChunk(cfg, selected, dateLabel);
+  }
+  return {
+    category: cfg.category,
+    label: cfg.label,
+    emoji: cfg.emoji,
+    group: cfg.group,
+    topics,
+  };
+}
+
+async function processSectionChunk(
+  cfg: SectionConfig,
+  selected: RssItem[],
+  dateLabel: string,
+): Promise<BriefingTopic[]> {
   const isIndia = cfg.group === "india";
 
   const entityRule = isIndia
@@ -296,18 +327,18 @@ Return JSON with one key:
 Each object:
 {
   "id": "kebab-slug",
-  "headline": "VERBATIM headline from the stories list — do NOT rephrase",
+  "headline": "punchy headline ≤8 words — newspaper front-page style, no verbs like 'looking at' or 'in other news'",
   "hook": "teaser ≤18 words — MUST name the specific country/company/person",
   "explanation": "40-60 word summary — name every entity by full name, never use vague terms",
   "script": "spoken script for THIS story only — 60-80 words, conversational Khabar AI voice, jump straight into the story, no greeting or sign-off, no section title announcement${!isIndia ? ", always name the specific country/institution/entity" : ""}"
 }
 
-IMPORTANT: headline must be copied word-for-word from the original stories list.
+IMPORTANT: Keep headlines short, punchy, and noun-phrase style (e.g. "FTSE 100 Falls on Fed Surprise", not "Looking at the broader market, the FTSE 100...").
 Cover ALL stories from the research, not just a subset.`,
   );
 
   const rawTopics: any[] = Array.isArray(assembled.topics) ? assembled.topics : [];
-  const topics: BriefingTopic[] = rawTopics.map((t: any, i: number) => ({
+  return rawTopics.map((t: any, i: number) => ({
     id: String(t.id ?? `${cfg.category}-${i}`),
     headline: String(t.headline ?? ""),
     hook: String(t.hook ?? ""),
@@ -319,14 +350,6 @@ Cover ALL stories from the research, not just a subset.`,
       selected,
     ),
   }));
-
-  return {
-    category: cfg.category,
-    label: cfg.label,
-    emoji: cfg.emoji,
-    group: cfg.group,
-    topics,
-  };
 }
 
 // ─── Step 4: Translate scripts to Hindi ──────────────────────────────────────
@@ -568,7 +591,8 @@ export async function generateDailyBriefing(logger: Logger = () => {}): Promise<
     const hindiMap = hindiMaps[sectionIdx];
     data.topics.forEach((topic, topicIdx) => {
       if (topic.monologueScript) {
-        const base = `briefing-${date}-${data.category}-${topic.id}`;
+        const safeId = topic.id.slice(0, 50).replace(/[^a-z0-9-]/g, "-");
+        const base = `briefing-${date}-${data.category}-${safeId}`;
         jobs.push({ text: topic.monologueScript, filename: `${base}-en`, language: "en", sectionIdx, topicIdx });
         const hiScript = hindiMap.get(topic.id);
         if (hiScript) {
@@ -594,8 +618,8 @@ export async function generateDailyBriefing(logger: Logger = () => {}): Promise<
         log(`  TTS failed: ${job.filename} — ${err.message}`);
       }
     },
-    5,  // 5 concurrent TTS calls
-    800, // 800ms between batches
+    2,    // 2 concurrent TTS calls (free tier: 10 RPM)
+    4000, // 4s between batches → ~15 req/min max
   );
 
   // Assemble final sections with audio URLs on topics

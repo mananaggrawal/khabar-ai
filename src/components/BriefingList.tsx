@@ -1,17 +1,31 @@
 import { useState, type CSSProperties } from "react";
-import { ChevronDown, ExternalLink } from "lucide-react";
+import { ChevronDown, ExternalLink, Play, Pause } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import type { BriefingTopic } from "@/lib/news/generator";
 
 interface Props {
   topics: BriefingTopic[];
+  currentTopicId?: string;
+  playingState?: "playing" | "paused" | "idle";
+  onPlay?: (topicId: string) => void;
+  onPause?: () => void;
 }
 
-export function BriefingList({ topics }: Props) {
+export function BriefingList({ topics, currentTopicId, playingState = "idle", onPlay, onPause }: Props) {
   if (topics.length === 0) return null;
   return (
     <div className="space-y-2">
-      {topics.map((t, i) => <TopicCard key={t.id} topic={t} index={i} />)}
+      {topics.map((t, i) => (
+        <TopicCard
+          key={t.id}
+          topic={t}
+          index={i}
+          isActive={t.id === currentTopicId}
+          playingState={t.id === currentTopicId ? playingState : "idle"}
+          onPlay={onPlay ? () => onPlay(t.id) : undefined}
+          onPause={onPause}
+        />
+      ))}
     </div>
   );
 }
@@ -81,11 +95,56 @@ function buildQuery(t: BriefingTopic): string {
   return `${base} — explain the full background, key players, and what happens next.`;
 }
 
+// ── Waveform animation (for currently playing story) ─────────────────────────
+
+function WaveformIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="size-4" fill="currentColor">
+      {[2, 5, 8, 11, 14].map((x, i) => (
+        <rect
+          key={x}
+          x={x - 1} y={0} width={2} rx={1}
+          style={{
+            animation: `waveform 0.9s ease-in-out ${i * 0.12}s infinite alternate`,
+            transformOrigin: "center bottom",
+          } as React.CSSProperties}
+          height={8 + (i % 2) * 4}
+          transform={`translate(0, ${4 - (i % 2) * 2})`}
+        />
+      ))}
+      <style>{`
+        @keyframes waveform {
+          from { transform: scaleY(0.3); }
+          to   { transform: scaleY(1); }
+        }
+      `}</style>
+    </svg>
+  );
+}
+
 // ── Topic card ────────────────────────────────────────────────────────────────
 
-function TopicCard({ topic: t, index: i }: { topic: BriefingTopic; index: number }) {
+interface TopicCardProps {
+  topic: BriefingTopic;
+  index: number;
+  isActive?: boolean;
+  playingState?: "playing" | "paused" | "idle";
+  onPlay?: () => void;
+  onPause?: () => void;
+}
+
+function TopicCard({ topic: t, index: i, isActive, playingState = "idle", onPlay, onPause }: TopicCardProps) {
   const [open, setOpen] = useState(false);
   const query = buildQuery(t);
+  const hasAudio = !!(onPlay);
+  const isPlaying = isActive && playingState === "playing";
+  const isPaused = isActive && playingState === "paused";
+
+  function handlePlayPause(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (isPlaying) onPause?.();
+    else onPlay?.();
+  }
 
   return (
     <div className="rounded-2xl border border-white/5 bg-white/[0.02] overflow-hidden">
@@ -96,9 +155,31 @@ function TopicCard({ topic: t, index: i }: { topic: BriefingTopic; index: number
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(!open); } }}
         className="flex w-full cursor-pointer items-start gap-3 px-4 py-3 text-left"
       >
-        <span className="mt-1 w-6 shrink-0 text-xs tabular-nums text-muted-foreground">
-          {String(i + 1).padStart(2, "0")}
-        </span>
+        {/* Play / pause button (left) */}
+        {hasAudio ? (
+          <button
+            onClick={handlePlayPause}
+            aria-label={isPlaying ? "Pause" : "Play"}
+            className={`mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full transition-colors ${
+              isActive
+                ? "bg-primary/20 text-primary"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {isPlaying ? (
+              <WaveformIcon />
+            ) : isPaused ? (
+              <Play className="size-3 ml-0.5" />
+            ) : (
+              <Play className="size-3 ml-0.5" />
+            )}
+          </button>
+        ) : (
+          <span className="mt-1 w-6 shrink-0 text-xs tabular-nums text-muted-foreground">
+            {String(i + 1).padStart(2, "0")}
+          </span>
+        )}
+
         <div className="min-w-0 flex-1">
           <p className="font-serif text-base leading-snug">{t.headline}</p>
           {t.hook && <p className="mt-0.5 text-sm text-muted-foreground line-clamp-2">{t.hook}</p>}

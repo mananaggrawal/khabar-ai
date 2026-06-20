@@ -155,15 +155,22 @@ function pcmToWav(pcm: Buffer): Buffer {
 // Gemini TTS occasionally returns text tokens instead of audio (500 error).
 // Docs recommend automated retry logic.
 
-async function synthesizeWithRetry(text: string, language: 'en' | 'hi' = 'en', maxAttempts = 3): Promise<Buffer> {
+async function synthesizeWithRetry(text: string, language: 'en' | 'hi' = 'en', maxAttempts = 4): Promise<Buffer> {
   let lastErr: Error | null = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       return await synthesize(text, language);
     } catch (err: any) {
       lastErr = err;
-      console.warn(`[tts] attempt ${attempt}/${maxAttempts} failed: ${err.message}`);
-      if (attempt < maxAttempts) await new Promise((r) => setTimeout(r, 1000 * attempt));
+      const msg: string = err.message ?? "";
+      const is429 = msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED");
+      console.warn(`[tts] attempt ${attempt}/${maxAttempts} failed${is429 ? " (rate limit)" : ""}: ${msg}`);
+      if (attempt < maxAttempts) {
+        // 429 = rate limit: back off aggressively (30s, then 60s)
+        const delay = is429 ? 30_000 * attempt : 1000 * attempt;
+        console.warn(`[tts] waiting ${delay / 1000}s before retry…`);
+        await new Promise((r) => setTimeout(r, delay));
+      }
     }
   }
   throw lastErr!;

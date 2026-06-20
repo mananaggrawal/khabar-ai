@@ -346,8 +346,13 @@ function SectionGroup({
             isPaused={isPaused}
             hasAudio={hasAudio}
             currentTopicId={isActiveSection ? mono.currentTopic?.id : undefined}
+            playingState={isActiveSection ? mono.state as "playing" | "paused" | "idle" : "idle"}
             onPlay={() => sectionIdx >= 0 ? mono.playSection(sectionIdx) : undefined}
             onPause={mono.pause}
+            onPlayTopic={(topicId) => {
+              const idx = mono.topicsWithAudio.findIndex((t) => t.id === topicId);
+              if (idx >= 0) mono.playTopic(idx);
+            }}
             progress={isPlaying || isPaused ? mono.progress : 0}
             showDivider={i > 0}
           />
@@ -365,8 +370,10 @@ function SectionRow({
   isPaused,
   hasAudio,
   currentTopicId,
+  playingState,
   onPlay,
   onPause,
+  onPlayTopic,
   progress,
   showDivider,
 }: {
@@ -375,8 +382,10 @@ function SectionRow({
   isPaused: boolean;
   hasAudio: boolean;
   currentTopicId?: string;
+  playingState?: "playing" | "paused" | "idle";
   onPlay: () => void;
   onPause: () => void;
+  onPlayTopic: (topicId: string) => void;
   progress: number;
   showDivider: boolean;
 }) {
@@ -387,18 +396,20 @@ function SectionRow({
     <div className={`transition-colors ${active ? "bg-primary/[0.07]" : ""}`}>
       {showDivider && <div className="mx-4 h-px bg-white/[0.05]" />}
 
-      <div className="flex items-center gap-3 px-4 py-3">
-        {/* Play/pause button */}
-        <button
-          onClick={isPlaying ? onPause : onPlay}
-          disabled={!hasAudio}
-          aria-label={isPlaying ? "Pause" : "Play"}
-          className="flex size-8 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-white/10 disabled:opacity-30"
-        >
-          {isPlaying
-            ? <WaveformIcon />
-            : <Play className="size-3.5 ml-0.5" />}
-        </button>
+      <div
+        role="button" tabIndex={0}
+        onClick={() => setExpanded((e) => !e)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded((v) => !v); } }}
+        className="flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left"
+      >
+        {/* Active indicator */}
+        <div className="flex size-6 shrink-0 items-center justify-center">
+          {isPlaying ? (
+            <WaveformIcon />
+          ) : active ? (
+            <span className="size-1.5 rounded-full bg-primary" />
+          ) : null}
+        </div>
 
         {/* Section name */}
         <div className="flex-1 min-w-0">
@@ -411,14 +422,8 @@ function SectionRow({
           </p>
         </div>
 
-        {/* Expand stories */}
-        <button
-          onClick={() => setExpanded((e) => !e)}
-          className="flex size-8 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
-          aria-label="Toggle stories"
-        >
-          <ChevronDown className={`size-4 transition-transform ${expanded ? "rotate-180" : ""}`} />
-        </button>
+        {/* Expand chevron */}
+        <ChevronDown className={`size-4 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`} />
       </div>
 
       {/* Progress strip (active section) */}
@@ -437,7 +442,13 @@ function SectionRow({
             className="overflow-hidden"
           >
             <div className="px-4 pb-4 pt-1">
-              <BriefingList topics={section.topics} />
+              <BriefingList
+                topics={section.topics}
+                currentTopicId={currentTopicId}
+                playingState={playingState ?? "idle"}
+                onPlay={hasAudio ? onPlayTopic : undefined}
+                onPause={onPause}
+              />
             </div>
           </motion.div>
         )}

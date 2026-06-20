@@ -9,10 +9,12 @@ export type SectionCategory =
   | "india-sports"
   | "india-tech"
   | "india-entertainment"
+  | "india-health"
   | "global-world"
   | "global-business"
   | "global-sports"
   | "global-tech"
+  | "global-entertainment"
   | "global-health";
 
 export type SectionConfig = {
@@ -67,7 +69,7 @@ export const SECTIONS: SectionConfig[] = [
     label:       "Business & Economy",
     emoji:       "💰",
     group:       "india",
-    required:    false,
+    required:    true,
     description: "Indian economy, markets (BSE/NSE), startups, corporate news, RBI, SEBI, trade, employment, budget.",
     storyCount:  4,
     wordTarget:  280,
@@ -99,6 +101,16 @@ export const SECTIONS: SectionConfig[] = [
     group:       "india",
     required:    false,
     description: "Bollywood, OTT (Netflix/Prime/Hotstar India), Tollywood, Indian music, celebrity news, awards, box office.",
+    storyCount:  3,
+    wordTarget:  200,
+  },
+  {
+    category:    "india-health",
+    label:       "Health",
+    emoji:       "🏥",
+    group:       "india",
+    required:    false,
+    description: "Indian public health, AIIMS, ICMR, pharma (Sun/Cipla/Dr Reddy's), disease outbreaks, medical policy, mental health.",
     storyCount:  3,
     wordTarget:  200,
   },
@@ -142,6 +154,16 @@ export const SECTIONS: SectionConfig[] = [
     description: "Global tech: AI, Big Tech (Apple/Google/Meta/OpenAI), semiconductors, space (NASA/SpaceX), science breakthroughs.",
     storyCount:  4,
     wordTarget:  280,
+  },
+  {
+    category:    "global-entertainment",
+    label:       "Entertainment",
+    emoji:       "🎬",
+    group:       "global",
+    required:    false,
+    description: "International entertainment: Hollywood, Netflix/Disney+/HBO, global music (Grammy, Billboard), awards, box office.",
+    storyCount:  3,
+    wordTarget:  200,
   },
   {
     category:    "global-health",
