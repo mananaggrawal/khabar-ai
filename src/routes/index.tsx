@@ -388,6 +388,8 @@ function HomePage() {
         mono={mono}
         visible={playerOpen}
         onClose={() => setPlayerOpen(false)}
+        isSaved={mono.currentStory ? savedStories.isSaved(mono.currentStory.id) : false}
+        onSave={() => mono.currentStory && savedStories.toggle(mono.currentStory)}
       />
 
       {/* Story detail sheet */}

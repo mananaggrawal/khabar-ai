@@ -98,21 +98,16 @@ export function StoryDetailSheet({
                 <p className="font-serif text-lg leading-snug text-foreground">
                   {story.title}
                 </p>
-                <div className="mt-1 flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground">
-                    {story.source} · {timeAgo(story.publishedAt)}
-                  </span>
-                  {story.link && (
-                    <a
-                      href={story.link}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-0.5 text-xs font-medium text-primary hover:underline"
-                    >
-                      Go to article <ArrowUpRight className="size-3" />
-                    </a>
-                  )}
-                </div>
+                {story.link && (
+                  <a
+                    href={story.link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-1 flex items-center gap-0.5 text-xs font-medium text-primary hover:underline w-fit"
+                  >
+                    Go to article <ArrowUpRight className="size-3" />
+                  </a>
+                )}
               </div>
               <button
                 onClick={onClose}
