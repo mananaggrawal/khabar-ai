@@ -145,8 +145,8 @@ function SectionTabs({
               active
                 ? "bg-primary text-primary-foreground"
                 : hasContent
-                ? "bg-muted text-foreground/80 hover:bg-muted/80"
-                : "bg-muted/40 text-muted-foreground/40 cursor-not-allowed"
+                ? "bg-black/[0.06] text-foreground/70 hover:bg-black/[0.09]"
+                : "bg-black/[0.03] text-muted-foreground/40 cursor-not-allowed"
             }`}
           >
             {language === "hi" ? feed.labelHi : feed.label}
@@ -210,15 +210,20 @@ function HomePage() {
           Khabar <em className="italic text-primary">AI</em>
         </span>
         <span className="text-xs text-muted-foreground">
-          Today's news, <em className="font-semibold not-italic">spoken.</em>
+          Today's news, <em className="font-semibold italic">spoken.</em>
         </span>
       </header>
 
       {/* Loading state */}
       {briefingQuery.isLoading && (
-        <div className="flex flex-col flex-1 items-center justify-center gap-4">
+        <div className="flex flex-col flex-1 items-center justify-center gap-5">
           <VoiceOrb state="idle" size={160} />
-          <p className="text-sm text-muted-foreground animate-pulse">Loading briefing…</p>
+          <div className="flex flex-col items-center gap-1">
+            <span className="font-serif text-2xl tracking-tight">
+              Khabar <em className="italic text-primary">AI</em>
+            </span>
+            <p className="text-xs text-muted-foreground animate-pulse">Loading briefing…</p>
+          </div>
         </div>
       )}
 

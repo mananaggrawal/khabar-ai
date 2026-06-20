@@ -50,11 +50,14 @@ function SettingsPage() {
       style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 60px)" }}
     >
       <header
-        className="flex items-center justify-between px-5 pb-2"
+        className="sticky top-0 z-20 flex items-center justify-between px-5 pb-2 bg-background/95 backdrop-blur-sm"
         style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 1rem)" }}
       >
         <span className="font-serif text-xl tracking-tight">
           Khabar <em className="italic text-primary">AI</em>
+        </span>
+        <span className="text-xs text-muted-foreground">
+          Today's news, <em className="font-semibold italic">spoken.</em>
         </span>
       </header>
 

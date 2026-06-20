@@ -4,7 +4,7 @@
  */
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
-import { X, ExternalLink } from "lucide-react";
+import { X, ExternalLink, ArrowUpRight } from "lucide-react";
 import type { Story } from "@/lib/news/generator";
 import { FEED_MAP } from "@/lib/news/sources";
 
@@ -98,9 +98,21 @@ export function StoryDetailSheet({
                 <p className="font-serif text-lg leading-snug text-foreground">
                   {story.title}
                 </p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {story.source} · {timeAgo(story.publishedAt)}
-                </p>
+                <div className="mt-1 flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">
+                    {story.source} · {timeAgo(story.publishedAt)}
+                  </span>
+                  {story.link && (
+                    <a
+                      href={story.link}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-0.5 text-xs font-medium text-primary hover:underline"
+                    >
+                      Go to article <ArrowUpRight className="size-3" />
+                    </a>
+                  )}
+                </div>
               </div>
               <button
                 onClick={onClose}
@@ -137,7 +149,7 @@ export function StoryDetailSheet({
                       href={url(story.title)}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="flex items-center justify-between rounded-xl border border-border bg-card px-4 py-3 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+                      className="flex items-center justify-between rounded-2xl border border-border/40 bg-white shadow-sm px-4 py-3 text-sm font-medium text-foreground transition-all active:scale-[0.99] hover:shadow"
                     >
                       <span className="flex items-center gap-2.5">
                         <span
