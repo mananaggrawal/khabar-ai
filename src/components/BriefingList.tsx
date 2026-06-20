@@ -7,11 +7,12 @@ interface Props {
   topics: BriefingTopic[];
   currentTopicId?: string;
   playingState?: "playing" | "paused" | "idle";
+  progress?: number;
   onPlay?: (topicId: string) => void;
   onPause?: () => void;
 }
 
-export function BriefingList({ topics, currentTopicId, playingState = "idle", onPlay, onPause }: Props) {
+export function BriefingList({ topics, currentTopicId, playingState = "idle", progress = 0, onPlay, onPause }: Props) {
   if (topics.length === 0) return null;
   return (
     <div className="space-y-2">
@@ -22,6 +23,7 @@ export function BriefingList({ topics, currentTopicId, playingState = "idle", on
           index={i}
           isActive={t.id === currentTopicId}
           playingState={t.id === currentTopicId ? playingState : "idle"}
+          progress={t.id === currentTopicId ? progress : 0}
           onPlay={onPlay ? () => onPlay(t.id) : undefined}
           onPause={onPause}
         />
@@ -130,11 +132,12 @@ interface TopicCardProps {
   index: number;
   isActive?: boolean;
   playingState?: "playing" | "paused" | "idle";
+  progress?: number;
   onPlay?: () => void;
   onPause?: () => void;
 }
 
-function TopicCard({ topic: t, index: i, isActive, playingState = "idle", onPlay, onPause }: TopicCardProps) {
+function TopicCard({ topic: t, index: i, isActive, playingState = "idle", progress = 0, onPlay, onPause }: TopicCardProps) {
   const [open, setOpen] = useState(false);
   const query = buildQuery(t);
   const hasAudio = !!(onPlay);
@@ -181,6 +184,13 @@ function TopicCard({ topic: t, index: i, isActive, playingState = "idle", onPlay
         </div>
         <ChevronDown className={`mt-1 size-4 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} />
       </div>
+
+      {/* Progress strip — shown when this story is active */}
+      {isActive && (isPlaying || isPaused) && (
+        <div className="h-[2px] bg-black/[0.06] dark:bg-white/[0.05]">
+          <div className="h-full bg-primary transition-all" style={{ width: `${progress * 100}%` }} />
+        </div>
+      )}
 
       {/* Expanded body */}
       <AnimatePresence initial={false}>

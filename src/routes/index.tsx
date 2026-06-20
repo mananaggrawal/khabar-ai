@@ -418,13 +418,6 @@ function SectionRow({
         <ChevronDown className={`size-4 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`} />
       </div>
 
-      {/* Progress strip (active section) */}
-      {active && (
-        <div className="h-[2px] bg-white/[0.05]">
-          <div className="h-full bg-primary transition-all" style={{ width: `${progress * 100}%` }} />
-        </div>
-      )}
-
       {/* Expanded stories */}
       <AnimatePresence initial={false}>
         {expanded && (
@@ -438,6 +431,7 @@ function SectionRow({
                 topics={section.topics}
                 currentTopicId={currentTopicId}
                 playingState={playingState ?? "idle"}
+                progress={progress}
                 onPlay={hasAudio ? onPlayTopic : undefined}
                 onPause={onPause}
               />
