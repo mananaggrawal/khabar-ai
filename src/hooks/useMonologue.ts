@@ -15,7 +15,7 @@
  *   Position is saved to localStorage every 5s.
  *   Orb tap when idle resumes from saved position if available.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DailyBriefing } from "@/lib/news/generator";
 
 export type MonologueState =
@@ -48,8 +48,16 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
   // Keep refs in sync
   useEffect(() => { queueAllRef.current = queueAll; }, [queueAll]);
   useEffect(() => { currentIdxRef.current = currentSectionIdx; }, [currentSectionIdx]);
+  // playSectionAtRef is updated after playSectionAt is defined below
 
-  const sectionsWithAudio = briefing?.sections.filter((s) => s.audioUrl) ?? [];
+  const sectionsWithAudio = useMemo(
+    () => briefing?.sections.filter((s) => s.audioUrl) ?? [],
+    [briefing],
+  );
+
+  // Stable ref so onEnded closures always call the latest playSectionAt
+  // (avoids stale closure when component re-renders mid-playback)
+  const playSectionAtRef = useRef<((idx: number, all: boolean, startAt?: number) => void) | null>(null);
 
   // ── Audio attachment ────────────────────────────────────────────────────
 
@@ -136,19 +144,36 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
               try { localStorage.removeItem(RESUME_KEY); } catch {}
               return;
             }
-            playSectionAt(next, true);
+            // Small delay lets iOS release the previous Audio element before
+            // creating the next one — prevents AbortError on auto-advance.
+            // Uses ref to avoid stale closure if component re-rendered.
+            setTimeout(() => playSectionAtRef.current?.(next, true), 150);
           }
         : undefined;
 
       const audio = attachAudio(section.audioUrl, startAt, onEnded);
       audio.play().catch((e: any) => {
-        if (e?.name === "AbortError") return; // interrupted by pause — not a real error
+        if (e?.name === "AbortError") {
+          // iOS may abort the play() call if audio engine is still releasing
+          // the previous element. Retry once after a short delay — but ONLY
+          // if this audio element is still the active one (guards against the
+          // retry firing after auto-next has moved to the next section, which
+          // would cause two voices playing simultaneously).
+          setTimeout(() => {
+            if (audioRef.current !== audio) return; // stale — a new section started
+            audio.play().catch(() => setState("paused"));
+          }, 300);
+          return;
+        }
         setState("error");
         setError(e?.message ?? "Playback blocked — tap again");
       });
     },
     [briefing, sectionsWithAudio, attachAudio],
   );
+
+  // Keep playSectionAtRef current so onEnded closures never go stale
+  useEffect(() => { playSectionAtRef.current = playSectionAt; }, [playSectionAt]);
 
   const playAll = useCallback(() => {
     groupLimitRef.current = null;

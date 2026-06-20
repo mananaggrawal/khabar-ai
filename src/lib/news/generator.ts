@@ -278,12 +278,13 @@ Example: WRONG → "The central bank held rates." RIGHT → "The US Federal Rese
     `You are a thorough news researcher and skilled broadcast journalist.
 Use Google Search to find full details about each story.
 Write in spoken broadcast English — no bullet points, no markdown, no headers. Pure flowing prose.`,
-    `Research each of these ${cfg.label} news stories using Google Search, then write a spoken segment.
+    `Research ONLY the following ${cfg.label} news stories using Google Search, then write a spoken segment covering exactly these stories and no others.
+CRITICAL: Do NOT introduce, mention, or weave in any additional stories, events, companies, or people that are not in the list below. Stick strictly to what is listed.
 ${entityRule}
 Target: ~${cfg.wordTarget} words total. Cover each story with appropriate depth.
 Preserve the original headline wording. Use smooth, conversational transitions between stories.
 
-Stories to cover:
+Stories to cover (cover ALL of these, and ONLY these):
 ${selected.map((it, i) => `${i + 1}. ${it.title}`).join("\n")}`,
   );
 
@@ -302,6 +303,7 @@ Return JSON with exactly two keys:
 
 2. "script": single STRING — the spoken script for this section.
    ~${cfg.wordTarget} words. Pure flowing prose. Jump straight into the first story — no greeting, no "good morning/evening", no "welcome to Khabar AI", no section title announcement.
+   CRITICAL: Cover ONLY the stories listed in the topics array above — do NOT introduce, reference, or mention any additional stories, companies, events, or people that are not in the topics list.
    Transition between stories naturally mid-flow, the way a friend would — not with "moving on" or "next up" markers.
    Do NOT end with a closing line or sign-off. Just finish the last story and stop — the next section will continue seamlessly.
    NO markdown, NO headers, NO bullet points.

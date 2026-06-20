@@ -5,7 +5,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Settings, AlertTriangle,
-  SkipBack, SkipForward, Pause, Play, Square, ChevronDown,
+  SkipBack, SkipForward, Pause, Play, ChevronDown,
   RotateCcw, RotateCw, Sun, Moon,
 } from "lucide-react";
 
@@ -288,14 +288,6 @@ function BriefingSurface() {
                 <SkipForward className="size-4" />
               </button>
 
-              {/* Stop */}
-              <button
-                onClick={mono.stop}
-                aria-label="Stop"
-                className="flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-white/[0.06] hover:text-foreground"
-              >
-                <Square className="size-3.5" />
-              </button>
             </div>
           )}
 
