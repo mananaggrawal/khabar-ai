@@ -4,6 +4,7 @@ import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
+import { CITY_KEY, DEFAULT_CITY, MAJOR_CITIES } from "@/lib/news/sources";
 
 const LANGUAGE_KEY = "khabar-language";
 
@@ -16,9 +17,14 @@ export const Route = createFileRoute("/_authenticated/settings")({
   component: SettingsPage,
 });
 
+function readCity(): string {
+  try { return localStorage.getItem(CITY_KEY) || DEFAULT_CITY; } catch { return DEFAULT_CITY; }
+}
+
 function SettingsPage() {
   const router = useRouter();
   const [selectedLang, setSelectedLang] = useState<string>(readLanguage);
+  const [selectedCity, setSelectedCity] = useState<string>(readCity);
 
   function selectLanguage(code: string) {
     setSelectedLang(code);
@@ -26,6 +32,11 @@ function SettingsPage() {
       localStorage.setItem(LANGUAGE_KEY, code);
       window.dispatchEvent(new StorageEvent("storage", { key: LANGUAGE_KEY, newValue: code }));
     } catch {}
+  }
+
+  function selectCity(city: string) {
+    setSelectedCity(city);
+    try { localStorage.setItem(CITY_KEY, city); } catch {}
   }
 
   async function signOut() {
@@ -91,6 +102,34 @@ function SettingsPage() {
                   ) : !lang.available ? (
                     <span className="text-[10px] uppercase tracking-widest text-muted-foreground/40">Soon</span>
                   ) : null}
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* Local news city */}
+        <section>
+          <h2 className="font-serif text-lg">Local News City</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Used for the 📍 Local section in your briefing.
+          </p>
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            {MAJOR_CITIES.map((city) => {
+              const active = selectedCity === city;
+              return (
+                <button
+                  key={city}
+                  onClick={() => selectCity(city)}
+                  className={cn(
+                    "flex items-center gap-2 rounded-2xl border px-4 py-2.5 text-left text-sm transition-colors",
+                    active
+                      ? "border-primary/40 bg-primary/10 text-foreground font-medium"
+                      : "border-white/10 text-foreground/70 hover:border-white/20 hover:bg-white/[0.03]",
+                  )}
+                >
+                  {active && <span className="text-primary">✓</span>}
+                  {city}
                 </button>
               );
             })}

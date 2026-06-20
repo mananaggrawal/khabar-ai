@@ -1,414 +1,307 @@
 /**
- * Daily briefing generator — single-pull + categorise pipeline.
+ * Khabar AI Briefing Generator — v2
  *
- *  1. Fetch TOP_FEEDS (India + multi-region global) in parallel
- *  2. Gemini categorises ALL headlines (no count cap — filter noise/clickbait only)
- *  3. Each section: Gemini search research → per-story scripts (60-80 words each)
- *  4. Translate all scripts to Hindi (one Gemini call per section)
- *  5. Google TTS (Gemini Flash) per story × 2 languages (EN + HI) in parallel batches
- *  6. Persist to Supabase / .local-data/briefings.json
+ * Pipeline:
+ *  1. Fetch 10 Google News topic feeds in parallel
+ *  2. Parse + deduplicate stories (URL-hash + title-prefix)
+ *  3. Batch-generate spoken scripts via Gemini Flash (20 stories / call, EN+HI together)
+ *  4. TTS per story × 2 languages via Gemini TTS
+ *  5. Save flat DailyBriefing { stories[] } to Supabase Storage
  */
 
+import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fetchRss, type RssItem } from "./rss";
-import { TOP_FEEDS, SECTIONS, SECTION_MAP, type SectionCategory, type SectionConfig } from "./sources";
+import { FEEDS, FEED_MAP, DEFAULT_CITY, type SectionId } from "./sources";
 import { googleTTS } from "@/lib/tts/google";
 import { saveBriefingToStorage, loadBriefingFromStorage } from "@/lib/supabase-storage";
 
 const LOCAL_MODE = process.env.LOCAL_MODE === "true";
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-export type BriefingTopic = {
-  id: string;
-  headline: string;
-  hook: string;
-  explanation: string;
-  section: SectionCategory;
-  sourceUrl?: string;
-  sourceName?: string;
-  monologueScript?: string;  // English spoken script (per story)
-  audioUrlEn?: string;       // English TTS audio URL
-  audioUrlHi?: string;       // Hindi TTS audio URL
-};
-
-export type BriefingSection = {
-  category: SectionCategory;
-  label: string;
-  emoji: string;
-  group: "india" | "global";
-  topics: BriefingTopic[];
-  /** @deprecated — audio is now per-topic. Kept for backwards compat. */
-  monologueScript: string;
-  /** @deprecated — audio is now per-topic. Kept for backwards compat. */
-  audioUrl: string;
+export type Story = {
+  id: string;          // 16-char hex hash of link URL
+  title: string;       // original RSS headline
+  source: string;      // publisher name (extracted by RSS parser)
+  link: string;        // article URL (Google News redirect)
+  publishedAt: string; // ISO date string
+  section: SectionId;
+  imageUrl?: string;
+  scriptEn: string;
+  scriptHi: string;
+  audioUrlEn?: string;
+  audioUrlHi?: string;
 };
 
 export type DailyBriefing = {
-  id: string;
   date: string;
   generatedAt: string;
-  sections: BriefingSection[];
+  stories: Story[];
 };
 
-// ─── Gemini helpers ──────────────────────────────────────────────────────────
+export type Logger = (msg: string) => void;
+
+// ─── Story ID ─────────────────────────────────────────────────────────────────
+
+function storyId(url: string): string {
+  return createHash("sha256").update(url).digest("hex").slice(0, 16);
+}
+
+// ─── Gemini helpers ───────────────────────────────────────────────────────────
 
 const GEMINI_URL = (key: string) =>
   `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`;
 
-function getKey() {
+function getKey(): string {
   const k = process.env.GEMINI_API_KEY;
   if (!k) throw new Error("GEMINI_API_KEY is not set");
   return k;
 }
 
 function parseGeminiJson(raw: string): any {
-  let text = raw.trim()
+  const text = raw.trim()
     .replace(/^```(?:json)?\s*/i, "")
     .replace(/\s*```$/, "")
     .trim();
-
-  const stripTrailing = (s: string) => s.replace(/,(\s*[}\]])/g, "$1");
-  const fixQuotes = (s: string) =>
-    s.replace(/(['"])?([a-zA-Z_$][a-zA-Z0-9_$]*)(['"])?\s*:/g, '"$2":')
-     .replace(/:\s*'([^'\\]*(\\.[^'\\]*)*)'/g, ': "$1"');
-
+  const strip = (s: string) => s.replace(/,(\s*[}\]])/g, "$1");
   const attempts = [
-    () => JSON.parse(stripTrailing(text)),
-    () => JSON.parse(stripTrailing(fixQuotes(text))),
+    () => JSON.parse(strip(text)),
     () => {
-      const match = text.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
-      if (!match) throw new Error("no JSON structure found");
-      return JSON.parse(stripTrailing(match[1]));
-    },
-    () => {
-      const match = text.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
-      if (!match) throw new Error("no JSON structure found");
-      return JSON.parse(stripTrailing(fixQuotes(match[1])));
+      const m = text.match(/(\[[\s\S]*\]|\{[\s\S]*\})/);
+      if (!m) throw new Error("no JSON");
+      return JSON.parse(strip(m[1]));
     },
   ];
-
-  for (const attempt of attempts) {
-    try { return attempt(); } catch { /* try next */ }
+  for (const fn of attempts) {
+    try { return fn(); } catch {}
   }
   throw new Error(`Failed to parse Gemini JSON: ${text.slice(0, 200)}`);
 }
 
-async function geminiJson(system: string, user: string): Promise<any> {
+async function geminiJson(prompt: string): Promise<any> {
   const res = await fetch(GEMINI_URL(getKey()), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      contents: [{ role: "user", parts: [{ text: user }] }],
-      systemInstruction: { parts: [{ text: system }] },
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
       generationConfig: { responseMimeType: "application/json" },
     }),
   });
-  if (!res.ok) throw new Error(`Gemini JSON ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  if (!res.ok) throw new Error(`Gemini ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const json = await res.json();
-  const text = json.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}";
+  const text = json.candidates?.[0]?.content?.parts?.[0]?.text ?? "[]";
   return parseGeminiJson(text);
 }
 
-async function geminiSearch(system: string, user: string): Promise<string> {
-  const res = await fetch(GEMINI_URL(getKey()), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ role: "user", parts: [{ text: user }] }],
-      systemInstruction: { parts: [{ text: system }] },
-      tools: [{ google_search: {} }],
+// ─── Step 1: Fetch all feeds ───────────────────────────────────────────────────
+
+async function fetchAllFeeds(city: string): Promise<Map<SectionId, RssItem[]>> {
+  const results = await Promise.allSettled(
+    FEEDS.map(async (feed) => {
+      const url = feed.buildUrl({ city });
+      const items = await fetchRss(url, feed.label, feed.id);
+      return { id: feed.id, items };
     }),
-  });
-  if (!res.ok) throw new Error(`Gemini search ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  const json = await res.json();
-  return json.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  );
+
+  const map = new Map<SectionId, RssItem[]>();
+  for (const r of results) {
+    if (r.status === "fulfilled" && r.value.items.length > 0) {
+      map.set(r.value.id, r.value.items);
+    }
+  }
+  return map;
 }
 
-// ─── Source matching ─────────────────────────────────────────────────────────
+// ─── Step 2: Deduplicate into flat Story list ─────────────────────────────────
 
-function normalize(s: string) {
+function normalize(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
 }
 
-function wordOverlap(a: string, b: string): number {
-  const wa = new Set(normalize(a).split(/\s+/).filter((w) => w.length > 2));
-  const wb = new Set(normalize(b).split(/\s+/).filter((w) => w.length > 2));
-  if (wa.size === 0 || wb.size === 0) return 0;
-  let common = 0;
-  for (const w of wa) if (wb.has(w)) common++;
-  return common / Math.min(wa.size, wb.size);
-}
+function buildStories(feedMap: Map<SectionId, RssItem[]>): Story[] {
+  const seenIds = new Set<string>();
+  const seenTitles = new Set<string>();
+  const stories: Story[] = [];
 
-function findSource(
-  topic: { headline: string; hook: string; explanation: string },
-  pool: RssItem[],
-): { sourceUrl?: string; sourceName?: string } {
-  const candidates = [topic.headline, topic.hook, topic.explanation];
-  let best: { score: number; item: RssItem } | null = null;
-  for (const item of pool) {
-    const score = Math.max(...candidates.map((c) => wordOverlap(c, item.title)));
-    if (!best || score > best.score) best = { score, item };
-  }
-  if (best && best.score >= 0.35) {
-    return { sourceUrl: best.item.link, sourceName: best.item.source };
-  }
-  return {};
-}
+  // Process topic-specific feeds first; headlines last (avoids duplicate assignment)
+  const order: SectionId[] = [
+    "india", "world", "business", "technology", "entertainment",
+    "sports", "science", "health", "local", "headlines",
+  ];
 
-// ─── Step 1: Fetch all feeds ─────────────────────────────────────────────────
-
-function dedupeByTitle(items: RssItem[]): RssItem[] {
-  const seen = new Set<string>();
-  return items.filter((it) => {
-    const key = it.title.toLowerCase().slice(0, 60);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-async function fetchAllFeeds(): Promise<{ india: RssItem[]; global: RssItem[] }> {
-  const results = await Promise.allSettled(
-    TOP_FEEDS.map((f) => fetchRss(f.url, f.name, f.id).then((items) => ({ items, group: f.group }))),
-  );
-
-  const india: RssItem[] = [];
-  const global: RssItem[] = [];
-
-  for (const r of results) {
-    if (r.status === "fulfilled") {
-      if (r.value.group === "india") india.push(...r.value.items);
-      else global.push(...r.value.items);
+  for (const sectionId of order) {
+    const items = feedMap.get(sectionId) ?? [];
+    for (const item of items) {
+      const id = storyId(item.link);
+      const titleKey = normalize(item.title).slice(0, 60);
+      if (seenIds.has(id) || seenTitles.has(titleKey)) continue;
+      seenIds.add(id);
+      seenTitles.add(titleKey);
+      stories.push({
+        id,
+        title: item.title,
+        source: item.source,
+        link: item.link,
+        publishedAt: item.pubDate
+          ? new Date(item.pubDate).toISOString()
+          : new Date().toISOString(),
+        section: sectionId,
+        imageUrl: item.imageUrl,
+        scriptEn: "",
+        scriptHi: "",
+      });
     }
   }
 
-  return {
-    india:  dedupeByTitle(india).slice(0, 80),
-    global: dedupeByTitle(global).slice(0, 100),
-  };
+  return stories;
 }
 
-// ─── Step 2: Categorise (no story count cap — filter noise only) ─────────────
+// ─── Step 3: Batch generate spoken scripts ────────────────────────────────────
 
-type CategoryPicks = Map<SectionCategory, RssItem[]>;
+const SCRIPT_BATCH_SIZE = 20;
 
-async function geminiCategorise(
-  india: RssItem[],
-  global: RssItem[],
-  dateLabel: string,
-): Promise<CategoryPicks> {
-  const GLOBAL_OFFSET = india.length;
+async function generateScriptBatch(
+  batch: { title: string; source: string; section: SectionId }[],
+): Promise<{ en: string; hi: string }[]> {
+  const lines = batch
+    .map((s, i) => `${i + 1}. [${s.source} · ${s.section}] ${s.title}`)
+    .join("\n");
 
-  const indiaLines  = india.map((it, i) => `${i + 1}. ${it.title}`).join("\n");
-  const globalLines = global.map((it, i) => `${GLOBAL_OFFSET + i + 1}. ${it.title}`).join("\n");
+  const prompt = `You are Khabar AI — a warm, conversational Indian news voice.
 
-  const sectionDefs = SECTIONS.map(
-    (s) => `  "${s.category}" — ${s.label} [${s.group}]: ${s.description}`,
-  ).join("\n");
+Write a short spoken script for each headline. Each script must be exactly 2 sentences (65–80 words total):
+• Sentence 1: What happened — name the specific people, companies, countries involved. No vague pronouns.
+• Sentence 2: Why it matters, what's next, or the key consequence.
 
-  const prompt = `Today is ${dateLabel}. You are a senior news editor categorising headlines.
+Style: conversational, warm, direct. Jump straight into the news — no greeting, no "In other news", no sign-off.
+For India stories: write from an Indian perspective.
+For global stories: always name the specific country or institution, never say "the government" without specifying which.
+Hindi: keep proper nouns (names, places, companies) in English. Match the warm conversational tone.
 
-SECTIONS:
-${sectionDefs}
+Return a JSON array with exactly ${batch.length} objects in the same order as the input:
+[{"en": "English script here.", "hi": "Hindi script yahan."}, ...]
 
-RULES:
-- India sections (india-*): ONLY assign stories whose primary subject is India, Indian people, or events inside India.
-- Global sections (global-*): ONLY assign non-India international stories.
-- Each story goes in AT MOST ONE section — the best fit.
-- Include ALL newsworthy stories. Filter out ONLY: (a) obvious duplicates of the same event, (b) clickbait/gossip with no news value, (c) celebrity rumours, (d) promotional content.
-- Leave a section empty ([]) if no stories fit it well.
-
-INDIA HEADLINES (indices 1–${india.length}):
-${indiaLines}
-
-GLOBAL HEADLINES (indices ${GLOBAL_OFFSET + 1}–${GLOBAL_OFFSET + global.length}):
-${globalLines}
-
-Return JSON with one key per section, value = array of 1-based indices:
-{
-  "india-national": [1, 5, 12],
-  "india-business": [3, 8],
-  ...
-}`;
-
-  const result = await geminiJson(
-    "You are a news editor. Output strict JSON only — no commentary.",
-    prompt,
-  );
-
-  const all = [...india, ...global];
-  const picks: CategoryPicks = new Map();
-
-  for (const [cat, indices] of Object.entries(result)) {
-    if (!SECTION_MAP.has(cat as SectionCategory)) continue;
-    const items: RssItem[] = ((indices as number[]) ?? [])
-      .map((n) => all[n - 1])
-      .filter(Boolean);
-    if (items.length > 0) picks.set(cat as SectionCategory, items);
-  }
-
-  return picks;
-}
-
-// ─── Step 3: Research + per-story scripts ────────────────────────────────────
-
-const SECTION_CHUNK_SIZE = 12; // max stories per Gemini call to avoid JSON truncation
-
-async function processSection(
-  cfg: SectionConfig,
-  selected: RssItem[],
-  dateLabel: string,
-): Promise<Omit<BriefingSection, "audioUrl" | "monologueScript">> {
-  // Chunk large sections to prevent Gemini JSON truncation
-  let topics: BriefingTopic[];
-  if (selected.length > SECTION_CHUNK_SIZE) {
-    const chunks: RssItem[][] = [];
-    for (let i = 0; i < selected.length; i += SECTION_CHUNK_SIZE) {
-      chunks.push(selected.slice(i, i + SECTION_CHUNK_SIZE));
-    }
-    console.log(`[generator] ${cfg.label}: ${selected.length} stories → ${chunks.length} chunks of ≤${SECTION_CHUNK_SIZE}`);
-    const chunkResults = await Promise.all(
-      chunks.map((chunk) => processSectionChunk(cfg, chunk, dateLabel)),
-    );
-    topics = chunkResults.flat();
-  } else {
-    topics = await processSectionChunk(cfg, selected, dateLabel);
-  }
-  return {
-    category: cfg.category,
-    label: cfg.label,
-    emoji: cfg.emoji,
-    group: cfg.group,
-    topics,
-  };
-}
-
-async function processSectionChunk(
-  cfg: SectionConfig,
-  selected: RssItem[],
-  dateLabel: string,
-): Promise<BriefingTopic[]> {
-  const isIndia = cfg.group === "india";
-
-  const entityRule = isIndia
-    ? "Cover these stories from an Indian perspective."
-    : `CRITICAL: Every sentence must name the specific country, institution, company, or person involved.
-NEVER say "the central bank", "the government", "the markets", or "the company" without naming WHICH one.`;
-
-  const wordTarget = Math.max(200, selected.length * 80);
-
-  // Research via Gemini search grounding
-  const prose = await geminiSearch(
-    `You are a thorough news researcher and skilled broadcast journalist.
-Use Google Search to find full details about each story.
-Write in spoken broadcast English — no bullet points, no markdown, no headers. Pure flowing prose.`,
-    `Research ONLY the following ${cfg.label} news stories using Google Search, then write a spoken segment covering exactly these stories and no others.
-CRITICAL: Do NOT introduce, mention, or weave in any additional stories, events, companies, or people not in the list below.
-${entityRule}
-Target: ~${wordTarget} words total. Cover each story with appropriate depth.
-Preserve the original headline wording.
-
-Stories to cover (ALL of these, ONLY these):
-${selected.map((it, i) => `${i + 1}. ${it.title}`).join("\n")}`,
-  );
-
-  // Assemble per-story topics + individual scripts
-  const assembled = await geminiJson(
-    `You are Khabar AI — a sharp, warm news voice. Output strict JSON only.`,
-    `Today is ${dateLabel}. Section: "${cfg.label}".
-
-Pre-researched content:
-${prose}
-
-Return JSON with one key:
-"topics": array of objects, one per story covered (cover ALL stories from the research).
-Each object:
-{
-  "id": "kebab-slug",
-  "headline": "punchy headline ≤8 words — newspaper front-page style, no verbs like 'looking at' or 'in other news'",
-  "hook": "teaser ≤18 words — MUST name the specific country/company/person",
-  "explanation": "40-60 word summary — name every entity by full name, never use vague terms",
-  "script": "spoken script for THIS story only — 60-80 words, conversational Khabar AI voice, jump straight into the story, no greeting or sign-off, no section title announcement${!isIndia ? ", always name the specific country/institution/entity" : ""}"
-}
-
-IMPORTANT: Keep headlines short, punchy, and noun-phrase style (e.g. "FTSE 100 Falls on Fed Surprise", not "Looking at the broader market, the FTSE 100...").
-Cover ALL stories from the research, not just a subset.`,
-  );
-
-  const rawTopics: any[] = Array.isArray(assembled.topics) ? assembled.topics : [];
-  return rawTopics.map((t: any, i: number) => ({
-    id: String(t.id ?? `${cfg.category}-${i}`),
-    headline: String(t.headline ?? ""),
-    hook: String(t.hook ?? ""),
-    explanation: String(t.explanation ?? ""),
-    section: cfg.category,
-    monologueScript: String(t.script ?? t.monologueScript ?? ""),
-    ...findSource(
-      { headline: String(t.headline ?? ""), hook: String(t.hook ?? ""), explanation: String(t.explanation ?? "") },
-      selected,
-    ),
-  }));
-}
-
-// ─── Step 4: Translate scripts to Hindi ──────────────────────────────────────
-
-async function translateSectionScripts(
-  topics: BriefingTopic[],
-): Promise<Map<string, string>> {
-  const withScripts = topics.filter((t) => t.monologueScript);
-  if (withScripts.length === 0) return new Map();
-
-  const inputJson = Object.fromEntries(
-    withScripts.map((t) => [t.id, t.monologueScript!]),
-  );
+Headlines:
+${lines}`;
 
   try {
-    const result = await geminiJson(
-      "You are a professional Hindi translator. Output strict JSON only.",
-      `Translate each of these English news scripts to natural, conversational Hindi.
-
-RULES:
-- Keep proper nouns (person names, place names, company names, organization names) in English as-is
-- Numbers and dates can stay in English
-- The tone should be warm and conversational — like a friend sharing news, not a formal broadcaster
-- Each translation should be roughly the same length as the original
-
-Return JSON with the same keys as input, values replaced with Hindi translations:
-${JSON.stringify(inputJson, null, 2)}`,
-    );
-
-    return new Map(
-      Object.entries(result).map(([id, text]) => [id, String(text)]),
-    );
+    const result = await geminiJson(prompt);
+    if (!Array.isArray(result)) throw new Error("not an array");
+    return batch.map((s, i) => ({
+      en: String(result[i]?.en ?? `${s.title}.`),
+      hi: String(result[i]?.hi ?? `${s.title}।`),
+    }));
   } catch (err: any) {
-    console.warn(`[generator] Hindi translation failed: ${err.message}`);
-    return new Map();
+    console.warn(`[generator] script batch failed: ${err.message}`);
+    return batch.map((s) => ({
+      en: `${s.title}. Details are still emerging.`,
+      hi: `${s.title}। अधिक जानकारी जल्द आएगी।`,
+    }));
   }
 }
 
-// ─── Step 5: TTS with parallelisation ────────────────────────────────────────
+async function generateAllScripts(stories: Story[], logger: Logger): Promise<Story[]> {
+  const updated = [...stories];
+  const batches: number[][] = [];
+  for (let i = 0; i < stories.length; i += SCRIPT_BATCH_SIZE) {
+    batches.push(
+      Array.from({ length: Math.min(SCRIPT_BATCH_SIZE, stories.length - i) }, (_, j) => i + j),
+    );
+  }
 
-async function batchRun<T, R>(
+  logger(`Generating scripts: ${stories.length} stories in ${batches.length} batches…`);
+
+  // Up to 3 batches in parallel
+  const CONCURRENCY = 3;
+  for (let i = 0; i < batches.length; i += CONCURRENCY) {
+    const chunk = batches.slice(i, i + CONCURRENCY);
+    await Promise.all(
+      chunk.map(async (indices) => {
+        const input = indices.map((idx) => ({
+          title: stories[idx].title,
+          source: stories[idx].source,
+          section: stories[idx].section,
+        }));
+        const scripts = await generateScriptBatch(input);
+        indices.forEach((idx, j) => {
+          updated[idx] = { ...updated[idx], scriptEn: scripts[j].en, scriptHi: scripts[j].hi };
+        });
+      }),
+    );
+    logger(`  Scripts batch ${Math.floor(i / CONCURRENCY) + 1}/${Math.ceil(batches.length / CONCURRENCY)} done`);
+    if (i + CONCURRENCY < batches.length) {
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  }
+
+  return updated;
+}
+
+// ─── Step 4: TTS ──────────────────────────────────────────────────────────────
+
+type TtsJob = {
+  storyIdx: number;
+  language: "en" | "hi";
+  text: string;
+  filename: string;
+};
+
+async function batchRun<T>(
   items: T[],
-  fn: (item: T) => Promise<R>,
-  concurrency = 5,
-  delayMs = 800,
-): Promise<(R | null)[]> {
-  const results: (R | null)[] = [];
+  fn: (item: T) => Promise<void>,
+  concurrency = 2,
+  delayMs = 1200,
+): Promise<void> {
   for (let i = 0; i < items.length; i += concurrency) {
-    const batch = items.slice(i, i + concurrency);
-    const batchResults = await Promise.allSettled(batch.map(fn));
-    results.push(...batchResults.map((r) => (r.status === "fulfilled" ? r.value : null)));
+    await Promise.allSettled(items.slice(i, i + concurrency).map(fn));
     if (i + concurrency < items.length) {
       await new Promise((r) => setTimeout(r, delayMs));
     }
   }
-  return results;
 }
 
-// ─── Local DB ────────────────────────────────────────────────────────────────
+async function generateAllTTS(
+  stories: Story[],
+  date: string,
+  logger: Logger,
+): Promise<Story[]> {
+  const jobs: TtsJob[] = [];
+  stories.forEach((story, idx) => {
+    const safeId = story.id.slice(0, 16);
+    if (story.scriptEn) {
+      jobs.push({ storyIdx: idx, language: "en", text: story.scriptEn, filename: `${date}-${safeId}-en` });
+    }
+    if (story.scriptHi) {
+      jobs.push({ storyIdx: idx, language: "hi", text: story.scriptHi, filename: `${date}-${safeId}-hi` });
+    }
+  });
+
+  logger(`TTS: ${jobs.length} files for ${stories.length} stories…`);
+  const updated = stories.map((s) => ({ ...s }));
+
+  await batchRun(
+    jobs,
+    async (job) => {
+      try {
+        const url = await googleTTS(job.text, job.filename, job.language);
+        if (job.language === "en") updated[job.storyIdx].audioUrlEn = url;
+        else updated[job.storyIdx].audioUrlHi = url;
+        logger(`  ✓ ${job.filename}`);
+      } catch (err: any) {
+        logger(`  ✗ ${job.filename}: ${err.message}`);
+      }
+    },
+    2,    // 2 concurrent TTS calls (rate-limit safe)
+    1200, // 1.2s between batches
+  );
+
+  return updated;
+}
+
+// ─── Storage helpers ──────────────────────────────────────────────────────────
 
 const DATA_DIR = join(process.cwd(), ".local-data");
 
@@ -425,76 +318,57 @@ export async function saveBriefing(briefing: DailyBriefing): Promise<void> {
   await writeFile(path, JSON.stringify(all, null, 2));
 }
 
-function normalizeBriefing(raw: any): DailyBriefing {
-  if (Array.isArray(raw.sections) && raw.sections.length > 0) {
-    return {
-      ...raw,
-      sections: (raw.sections as any[]).map((s) => ({
-        ...s,
-        label: SECTION_MAP.get(s.category)?.label ?? s.label,
-        emoji: SECTION_MAP.get(s.category)?.emoji ?? s.emoji,
-      })),
-    } as DailyBriefing;
-  }
-  // Legacy format: wrap into two sections
-  const topics: any[] = raw.topics ?? [];
-  const mapTopic = (t: any, cat: SectionCategory): BriefingTopic => ({
-    id: t.id ?? "",
-    headline: t.headline ?? "",
-    hook: t.hook ?? "",
-    explanation: t.explanation ?? "",
-    section: cat,
-    sourceUrl: t.sourceUrl ?? t.source_url,
-    sourceName: t.sourceName ?? t.source_name,
-    monologueScript: t.monologueScript ?? "",
-    audioUrlEn: t.audioUrlEn,
-    audioUrlHi: t.audioUrlHi,
-  });
-  const sections: BriefingSection[] = [
-    {
-      category: "india-national" as SectionCategory,
-      label: "Politics & Policy", emoji: "🏛️", group: "india" as const,
-      topics: topics.filter((t) => t.section === "india" || t.tier === "home").map((t) => mapTopic(t, "india-national")),
-      monologueScript: raw.monologueScript ?? "", audioUrl: raw.audioUrl ?? "",
-    },
-    {
-      category: "global-world" as SectionCategory,
-      label: "World Affairs", emoji: "🌍", group: "global" as const,
-      topics: topics.filter((t) => t.section === "global" || t.tier !== "home").map((t) => mapTopic(t, "global-world")),
-      monologueScript: "", audioUrl: "",
-    },
-  ].filter((s) => s.topics.length > 0 || s.audioUrl);
-
-  return {
-    id: raw.id ?? "",
-    date: raw.date ?? (raw.generatedAt ?? "").slice(0, 10),
-    generatedAt: raw.generatedAt ?? new Date().toISOString(),
-    sections,
+/** Map old section category strings to new SectionId */
+function mapOldCategory(cat: string): SectionId {
+  const m: Record<string, SectionId> = {
+    "india-national": "india",   "india-business": "business",
+    "india-sports": "sports",    "india-tech": "technology",
+    "india-entertainment": "entertainment", "india-health": "health",
+    "global-world": "world",     "global-business": "business",
+    "global-sports": "sports",   "global-tech": "technology",
+    "global-entertainment": "entertainment", "global-health": "health",
   };
+  return m[cat] ?? "headlines";
 }
 
-export async function getTodayBriefing(): Promise<DailyBriefing | null> {
-  const today = new Date().toISOString().slice(0, 10);
-  if (!LOCAL_MODE) {
-    const raw = await loadBriefingFromStorage(today);
-    if (!raw) return null;
-    return normalizeBriefing(raw);
+function normalizeBriefing(raw: any): DailyBriefing {
+  // New format
+  if (Array.isArray(raw.stories)) return raw as DailyBriefing;
+
+  // Migrate old sections[].topics[] format
+  const stories: Story[] = [];
+  if (Array.isArray(raw.sections)) {
+    for (const section of raw.sections) {
+      for (const topic of (section.topics ?? [])) {
+        stories.push({
+          id: topic.id ?? storyId(topic.sourceUrl ?? String(Math.random())),
+          title: topic.headline ?? topic.title ?? "",
+          source: topic.sourceName ?? "Unknown",
+          link: topic.sourceUrl ?? "",
+          publishedAt: raw.generatedAt ?? new Date().toISOString(),
+          section: mapOldCategory(section.category),
+          scriptEn: topic.monologueScript ?? "",
+          scriptHi: "",
+          audioUrlEn: topic.audioUrlEn ?? (topic as any).audioUrl,
+          audioUrlHi: topic.audioUrlHi,
+        });
+      }
+    }
   }
-  try {
-    const all: any[] = JSON.parse(await readFile(join(DATA_DIR, "briefings.json"), "utf-8"));
-    if (all.length === 0) return null;
-    const raw = all.find((b) => (b.date ?? (b.generatedAt ?? "").slice(0, 10)) === today) ?? all[0];
-    return normalizeBriefing(raw);
-  } catch { return null; }
+
+  return {
+    date: raw.date ?? (raw.generatedAt ?? "").slice(0, 10),
+    generatedAt: raw.generatedAt ?? new Date().toISOString(),
+    stories,
+  };
 }
 
 export async function getLatestBriefing(): Promise<DailyBriefing | null> {
   if (!LOCAL_MODE) {
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 7; i++) {
       const d = new Date();
       d.setDate(d.getDate() - i);
-      const date = d.toISOString().slice(0, 10);
-      const raw = await loadBriefingFromStorage(date);
+      const raw = await loadBriefingFromStorage(d.toISOString().slice(0, 10));
       if (raw) return normalizeBriefing(raw);
     }
     return null;
@@ -505,261 +379,91 @@ export async function getLatestBriefing(): Promise<DailyBriefing | null> {
   } catch { return null; }
 }
 
-// ─── Logger type ─────────────────────────────────────────────────────────────
-
-export type Logger = (msg: string) => void;
+// Keep getTodayBriefing for backward compat (handleAsk uses it)
+export const getTodayBriefing = getLatestBriefing;
 
 // ─── Main generator ───────────────────────────────────────────────────────────
 
-export async function generateDailyBriefing(logger: Logger = () => {}): Promise<DailyBriefing> {
+export async function generateDailyBriefing(
+  logger: Logger = () => {},
+  city = DEFAULT_CITY,
+): Promise<DailyBriefing> {
   const date = new Date().toISOString().slice(0, 10);
-  const dateLabel = new Date().toLocaleDateString("en-US", {
-    weekday: "long", month: "long", day: "numeric", year: "numeric",
-  });
-
   const log = (msg: string) => { console.log(`[generator] ${msg}`); logger(msg); };
 
-  log(`Starting briefing for ${date}`);
+  log(`Starting briefing for ${date} (city: ${city})`);
 
-  // Step 1: Fetch all feeds
-  log(`Fetching ${TOP_FEEDS.length} RSS feeds…`);
-  const { india, global } = await fetchAllFeeds();
-  log(`Fetched ${india.length} India + ${global.length} global headlines`);
+  // Step 1: Fetch all feeds in parallel
+  log(`Fetching ${FEEDS.length} Google News feeds…`);
+  const feedMap = await fetchAllFeeds(city);
+  const rawTotal = [...feedMap.values()].reduce((n, v) => n + v.length, 0);
+  log(`Fetched ${rawTotal} raw items from ${feedMap.size} feeds`);
 
-  // Step 2: Categorise (no story count cap)
-  log(`Categorising headlines into ${SECTIONS.length} sections…`);
-  const picks = await geminiCategorise(india, global, dateLabel);
-  for (const [cat, items] of picks) {
-    log(`  ${cat}: ${items.length} ${items.length === 1 ? "story" : "stories"} selected`);
+  // Step 2: Deduplicate
+  const stories = buildStories(feedMap);
+  log(`After dedup: ${stories.length} unique stories`);
+  for (const feed of FEEDS) {
+    const n = stories.filter((s) => s.section === feed.id).length;
+    if (n > 0) log(`  ${feed.emoji} ${feed.label}: ${n}`);
   }
 
-  // Step 3: Research + per-story scripts (parallel per section)
-  log(`Researching ${picks.size} sections in parallel…`);
-  const sectionEntries = [...picks.entries()];
-  const sectionResults = await Promise.all(
-    sectionEntries.map(([cat, items]) => {
-      const cfg = SECTION_MAP.get(cat)!;
-      log(`  Research started: ${cfg.label} (${items.length} stories)`);
-      return processSection(cfg, items, dateLabel)
-        .then((result) => {
-          log(`  Research done: ${cfg.label} — ${result.topics.length} topics`);
-          return result;
-        })
-        .catch((err) => {
-          log(`  Research failed: ${cat} — ${err.message}`);
-          return null;
-        });
-    }),
-  );
+  // Step 3: Batch generate scripts
+  const withScripts = await generateAllScripts(stories, log);
 
-  // Cross-section dedup
-  const seenHeadlines = new Set<string>();
-  const dedupedResults = sectionResults.map((data) => {
-    if (!data) return null;
-    const unique = data.topics.filter((t) => {
-      const key = normalize(t.headline).slice(0, 60);
-      if (seenHeadlines.has(key)) return false;
-      seenHeadlines.add(key);
-      return true;
-    });
-    return unique.length > 0 ? { ...data, topics: unique } : null;
-  });
-
-  const totalTopics = dedupedResults.reduce((n, d) => n + (d?.topics.length ?? 0), 0);
-  log(`Total stories after dedup: ${totalTopics}`);
-
-  // Step 4: Translate all section scripts to Hindi (parallel per section)
-  log(`Translating ${totalTopics} story scripts to Hindi…`);
-  const hindiMaps = await Promise.all(
-    dedupedResults.map((data) =>
-      data ? translateSectionScripts(data.topics) : Promise.resolve(new Map<string, string>()),
-    ),
-  );
-
-  // Step 5: TTS per story — collect all EN + HI jobs then run in batches
-  type TtsJob = {
-    text: string;
-    filename: string;
-    language: "en" | "hi";
-    sectionIdx: number;
-    topicIdx: number;
-  };
-
-  const jobs: TtsJob[] = [];
-  dedupedResults.forEach((data, sectionIdx) => {
-    if (!data) return;
-    const hindiMap = hindiMaps[sectionIdx];
-    data.topics.forEach((topic, topicIdx) => {
-      if (topic.monologueScript) {
-        const safeId = topic.id.slice(0, 50).replace(/[^a-z0-9-]/g, "-");
-        const base = `briefing-${date}-${data.category}-${safeId}`;
-        jobs.push({ text: topic.monologueScript, filename: `${base}-en`, language: "en", sectionIdx, topicIdx });
-        const hiScript = hindiMap.get(topic.id);
-        if (hiScript) {
-          jobs.push({ text: hiScript, filename: `${base}-hi`, language: "hi", sectionIdx, topicIdx });
-        }
-      }
-    });
-  });
-
-  log(`Running TTS for ${jobs.length} audio files (EN + HI)…`);
-
-  // Store results keyed by "sectionIdx-topicIdx-language"
-  const audioResults = new Map<string, string>();
-
-  await batchRun(
-    jobs,
-    async (job) => {
-      try {
-        const url = await googleTTS(job.text, job.filename, job.language);
-        audioResults.set(`${job.sectionIdx}-${job.topicIdx}-${job.language}`, url);
-        log(`  TTS done: ${job.filename}`);
-      } catch (err: any) {
-        log(`  TTS failed: ${job.filename} — ${err.message}`);
-      }
-    },
-    2,    // 2 concurrent TTS calls (free tier: 10 RPM)
-    4000, // 4s between batches → ~15 req/min max
-  );
-
-  // Assemble final sections with audio URLs on topics
-  const sections: BriefingSection[] = [];
-  dedupedResults.forEach((data, sectionIdx) => {
-    if (!data) return;
-    const topicsWithAudio: BriefingTopic[] = data.topics.map((topic, topicIdx) => ({
-      ...topic,
-      audioUrlEn: audioResults.get(`${sectionIdx}-${topicIdx}-en`),
-      audioUrlHi: audioResults.get(`${sectionIdx}-${topicIdx}-hi`),
-    }));
-    sections.push({
-      ...data,
-      topics: topicsWithAudio,
-      monologueScript: "",  // deprecated — audio is per-topic now
-      audioUrl: "",         // deprecated — audio is per-topic now
-    });
-  });
+  // Step 4: TTS
+  const withAudio = await generateAllTTS(withScripts, date, log);
 
   const briefing: DailyBriefing = {
-    id: `briefing-${date}`,
     date,
     generatedAt: new Date().toISOString(),
-    sections,
+    stories: withAudio,
   };
 
-  log(`Saving briefing to storage…`);
+  log(`Saving briefing…`);
   await saveBriefing(briefing);
-  log(`Done — ${sections.length} sections, ${sections.reduce((n, s) => n + s.topics.length, 0)} topics`);
+  log(`Done — ${briefing.stories.length} stories`);
   return briefing;
 }
 
-// ─── Patch missing sections into existing briefing ───────────────────────────
+// ─── Refresh: add newly published stories to existing briefing ────────────────
 
-export async function generateMissingSections(logger: Logger = () => {}): Promise<{ added: string[]; briefing: DailyBriefing }> {
+export async function generateMissingSections(
+  logger: Logger = () => {},
+  city = DEFAULT_CITY,
+): Promise<{ added: string[]; briefing: DailyBriefing }> {
   const log = (msg: string) => { console.log(`[generator] ${msg}`); logger(msg); };
 
   const existing = await getLatestBriefing();
-  if (!existing) throw new Error("No existing briefing found — run full generation first");
-
-  const presentCategories = new Set(existing.sections.map((s) => s.category));
-  const missingCfgs = SECTIONS.filter((s) => !presentCategories.has(s.category));
-
-  if (missingCfgs.length === 0) {
-    log("No missing sections — briefing is complete");
-    return { added: [], briefing: existing };
+  if (!existing) {
+    log("No existing briefing — running full generation…");
+    const full = await generateDailyBriefing(logger, city);
+    return { added: ["(full generation)"], briefing: full };
   }
-  log(`Missing sections: ${missingCfgs.map((s) => s.label).join(", ")}`);
 
-  const date = existing.date;
-  const dateLabel = new Date(date + "T12:00:00").toLocaleDateString("en-US", {
-    weekday: "long", month: "long", day: "numeric", year: "numeric",
-  });
+  log(`Refreshing stories for ${existing.date}…`);
+  const existingIds = new Set(existing.stories.map((s) => s.id));
 
-  // Step 1: Fetch feeds
-  log("Fetching feeds…");
-  const { india, global } = await fetchAllFeeds();
+  const feedMap = await fetchAllFeeds(city);
+  const allStories = buildStories(feedMap);
+  const newStories = allStories.filter((s) => !existingIds.has(s.id));
 
-  // Step 2: Categorise — only look at missing categories
-  log("Categorising into missing sections only…");
-  const allPicks = await geminiCategorise(india, global, dateLabel);
-  const missingPicks: [SectionCategory, typeof india][] = missingCfgs
-    .map((cfg) => [cfg.category, allPicks.get(cfg.category) ?? []] as [SectionCategory, typeof india])
-    .filter(([, items]) => items.length > 0);
-
-  if (missingPicks.length === 0) {
-    log("No stories found for missing sections");
+  if (newStories.length === 0) {
+    log("No new stories found");
     return { added: [], briefing: existing };
   }
 
-  // Step 3: Process missing sections
-  log("Researching missing sections…");
-  const sectionResults = await Promise.all(
-    missingPicks.map(([cat, items]) => {
-      const cfg = SECTION_MAP.get(cat)!;
-      log(`  Research: ${cfg.label} (${items.length} stories)`);
-      return processSection(cfg, items, dateLabel)
-        .then((r) => { log(`  Done: ${cfg.label} — ${r.topics.length} topics`); return r; })
-        .catch((err) => { log(`  Failed: ${cat} — ${err.message}`); return null; });
-    }),
-  );
+  log(`Found ${newStories.length} new stories — generating scripts + TTS…`);
+  const withScripts = await generateAllScripts(newStories, log);
+  const withAudio = await generateAllTTS(withScripts, existing.date, log);
 
-  // Step 4: Translate to Hindi
-  const hindiMaps = await Promise.all(
-    sectionResults.map((data) =>
-      data ? translateSectionScripts(data.topics) : Promise.resolve(new Map<string, string>()),
-    ),
-  );
-
-  // Step 5: TTS
-  type TtsJob = { text: string; filename: string; language: "en" | "hi"; sectionIdx: number; topicIdx: number };
-  const jobs: TtsJob[] = [];
-  sectionResults.forEach((data, sIdx) => {
-    if (!data) return;
-    const hiMap = hindiMaps[sIdx];
-    data.topics.forEach((topic, tIdx) => {
-      if (topic.monologueScript) {
-        const safeId = topic.id.slice(0, 50).replace(/[^a-z0-9-]/g, "-");
-        const base = `briefing-${date}-${data.category}-${safeId}`;
-        jobs.push({ text: topic.monologueScript, filename: `${base}-en`, language: "en", sectionIdx: sIdx, topicIdx: tIdx });
-        const hi = hiMap.get(topic.id);
-        if (hi) jobs.push({ text: hi, filename: `${base}-hi`, language: "hi", sectionIdx: sIdx, topicIdx: tIdx });
-      }
-    });
-  });
-
-  log(`Running TTS for ${jobs.length} files…`);
-  const audioResults = new Map<string, string>();
-  await batchRun(
-    jobs,
-    async (job) => {
-      try {
-        const url = await googleTTS(job.text, job.filename, job.language);
-        audioResults.set(`${job.sectionIdx}-${job.topicIdx}-${job.language}`, url);
-      } catch (err: any) { log(`  TTS failed: ${job.filename} — ${err.message}`); }
-    },
-    2, 4000,
-  );
-
-  // Assemble new sections
-  const newSections: BriefingSection[] = [];
-  const addedLabels: string[] = [];
-  sectionResults.forEach((data, sIdx) => {
-    if (!data) return;
-    const topicsWithAudio: BriefingTopic[] = data.topics.map((t, tIdx) => ({
-      ...t,
-      audioUrlEn: audioResults.get(`${sIdx}-${tIdx}-en`),
-      audioUrlHi: audioResults.get(`${sIdx}-${tIdx}-hi`),
-    }));
-    newSections.push({ ...data, topics: topicsWithAudio, monologueScript: "", audioUrl: "" });
-    addedLabels.push(data.label);
-  });
-
-  // Merge + save
   const merged: DailyBriefing = {
     ...existing,
     generatedAt: new Date().toISOString(),
-    sections: [...existing.sections, ...newSections],
+    stories: [...existing.stories, ...withAudio],
   };
+
   await saveBriefing(merged);
-  log(`Added ${addedLabels.join(", ")} — saved`);
-  return { added: addedLabels, briefing: merged };
+  const addedSections = [...new Set(withAudio.map((s) => FEED_MAP.get(s.section)?.label ?? s.section))];
+  log(`Added ${withAudio.length} stories across: ${addedSections.join(", ")}`);
+  return { added: addedSections, briefing: merged };
 }

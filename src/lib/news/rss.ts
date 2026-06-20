@@ -6,6 +6,7 @@ export type RssItem = {
   source: string;
   sourceId: string;
   description?: string;
+  imageUrl?: string;
 };
 
 function decodeEntities(s: string): string {
@@ -27,6 +28,28 @@ function tag(xml: string, name: string): string | undefined {
   return m ? decodeEntities(m[1]) : undefined;
 }
 
+function extractImageFromBlock(block: string): string | undefined {
+  // Try <media:content url="...">
+  const mediaMatch = block.match(/<media:content[^>]+url="([^"]+)"/i);
+  if (mediaMatch) return mediaMatch[1];
+  // Try <enclosure url="..." type="image/...">
+  const enclosureMatch = block.match(/<enclosure[^>]+url="([^"]+)"[^>]+type="image/i);
+  if (enclosureMatch) return enclosureMatch[1];
+  // Try <img src="..."> in description HTML
+  const descBlock = block.match(/<description[^>]*>([\s\S]*?)<\/description>/i)?.[1] ?? "";
+  const imgMatch = descBlock.match(/<img[^>]+src="([^"]+)"/i);
+  if (imgMatch) return imgMatch[1];
+  return undefined;
+}
+
+/** Extract the publisher name from Google News RSS <source> or title suffix */
+function extractSource(block: string, fallback: string): string {
+  // Google News wraps publisher in <source url="...">Publisher Name</source>
+  const srcTag = block.match(/<source[^>]*>([^<]+)<\/source>/i);
+  if (srcTag) return decodeEntities(srcTag[1]);
+  return fallback;
+}
+
 export function parseRss(xml: string, sourceName: string, sourceId: string): RssItem[] {
   const items: RssItem[] = [];
   // Match both <item>…</item> (RSS) and <entry>…</entry> (Atom)
@@ -46,8 +69,9 @@ export function parseRss(xml: string, sourceName: string, sourceId: string): Rss
       link,
       pubDate: tag(block, "pubDate") || tag(block, "published") || tag(block, "updated"),
       description: tag(block, "description") || tag(block, "summary"),
-      source: sourceName,
+      source: extractSource(block, sourceName),
       sourceId,
+      imageUrl: extractImageFromBlock(block),
     });
   }
   return items;
@@ -67,7 +91,7 @@ export async function fetchRss(
         signal: ctrl.signal,
         headers: {
           "user-agent":
-            "Mozilla/5.0 (compatible; KhabarAIBot/1.0; +https://lovable.dev)",
+            "Mozilla/5.0 (compatible; KhabarAIBot/1.0; +https://khabar.ai)",
           accept: "application/rss+xml, application/atom+xml, application/xml;q=0.9, */*;q=0.8",
         },
       });

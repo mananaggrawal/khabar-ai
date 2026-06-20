@@ -3,7 +3,7 @@
  * Mounted as request middleware in src/start.ts so they work without
  * needing routeTree.gen.ts to be updated.
  */
-import { generateDailyBriefing, generateMissingSections, getTodayBriefing } from "@/lib/news/generator";
+import { generateDailyBriefing, generateMissingSections, getLatestBriefing as getTodayBriefing } from "@/lib/news/generator";
 import { googleTTS } from "@/lib/tts/google";
 import { loadBriefingFromStorage } from "@/lib/supabase-storage";
 
@@ -42,8 +42,7 @@ export async function handleGenerate(request: Request): Promise<Response> {
       send({
         type: "done",
         date: briefing.date,
-        sections: briefing.sections.length,
-        totalTopics: briefing.sections.reduce((n, s) => n + s.topics.length, 0),
+        stories: briefing.stories.length,
       });
     } catch (err: any) {
       console.error("[admin] generation failed", err);
@@ -95,12 +94,12 @@ export async function handleStatus(request: Request): Promise<Response> {
     try {
       const briefing: any = await loadBriefingFromStorage(date);
       if (briefing) {
+        const b = briefing as any;
         days.push({
           date,
           status: "generated",
-          sections: briefing.sections?.length ?? 0,
-          totalTopics: briefing.sections?.reduce((n: number, s: any) => n + (s.topics?.length ?? 0), 0) ?? 0,
-          generatedAt: briefing.generatedAt ?? null,
+          stories: b.stories?.length ?? b.sections?.reduce((n: number, s: any) => n + (s.topics?.length ?? 0), 0) ?? 0,
+          generatedAt: b.generatedAt ?? null,
         });
       } else {
         days.push({ date, status: "missing" });
@@ -163,8 +162,7 @@ export async function handlePatchMissing(request: Request): Promise<Response> {
       send({
         type: "done",
         added,
-        sections: briefing.sections.length,
-        totalTopics: briefing.sections.reduce((n, s) => n + s.topics.length, 0),
+        stories: briefing.stories.length,
       });
     } catch (err: any) {
       send({ type: "error", msg: err?.message ?? "Patch failed" });
@@ -191,10 +189,10 @@ export async function handleAsk(request: Request): Promise<Response> {
     if (!question) return json({ error: "question is required" }, 400);
 
     const briefing = await getTodayBriefing();
-    if (!briefing?.sections?.length)
+    if (!briefing?.stories?.length)
       return json({ error: "No briefing available for today" }, 404);
 
-    const combinedScript = briefing.sections.map((s) => s.monologueScript).filter(Boolean).join("\n\n");
+    const combinedScript = briefing.stories.map((s) => s.scriptEn).filter(Boolean).join("\n\n");
     const answerText = await answerQuestion(question, combinedScript);
     const audioUrl = await textToSpeech(answerText);
     return json({ audioUrl, answerText });

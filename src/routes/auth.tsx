@@ -9,7 +9,6 @@ function useApplyTheme() {
   }, []);
 }
 import { supabase } from "@/integrations/supabase/client";
-import { lovable } from "@/integrations/lovable";
 import { Button } from "@/components/ui/button";
 import { VoiceOrb } from "@/components/VoiceOrb";
 import { toast } from "sonner";
@@ -38,12 +37,12 @@ function AuthPage() {
   async function signInWithGoogle() {
     setBusy(true);
     try {
-      const result = await lovable.auth.signInWithOAuth("google", {
-        redirect_uri: window.location.origin,
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: { redirectTo: window.location.origin },
       });
-      if (result.error) throw result.error;
-      if (result.redirected) return;
-      router.navigate({ to: "/" });
+      if (error) throw error;
+      // Supabase redirects the browser; no further action needed
     } catch (err: any) {
       toast.error(err?.message ?? "Sign in failed");
       setBusy(false);

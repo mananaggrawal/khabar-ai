@@ -129,6 +129,45 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (pathname === "/admin/manifest.json") {
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "public, max-age=3600" });
+    res.end(JSON.stringify({
+      name: "Khabar Admin",
+      short_name: "Khabar Admin",
+      description: "Khabar AI admin dashboard",
+      start_url: "/admin",
+      display: "standalone",
+      background_color: "#0c0714",
+      theme_color: "#0c0714",
+      icons: [
+        { src: "/icon-192.png", sizes: "192x192", type: "image/png" },
+        { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
+      ],
+    }));
+    return;
+  }
+
+  if (pathname === "/admin-sw.js") {
+    res.writeHead(200, { "Content-Type": "application/javascript", "Cache-Control": "no-cache" });
+    res.end(`
+const CACHE = 'khabar-admin-v1';
+const SHELL = ['/admin'];
+self.addEventListener('install', e => {
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+});
+self.addEventListener('activate', e => {
+  e.waitUntil(clients.claim());
+});
+self.addEventListener('fetch', e => {
+  if (e.request.url.includes('/api/')) return;
+  e.respondWith(
+    fetch(e.request).catch(() => caches.match(e.request))
+  );
+});
+`);
+    return;
+  }
+
   if (pathname === "/api/admin/status" && req.method === "GET") {
     try {
       const request = await toRequest(req);
@@ -236,8 +275,14 @@ function adminPage(supabaseUrl, supabaseKey) {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0c0714">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Khabar Admin">
   <title>Khabar AI — Admin</title>
   <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="manifest" href="/admin/manifest.json">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -719,6 +764,10 @@ function adminPage(supabaseUrl, supabaseKey) {
   }
 
   init();
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/admin-sw.js').catch(() => {});
+  }
 </script>
 </body>
 </html>`;

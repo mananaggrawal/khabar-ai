@@ -1,85 +1,55 @@
 /**
- * useMonologue — topic-aware briefing playback + voice Q&A.
+ * useMonologue — story-aware briefing playback.
  *
  * Playback model:
- *   play()             — queue all topics across all sections, auto-advance
- *   playGroup(group)   — queue topics within india or global only
- *   playSection(idx)   — play all topics in a specific section
- *   playTopic(idx)     — play a single topic (no auto-advance)
- *   nextTopic()        — skip to next topic
- *   prevTopic()        — restart if >3s in, else go to previous topic
- *   pause/resume/stop  — standard controls
- *   orbTap()           — idle→play, playing→pause, paused→resume
+ *   playAll()              — queue all stories, auto-advance
+ *   playSection(id)        — queue stories within a section, auto-advance (stops at end of section)
+ *   playStory(idx)         — play a single story (no auto-advance)
+ *   playFrom(idx)          — play from idx, auto-advance through all remaining
+ *   next() / prev()        — skip / previous (3s restart rule)
+ *   pause / resume / stop  — standard controls
+ *   orbTap()               — idle→play, playing→pause, paused→resume
  *
  * Language:
  *   Reads 'khabar-language' from localStorage ('en' | 'hi').
  *   Reacts to storage events so settings page can switch live.
- *
- * Resume from interruption:
- *   Position is saved to localStorage every 5s.
  */
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { DailyBriefing, BriefingTopic, BriefingSection } from "@/lib/news/generator";
+import type { DailyBriefing, Story } from "@/lib/news/generator";
+import { FEED_MAP, type SectionId } from "@/lib/news/sources";
 
-export type MonologueState =
-  | "idle"
-  | "playing"
-  | "paused"
-  | "listening"
-  | "answering"
-  | "error";
+export type MonologueState = "idle" | "playing" | "paused" | "error";
 
-const RESUME_KEY      = "khabar-resume-pos";
-const STORY_POS_KEY   = "khabar-story-pos";   // { [topicId]: seconds }
-const LANGUAGE_KEY    = "khabar-language";
-
-function readStoryPositions(): Record<string, number> {
-  try { return JSON.parse(localStorage.getItem(STORY_POS_KEY) ?? "{}"); } catch { return {}; }
-}
-function saveStoryPosition(topicId: string, time: number) {
-  try {
-    const pos = readStoryPositions();
-    pos[topicId] = time;
-    localStorage.setItem(STORY_POS_KEY, JSON.stringify(pos));
-  } catch {}
-}
-function clearStoryPosition(topicId: string) {
-  try {
-    const pos = readStoryPositions();
-    delete pos[topicId];
-    localStorage.setItem(STORY_POS_KEY, JSON.stringify(pos));
-  } catch {}
-}
+const RESUME_KEY   = "khabar-resume-pos";
+const LANGUAGE_KEY = "khabar-language";
 
 function readLanguage(): "en" | "hi" {
   try { return (localStorage.getItem(LANGUAGE_KEY) as "en" | "hi") || "en"; } catch { return "en"; }
 }
 
 export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
-  const [state, setState] = useState<MonologueState>("idle");
-  const [progress, setProgress] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const [transcript, setTranscript] = useState("");
-  const [currentTopicIdx, setCurrentTopicIdx] = useState(-1);
-  const [queueAll, setQueueAll] = useState(false);
-  const [language, setLanguage] = useState<"en" | "hi">(readLanguage);
+  const [state, setState]               = useState<MonologueState>("idle");
+  const [progress, setProgress]         = useState(0);
+  const [duration, setDuration]         = useState(0);
+  const [error, setError]               = useState<string | null>(null);
+  const [currentStoryIdx, setCurrentStoryIdx] = useState(-1);
+  const [queueMode, setQueueMode]       = useState<"all" | SectionId | null>(null);
+  const [language, setLanguage]         = useState<"en" | "hi">(readLanguage);
 
-  const audioRef      = useRef<HTMLAudioElement | null>(null);
-  const preloadRef    = useRef<HTMLAudioElement | null>(null);
-  const pauseTimeRef  = useRef(0);
-  const recognitionRef = useRef<any>(null);
-  const queueAllRef   = useRef(false);
-  const currentIdxRef = useRef(-1);
-  const groupLimitRef = useRef<"india" | "global" | null>(null);
-  const lastSaveRef   = useRef(0);
-  const playTopicAtRef = useRef<((idx: number, all: boolean, startAt?: number) => void) | null>(null);
+  const audioRef       = useRef<HTMLAudioElement | null>(null);
+  const preloadRef     = useRef<HTMLAudioElement | null>(null);
+  const pauseTimeRef   = useRef(0);
+  const currentIdxRef  = useRef(-1);
+  const queueModeRef   = useRef<"all" | SectionId | null>(null);
+  const lastSaveRef    = useRef(0);
+  const playAtRef      = useRef<((idx: number, mode: "all" | SectionId | null, startAt?: number) => void) | null>(null);
 
   // Keep refs in sync
-  useEffect(() => { queueAllRef.current = queueAll; }, [queueAll]);
-  useEffect(() => { currentIdxRef.current = currentTopicIdx; }, [currentTopicIdx]);
+  useEffect(() => { currentIdxRef.current = currentStoryIdx; }, [currentStoryIdx]);
+  useEffect(() => { queueModeRef.current = queueMode; }, [queueMode]);
 
-  // React to language changes from settings page
+  // React to language changes from settings
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
       if (e.key === LANGUAGE_KEY) setLanguage((e.newValue as "en" | "hi") || "en");
@@ -88,53 +58,48 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
     return () => window.removeEventListener("storage", onStorage);
   }, []);
 
-  // Flat list of all topics that have audio in the current language
-  const topicsWithAudio = useMemo(
+  // ── Derived lists ─────────────────────────────────────────────────────────
+
+  /** All stories that have audio in the current language */
+  const storiesWithAudio = useMemo(
     () =>
-      briefing?.sections.flatMap((s) =>
-        s.topics.filter((t) =>
-          language === "hi" ? !!t.audioUrlHi : !!(t.audioUrlEn ?? (t as any).audioUrl),
-        ),
-      ) ?? [],
+      (briefing?.stories ?? []).filter((s) =>
+        language === "hi" ? !!s.audioUrlHi : !!s.audioUrlEn,
+      ),
     [briefing, language],
   );
 
-  // Sections that have at least one playable topic (for UI)
-  const sectionsWithAudio = useMemo(
-    () =>
-      briefing?.sections.filter((s) =>
-        s.topics.some((t) =>
-          language === "hi" ? !!t.audioUrlHi : !!(t.audioUrlEn ?? (t as any).audioUrl),
-        ),
-      ) ?? [],
-    [briefing, language],
-  );
+  /** Sections that have at least one playable story */
+  const sectionsWithStories = useMemo(() => {
+    const seen = new Set<SectionId>();
+    const result: Array<{ id: SectionId; label: string; labelHi: string; emoji: string; stories: Story[] }> = [];
+    for (const story of storiesWithAudio) {
+      if (!seen.has(story.section)) {
+        seen.add(story.section);
+        const feed = FEED_MAP.get(story.section)!;
+        result.push({ id: story.section, label: feed.label, labelHi: feed.labelHi, emoji: feed.emoji, stories: [] });
+      }
+      result.find((s) => s.id === story.section)!.stories.push(story);
+    }
+    return result;
+  }, [storiesWithAudio]);
 
-  const currentTopic: BriefingTopic | null =
-    currentTopicIdx >= 0 ? topicsWithAudio[currentTopicIdx] ?? null : null;
+  const currentStory: Story | null =
+    currentStoryIdx >= 0 ? storiesWithAudio[currentStoryIdx] ?? null : null;
 
-  const currentSection: BriefingSection | null =
-    currentTopic
-      ? briefing?.sections.find((s) => s.category === currentTopic.section) ?? null
-      : null;
+  const currentFeed = currentStory ? FEED_MAP.get(currentStory.section) ?? null : null;
 
-  // currentSectionIdx — index within sectionsWithAudio (backwards compat for UI)
-  const currentSectionIdx = useMemo(() => {
-    if (!currentTopic) return -1;
-    return sectionsWithAudio.findIndex((s) => s.category === currentTopic.section);
-  }, [currentTopic, sectionsWithAudio]);
-
-  // ── Audio attachment ───────────────────────────────────────────────────────
+  // ── Audio attachment ──────────────────────────────────────────────────────
 
   const attachAudio = useCallback(
     (url: string, startAt = 0, onEnded?: () => void) => {
       audioRef.current?.pause();
-      // Use preloaded audio if URL matches, otherwise create fresh
       const preloaded = preloadRef.current;
-      const audio = (preloaded && preloaded.src === url && startAt === 0)
-        ? preloaded
-        : new Audio(url);
-      preloadRef.current = null; // clear so next track can preload
+      const audio =
+        preloaded && preloaded.src === url && startAt === 0
+          ? preloaded
+          : new Audio(url);
+      preloadRef.current = null;
       if (startAt > 0) audio.currentTime = startAt;
       audioRef.current = audio;
 
@@ -145,22 +110,21 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
           const frac = audio.currentTime / audio.duration;
           setProgress(frac);
 
-          // Preload next track at 70% through current
-          if (frac > 0.7) {
+          // Preload next track at 70%
+          if (frac > 0.7 && preloadRef.current === null) {
             const nextIdx = currentIdxRef.current + 1;
-            const nextTopic = topicsWithAudio[nextIdx];
-            if (nextTopic && preloadRef.current === null) {
-              const nextUrl = language === "hi"
-                ? nextTopic.audioUrlHi!
-                : (nextTopic.audioUrlEn ?? (nextTopic as any).audioUrl)!;
+            const next = storiesWithAudio[nextIdx];
+            if (next) {
+              const nextUrl = language === "hi" ? next.audioUrlHi! : next.audioUrlEn!;
               if (nextUrl) {
-                const preload = new Audio(nextUrl);
-                preload.preload = "auto";
-                preloadRef.current = preload;
+                const pre = new Audio(nextUrl);
+                pre.preload = "auto";
+                preloadRef.current = pre;
               }
             }
           }
 
+          // Save resume position every 5s
           const now = Date.now();
           if (now - lastSaveRef.current > 5000) {
             lastSaveRef.current = now;
@@ -172,8 +136,6 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
                 lang: language,
               }));
             } catch {}
-            const topic = topicsWithAudio[currentIdxRef.current];
-            if (topic && audio.currentTime > 2) saveStoryPosition(topic.id, audio.currentTime);
           }
         }
       };
@@ -181,13 +143,10 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
       audio.onplay  = () => setState("playing");
       audio.onpause = () => {
         pauseTimeRef.current = audio.currentTime;
-        setState((s) => (s === "listening" || s === "answering" ? s : "paused"));
+        setState((s) => s === "playing" ? "paused" : s);
       };
       audio.onended = () => {
         setProgress(0);
-        // Clear saved position — story finished, next play restarts from 0
-        const topic = topicsWithAudio[currentIdxRef.current];
-        if (topic) clearStoryPosition(topic.id);
         if (onEnded) onEnded();
         else setState("idle");
       };
@@ -195,46 +154,39 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
 
       return audio;
     },
-    [briefing, language],
+    [briefing, language, storiesWithAudio],
   );
 
-  // ── Topic navigation ───────────────────────────────────────────────────────
+  // ── Core play function ────────────────────────────────────────────────────
 
-  const playTopicAt = useCallback(
-    (idx: number, all: boolean, startAt = 0) => {
-      if (!briefing) return;
-      const topic = topicsWithAudio[idx];
-      if (!topic) { setState("idle"); setCurrentTopicIdx(-1); return; }
+  const playAt = useCallback(
+    (idx: number, mode: "all" | SectionId | null, startAt = 0) => {
+      const story = storiesWithAudio[idx];
+      if (!story) { setState("idle"); setCurrentStoryIdx(-1); return; }
 
-      const url = language === "hi"
-        ? topic.audioUrlHi!
-        : (topic.audioUrlEn ?? (topic as any).audioUrl)!;
+      const url = language === "hi" ? story.audioUrlHi! : story.audioUrlEn!;
 
       setError(null);
-      setCurrentTopicIdx(idx);
-      setQueueAll(all);
+      setCurrentStoryIdx(idx);
+      setQueueMode(mode);
 
-      const onEnded = all
+      const onEnded = mode !== null
         ? () => {
             const next = currentIdxRef.current + 1;
-            if (next >= topicsWithAudio.length) {
-              setState("idle"); setCurrentTopicIdx(-1); setQueueAll(false);
-              groupLimitRef.current = null;
+            if (next >= storiesWithAudio.length) {
+              setState("idle"); setCurrentStoryIdx(-1); setQueueMode(null);
               try { localStorage.removeItem(RESUME_KEY); } catch {}
               return;
             }
-            const limit = groupLimitRef.current;
-            if (limit !== null) {
-              const nextTopic = topicsWithAudio[next];
-              const nextSection = briefing.sections.find((s) => s.category === nextTopic?.section);
-              if (nextSection?.group !== limit) {
-                setState("idle"); setCurrentTopicIdx(-1); setQueueAll(false);
-                groupLimitRef.current = null;
+            // Section limit check
+            if (mode !== "all") {
+              if (storiesWithAudio[next]?.section !== mode) {
+                setState("idle"); setCurrentStoryIdx(-1); setQueueMode(null);
                 try { localStorage.removeItem(RESUME_KEY); } catch {}
                 return;
               }
             }
-            setTimeout(() => playTopicAtRef.current?.(next, true), 50);
+            setTimeout(() => playAtRef.current?.(next, queueModeRef.current, 0), 50);
           }
         : undefined;
 
@@ -251,96 +203,81 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
         setError(e?.message ?? "Playback blocked — tap again");
       });
     },
-    [briefing, topicsWithAudio, language, attachAudio],
+    [storiesWithAudio, language, attachAudio],
   );
 
-  useEffect(() => { playTopicAtRef.current = playTopicAt; }, [playTopicAt]);
+  useEffect(() => { playAtRef.current = playAt; }, [playAt]);
 
-  // ── Public navigation API ──────────────────────────────────────────────────
+  // ── Public API ────────────────────────────────────────────────────────────
 
   const playAll = useCallback(() => {
-    groupLimitRef.current = null;
-    playTopicAt(0, true);
-  }, [playTopicAt]);
+    playAt(0, "all");
+  }, [playAt]);
 
-  const playGroup = useCallback((group: "india" | "global") => {
-    const firstIdx = topicsWithAudio.findIndex((t) => {
-      const sec = briefing?.sections.find((s) => s.category === t.section);
-      return sec?.group === group;
-    });
-    if (firstIdx < 0) return;
-    groupLimitRef.current = group;
-    playTopicAt(firstIdx, true);
-  }, [briefing, topicsWithAudio, playTopicAt]);
-
-  /** Play all topics in a section (by index in sectionsWithAudio) */
+  /** Play all stories within a given section */
   const playSection = useCallback(
-    (sectionIdx: number) => {
-      const section = sectionsWithAudio[sectionIdx];
-      if (!section) return;
-      groupLimitRef.current = null;
-      const firstTopicIdx = topicsWithAudio.findIndex((t) => t.section === section.category);
-      if (firstTopicIdx >= 0) playTopicAt(firstTopicIdx, true);
+    (sectionId: SectionId) => {
+      const firstIdx = storiesWithAudio.findIndex((s) => s.section === sectionId);
+      if (firstIdx >= 0) playAt(firstIdx, sectionId);
     },
-    [sectionsWithAudio, topicsWithAudio, playTopicAt],
+    [storiesWithAudio, playAt],
   );
 
-  /** Play a single topic by its index in topicsWithAudio */
-  const playTopic = useCallback(
+  /** Play a single story (no auto-advance) */
+  const playStory = useCallback(
     (idx: number) => {
-      groupLimitRef.current = null;
-      const savedPos = readStoryPositions()[topicsWithAudio[idx]?.id ?? ""] ?? 0;
-      playTopicAt(idx, false, savedPos > 2 ? savedPos : 0);
+      playAt(idx, null);
     },
-    [playTopicAt, topicsWithAudio],
+    [playAt],
   );
 
-  /** Play from a topic and auto-advance through all remaining topics */
+  /** Play from idx, auto-advance through all */
   const playFrom = useCallback(
     (idx: number) => {
-      groupLimitRef.current = null;
-      const savedPos = readStoryPositions()[topicsWithAudio[idx]?.id ?? ""] ?? 0;
-      playTopicAt(idx, true, savedPos > 2 ? savedPos : 0);
+      playAt(idx, "all");
     },
-    [playTopicAt, topicsWithAudio],
+    [playAt],
   );
 
-  const nextTopic = useCallback(() => {
-    const next = currentIdxRef.current + 1;
-    if (next < topicsWithAudio.length) playTopicAt(next, queueAllRef.current);
-  }, [topicsWithAudio, playTopicAt]);
+  /** Play from idx, auto-advance within section only */
+  const playFromInSection = useCallback(
+    (idx: number, sectionId: SectionId) => {
+      playAt(idx, sectionId);
+    },
+    [playAt],
+  );
 
-  const prevTopic = useCallback(() => {
+  const next = useCallback(() => {
+    const nextIdx = currentIdxRef.current + 1;
+    if (nextIdx < storiesWithAudio.length) playAt(nextIdx, queueModeRef.current);
+  }, [storiesWithAudio, playAt]);
+
+  const prev = useCallback(() => {
     if (audioRef.current && audioRef.current.currentTime > 3) {
       audioRef.current.currentTime = 0;
       setProgress(0);
       return;
     }
-    const prev = currentIdxRef.current - 1;
-    if (prev >= 0) {
-      playTopicAt(prev, queueAllRef.current);
-    } else {
-      if (audioRef.current) { audioRef.current.currentTime = 0; setProgress(0); }
-    }
-  }, [playTopicAt]);
-
-  // ── Playback controls ──────────────────────────────────────────────────────
+    const prevIdx = currentIdxRef.current - 1;
+    if (prevIdx >= 0) playAt(prevIdx, queueModeRef.current);
+    else if (audioRef.current) { audioRef.current.currentTime = 0; setProgress(0); }
+  }, [playAt]);
 
   const play = useCallback(() => {
     try {
       const saved = localStorage.getItem(RESUME_KEY);
       if (saved) {
-        const { idx, time, date, lang } = JSON.parse(saved) as { idx: number; time: number; date?: string; lang?: string };
-        const currentDate = briefing?.date ?? "";
+        const { idx, time, date, lang } = JSON.parse(saved);
+        const dateMatch = !date || date === briefing?.date;
         const langMatch = !lang || lang === language;
-        if (idx >= 0 && idx < topicsWithAudio.length && time > 2 && (!date || date === currentDate) && langMatch) {
-          playTopicAt(idx, true, time);
+        if (idx >= 0 && idx < storiesWithAudio.length && time > 2 && dateMatch && langMatch) {
+          playAt(idx, "all", time);
           return;
         }
       }
     } catch {}
     playAll();
-  }, [topicsWithAudio, language, playTopicAt, playAll]);
+  }, [storiesWithAudio, language, briefing, playAt, playAll]);
 
   const pause = useCallback(() => {
     if (audioRef.current) { pauseTimeRef.current = audioRef.current.currentTime; audioRef.current.pause(); }
@@ -348,19 +285,17 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
   }, []);
 
   const resume = useCallback(async () => {
-    if (audioRef.current && audioRef.current.paused) {
+    if (audioRef.current?.paused) {
       await audioRef.current.play().catch(() => {});
-    } else if (currentTopicIdx >= 0) {
-      const topic = topicsWithAudio[currentTopicIdx];
-      if (topic) {
-        const url = language === "hi"
-          ? topic.audioUrlHi!
-          : (topic.audioUrlEn ?? (topic as any).audioUrl)!;
+    } else if (currentStoryIdx >= 0) {
+      const story = storiesWithAudio[currentStoryIdx];
+      if (story) {
+        const url = language === "hi" ? story.audioUrlHi! : story.audioUrlEn!;
         const audio = attachAudio(url, pauseTimeRef.current);
         await audio.play().catch(() => {});
       }
     }
-  }, [currentTopicIdx, topicsWithAudio, language, attachAudio]);
+  }, [currentStoryIdx, storiesWithAudio, language, attachAudio]);
 
   const stop = useCallback(() => {
     audioRef.current?.pause();
@@ -368,9 +303,8 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
     setState("idle");
     setProgress(0);
     setDuration(0);
-    setCurrentTopicIdx(-1);
-    setQueueAll(false);
-    groupLimitRef.current = null;
+    setCurrentStoryIdx(-1);
+    setQueueMode(null);
     pauseTimeRef.current = 0;
     try { localStorage.removeItem(RESUME_KEY); } catch {}
   }, []);
@@ -384,7 +318,10 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
 
   const seekForward  = useCallback((seconds = 10) => {
     if (!audioRef.current) return;
-    audioRef.current.currentTime = Math.min(audioRef.current.currentTime + seconds, audioRef.current.duration || 0);
+    audioRef.current.currentTime = Math.min(
+      audioRef.current.currentTime + seconds,
+      audioRef.current.duration || 0,
+    );
   }, []);
 
   const seekBackward = useCallback((seconds = 10) => {
@@ -392,74 +329,17 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
     audioRef.current.currentTime = Math.max(audioRef.current.currentTime - seconds, 0);
   }, []);
 
-  // ── Voice Q&A ──────────────────────────────────────────────────────────────
-
-  const startListening = useCallback(() => {
-    const SR = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
-    if (!SR) { setError("Voice input not supported in this browser."); setState("error"); return; }
-    if (audioRef.current) { pauseTimeRef.current = audioRef.current.currentTime; audioRef.current.pause(); }
-    setState("listening");
-    setTranscript("");
-
-    const recognition = new SR();
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.lang = "en-IN";
-    recognitionRef.current = recognition;
-
-    recognition.onresult = (e: any) => {
-      const text = e.results[0]?.[0]?.transcript ?? "";
-      setTranscript(text);
-      if (text) handleQuestion(text);
-      else setState("paused");
-    };
-    recognition.onerror = (e: any) => {
-      const msg = e.error === "not-allowed" ? "Microphone access denied." : e.error === "no-speech" ? "No speech detected." : `Voice error: ${e.error}`;
-      setError(msg); setState("paused");
-    };
-    recognition.onend = () => { recognitionRef.current = null; };
-    recognition.start();
-  }, []);
-
-  const stopListening = useCallback(() => {
-    recognitionRef.current?.stop();
-    recognitionRef.current = null;
-    setState("paused");
-  }, []);
-
-  async function handleQuestion(question: string) {
-    setState("answering");
-    try {
-      const res = await fetch("/api/ask", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question }),
-      });
-      if (!res.ok) throw new Error(`API error ${res.status}`);
-      const { audioUrl } = await res.json();
-      const answerAudio = new Audio(audioUrl);
-      answerAudio.onended = () => resume();
-      answerAudio.onerror = () => { setError("Answer audio failed."); setState("paused"); };
-      await answerAudio.play().catch((e: any) => { setError(e?.message ?? "Could not play answer."); setState("paused"); });
-    } catch (e: any) {
-      setError(e?.message ?? "Could not get an answer");
-      setState("paused");
-    }
-  }
-
   const orbTap = useCallback(() => {
     switch (state) {
-      case "idle":      play(); break;
-      case "playing":   pause(); break;
-      case "paused":    resume(); break;
-      case "listening": stopListening(); break;
-      case "answering": break;
-      case "error":     setError(null); setState("idle"); break;
+      case "idle":   play(); break;
+      case "playing": pause(); break;
+      case "paused": resume(); break;
+      case "error":  setError(null); setState("idle"); break;
     }
-  }, [state, play, pause, resume, stopListening]);
+  }, [state, play, pause, resume]);
 
   useEffect(() => () => {
     audioRef.current?.pause();
-    recognitionRef.current?.stop();
   }, []);
 
   return {
@@ -467,37 +347,32 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
     progress,
     duration,
     error,
-    transcript,
     language,
 
-    // Topic-level
-    currentTopicIdx,
-    currentTopic,
-    topicsWithAudio,
+    // Story-level
+    currentStoryIdx,
+    currentStory,
+    storiesWithAudio,
 
     // Section-level (derived, for UI)
-    currentSectionIdx,
-    currentSection,
-    sectionsWithAudio,
+    currentFeed,
+    sectionsWithStories,
 
     // Controls
     play,
     playAll,
-    playGroup,
     playSection,
-    playTopic,
+    playStory,
     playFrom,
-    nextSection: nextTopic,   // alias so existing UI still works
-    prevSection: prevTopic,   // alias so existing UI still works
-    nextTopic,
-    prevTopic,
+    playFromInSection,
+    next,
+    prev,
     pause,
     resume,
     stop,
     seek,
     seekForward,
     seekBackward,
-    startListening,
     orbTap,
   };
 }
