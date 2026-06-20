@@ -320,34 +320,6 @@ function HomePage() {
             className="flex-1 overflow-y-auto px-4 py-3 space-y-1.5"
             style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 148px)" }}
           >
-            {/* Section play-all header */}
-            {activeStories.some((s) =>
-              mono.language === "hi" ? !!s.audioUrlHi : !!s.audioUrlEn,
-            ) && (
-              <div className="flex items-center justify-between px-1 pb-1">
-                <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/50">
-                  {mono.language === "hi" ? "खबरें" : "Stories"}
-                  {" · "}
-                  {activeStories.filter((s) =>
-                    mono.language === "hi" ? !!s.audioUrlHi : !!s.audioUrlEn,
-                  ).length}
-                </p>
-                <button
-                  onClick={() => {
-                    if (mono.state === "playing" && mono.currentStory?.section === activeSection) {
-                      mono.pause();
-                    } else {
-                      mono.playSection(activeSection);
-                    }
-                  }}
-                  className="flex items-center gap-1.5 text-xs font-semibold text-primary hover:text-primary/80 transition-colors"
-                >
-                  {mono.state === "playing" && mono.currentStory?.section === activeSection
-                    ? <><Pause className="size-3.5 fill-current" />{mono.language === "hi" ? "रोकें" : "Pause all"}</>
-                    : <><Play  className="size-3.5 fill-current ml-0.5" />{mono.language === "hi" ? "सभी सुनें" : "Play all"}</>}
-                </button>
-              </div>
-            )}
 
             {activeStories.length === 0 ? (
               <p className="py-10 text-center text-sm text-muted-foreground">
