@@ -14,7 +14,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fetchRss, type RssItem } from "./rss";
 import { FEEDS, FEED_MAP, DEFAULT_CITY, type SectionId } from "./sources";
-import { googleTTSBatch, TTS_BATCH_SIZE, isDailyQuotaExhausted } from "@/lib/tts/google";
+import { googleTTS } from "@/lib/tts/google";
 import { saveBriefingToStorage, loadBriefingFromStorage } from "@/lib/supabase-storage";
 
 const LOCAL_MODE = process.env.LOCAL_MODE === "true";
@@ -247,9 +247,9 @@ async function generateScriptBatch(
 
   const prompt = `You are Khabar AI — a warm, conversational Indian news voice.
 
-Write a short spoken script for each headline. Each script must be exactly 2 sentences (65–80 words total):
+Write a short spoken script for each headline. Each script must be 2-3 short punchy sentences (25–35 words total), rapid-fire style — like a news ticker read aloud:
 • Sentence 1: What happened — name the specific people, companies, countries involved. No vague pronouns.
-• Sentence 2: Why it matters, what's next, or the key consequence.
+• Sentence 2 (or 2-3): Why it matters or the key consequence. Keep it tight.
 
 Style: conversational, warm, direct. Jump straight into the news — no greeting, no "In other news", no sign-off.
 For India stories: write from an Indian perspective.
@@ -315,11 +315,7 @@ async function generateAllScripts(stories: Story[], logger: Logger): Promise<Sto
   return updated;
 }
 
-// ─── Step 4: TTS (batch mode) ─────────────────────────────────────────────────
-//
-// Merges BATCH_SIZE stories into one TTS call, then splits at silence
-// boundaries. Reduces API calls from (stories × 2) to ceil(stories/BATCH) × 2.
-// Example: 400 stories → 54 calls instead of 800.
+// ─── Step 4: TTS (individual per-story calls) ─────────────────────────────────
 
 async function generateAllTTS(
   stories: Story[],
@@ -328,64 +324,30 @@ async function generateAllTTS(
 ): Promise<Story[]> {
   const updated = stories.map((s) => ({ ...s }));
 
-  type TtsItem = { text: string; filename: string; storyIdx: number };
+  const totalFiles = stories.filter(s => s.scriptEn).length + stories.filter(s => s.scriptHi).length;
+  logger(`TTS: ${totalFiles} files (individual calls)…`);
 
-  // Build per-language item lists
-  const enItems: TtsItem[] = [];
-  const hiItems: TtsItem[] = [];
-  stories.forEach((story, idx) => {
-    const safeId = story.id.slice(0, 16);
-    if (story.scriptEn) enItems.push({ text: story.scriptEn, filename: `${date}-${safeId}-en`, storyIdx: idx });
-    if (story.scriptHi) hiItems.push({ text: story.scriptHi, filename: `${date}-${safeId}-hi`, storyIdx: idx });
-  });
-
-  const totalFiles  = enItems.length + hiItems.length;
-  const enBatches   = Math.ceil(enItems.length / TTS_BATCH_SIZE);
-  const hiBatches   = Math.ceil(hiItems.length / TTS_BATCH_SIZE);
-  logger(`TTS: ${totalFiles} files → ${enBatches + hiBatches} batch calls (${TTS_BATCH_SIZE} stories/batch)…`);
-
-  /** Process one language stream sequentially, batch by batch. */
-  async function processStream(items: TtsItem[], lang: "en" | "hi") {
-    const total = Math.ceil(items.length / TTS_BATCH_SIZE);
-    for (let b = 0; b < items.length; b += TTS_BATCH_SIZE) {
-      // Stop early if quota was exhausted by a previous batch (EN or HI)
-      if (isDailyQuotaExhausted()) {
-        const remaining = items.length - b;
-        logger(`  TTS ${lang.toUpperCase()} — daily quota exhausted, skipping ${remaining} remaining stories`);
-        break;
-      }
-
-      const batch    = items.slice(b, b + TTS_BATCH_SIZE);
-      const batchNum = Math.floor(b / TTS_BATCH_SIZE) + 1;
-      logger(`  TTS ${lang.toUpperCase()} batch ${batchNum}/${total} (${batch.length} stories)…`);
-
-      const urls = await googleTTSBatch(
-        batch.map(item => ({ text: item.text, filename: item.filename })),
-        lang,
-        logger,
-      );
-
-      urls.forEach((url, j) => {
-        if (url) {
-          if (lang === "en") updated[batch[j].storyIdx].audioUrlEn = url;
-          else               updated[batch[j].storyIdx].audioUrlHi = url;
-          logger(`    ✓ ${batch[j].filename}`);
-        } else {
-          logger(`    ✗ ${batch[j].filename}: no audio`);
-        }
-      });
-
-      // Brief pause between batches to avoid per-minute rate limits
-      if (b + TTS_BATCH_SIZE < items.length) {
-        await new Promise(r => setTimeout(r, 1_500));
+  async function processStream(lang: "en" | "hi") {
+    for (let idx = 0; idx < stories.length; idx++) {
+      const story = stories[idx];
+      const script = lang === "en" ? story.scriptEn : story.scriptHi;
+      if (!script) continue;
+      const filename = `${date}-${story.id.slice(0, 16)}-${lang}`;
+      try {
+        const url = await googleTTS(script, filename, lang);
+        if (lang === "en") updated[idx].audioUrlEn = url;
+        else updated[idx].audioUrlHi = url;
+        logger(`    ✓ ${filename}`);
+      } catch (err: any) {
+        logger(`    ✗ ${filename}: ${err.message?.slice(0, 160)}`);
       }
     }
   }
 
   // Run EN and HI streams in parallel — independent, no shared state
   await Promise.all([
-    processStream(enItems, "en"),
-    processStream(hiItems, "hi"),
+    processStream("en"),
+    processStream("hi"),
   ]);
 
   return updated;
@@ -597,63 +559,29 @@ export async function generateMissingTTS(
   }
 
   const date = existing.date;
-  log(`TTS patch for ${date}: ${needsEn.length} EN + ${needsHi.length} HI files missing audio`);
+  log(`TTS patch for ${date}: ${needsEn.length} EN + ${needsHi.length} HI files missing audio (individual calls)…`);
 
   const updated = existing.stories.map((s) => ({ ...s }));
 
-  type TtsItem = { text: string; filename: string; storyIdx: number };
-
-  const enItems: TtsItem[] = needsEn.map((story) => {
-    const storyIdx = existing.stories.findIndex((s) => s.id === story.id);
-    return { text: story.scriptEn, filename: `${date}-${story.id.slice(0, 16)}-en`, storyIdx };
-  });
-  const hiItems: TtsItem[] = needsHi.map((story) => {
-    const storyIdx = existing.stories.findIndex((s) => s.id === story.id);
-    return { text: story.scriptHi, filename: `${date}-${story.id.slice(0, 16)}-hi`, storyIdx };
-  });
-
-  const enBatches = Math.ceil(enItems.length / TTS_BATCH_SIZE);
-  const hiBatches = Math.ceil(hiItems.length / TTS_BATCH_SIZE);
-  log(`TTS: ${totalNeeded} files → ${enBatches + hiBatches} batch calls (${TTS_BATCH_SIZE} stories/batch)…`);
-
-  async function processStream(items: TtsItem[], lang: "en" | "hi") {
-    const total = Math.ceil(items.length / TTS_BATCH_SIZE);
-    for (let b = 0; b < items.length; b += TTS_BATCH_SIZE) {
-      if (isDailyQuotaExhausted()) {
-        const remaining = items.length - b;
-        log(`  TTS ${lang.toUpperCase()} — daily quota exhausted, skipping ${remaining} remaining stories`);
-        break;
-      }
-
-      const batch    = items.slice(b, b + TTS_BATCH_SIZE);
-      const batchNum = Math.floor(b / TTS_BATCH_SIZE) + 1;
-      log(`  TTS ${lang.toUpperCase()} batch ${batchNum}/${total} (${batch.length} stories)…`);
-
-      const urls = await googleTTSBatch(
-        batch.map((item) => ({ text: item.text, filename: item.filename })),
-        lang,
-        logger,
-      );
-
-      urls.forEach((url, j) => {
-        if (url) {
-          if (lang === "en") updated[batch[j].storyIdx].audioUrlEn = url;
-          else               updated[batch[j].storyIdx].audioUrlHi = url;
-          log(`    ✓ ${batch[j].filename}`);
-        } else {
-          log(`    ✗ ${batch[j].filename}: no audio`);
-        }
-      });
-
-      if (b + TTS_BATCH_SIZE < items.length) {
-        await new Promise((r) => setTimeout(r, 1_500));
+  async function processStream(stories: Story[], lang: "en" | "hi") {
+    for (const story of stories) {
+      const storyIdx = existing.stories.findIndex((s) => s.id === story.id);
+      const filename = `${date}-${story.id.slice(0, 16)}-${lang}`;
+      const script = lang === "en" ? story.scriptEn : story.scriptHi;
+      try {
+        const url = await googleTTS(script, filename, lang);
+        if (lang === "en") updated[storyIdx].audioUrlEn = url;
+        else updated[storyIdx].audioUrlHi = url;
+        log(`    ✓ ${filename}`);
+      } catch (err: any) {
+        log(`    ✗ ${filename}: ${err.message?.slice(0, 160)}`);
       }
     }
   }
 
   await Promise.all([
-    processStream(enItems, "en"),
-    processStream(hiItems, "hi"),
+    processStream(needsEn, "en"),
+    processStream(needsHi, "hi"),
   ]);
 
   const patched = updated.filter((s, i) => {
