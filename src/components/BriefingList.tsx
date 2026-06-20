@@ -1,5 +1,5 @@
 import { useState, type CSSProperties } from "react";
-import { ChevronDown, ExternalLink, Play, Pause } from "lucide-react";
+import { ChevronDown, ExternalLink, Play } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import type { BriefingTopic } from "@/lib/news/generator";
 
@@ -152,37 +152,40 @@ function TopicCard({ topic: t, index: i, isActive, playingState = "idle", progre
 
   return (
     <div className="rounded-2xl border border-white/5 bg-white/[0.02] overflow-hidden">
-      {/* Header row */}
-      <div
-        role="button" tabIndex={0}
-        onClick={() => setOpen(!open)}
-        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(!open); } }}
-        className="flex w-full cursor-pointer items-start gap-3 px-4 py-3 text-left outline-none"
-      >
-        {/* Play / pause button (left) */}
+      {/* Header row — split into play zone (left) + expand zone (right) */}
+      <div className="flex w-full items-stretch">
+
+        {/* Play / pause — full-height tap zone */}
         {hasAudio ? (
           <button
             onClick={handlePlayPause}
             aria-label={isPlaying ? "Pause" : "Play"}
-            className={`mt-1 flex size-5 shrink-0 items-center justify-center outline-none transition-colors ${
-              isActive
-                ? "text-primary"
-                : "text-muted-foreground hover:text-foreground"
+            className={`flex w-14 shrink-0 items-center justify-center outline-none transition-colors ${
+              isActive ? "text-primary" : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            {isPlaying ? <WaveformIcon /> : <Play className="size-3.5 ml-0.5" />}
+            {isPlaying ? <WaveformIcon /> : <Play className="size-4 ml-0.5" />}
           </button>
         ) : (
-          <span className="mt-1 w-6 shrink-0 text-xs tabular-nums text-muted-foreground">
+          <span className="flex w-14 shrink-0 items-start justify-center pt-4 text-xs tabular-nums text-muted-foreground">
             {String(i + 1).padStart(2, "0")}
           </span>
         )}
 
-        <div className="min-w-0 flex-1">
-          <p className="font-serif text-base leading-snug">{t.headline}</p>
-          {t.hook && <p className="mt-0.5 text-sm text-muted-foreground">{t.hook}</p>}
+        {/* Expand / collapse — headline + chevron */}
+        <div
+          role="button" tabIndex={0}
+          onClick={() => setOpen(!open)}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(!open); } }}
+          className="flex min-w-0 flex-1 cursor-pointer items-start gap-2 py-3 pr-4 text-left outline-none"
+        >
+          <div className="min-w-0 flex-1">
+            <p className="font-serif text-base leading-snug">{t.headline}</p>
+            {t.hook && <p className="mt-0.5 text-sm text-muted-foreground">{t.hook}</p>}
+          </div>
+          <ChevronDown className={`mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} />
         </div>
-        <ChevronDown className={`mt-1 size-4 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} />
+
       </div>
 
       {/* Progress strip — shown when this story is active */}
