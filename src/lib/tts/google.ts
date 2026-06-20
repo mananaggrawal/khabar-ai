@@ -141,10 +141,11 @@ async function synthesizeWithRetry(
     } catch (err: any) {
       lastErr = err;
       const msg: string = err.message ?? "";
-      const isDaily = msg.includes("per_day") || msg.includes("per_model_per_day");
-      const is429   = msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED");
+      const isDaily   = msg.includes("per_day") || msg.includes("per_model_per_day");
+      const isBilling = msg.includes("prepayment") || msg.includes("credits are depleted") || msg.includes("billing");
+      const is429     = msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED");
       console.warn(`[tts] ${tag} attempt ${attempt}/${maxAttempts}: ${msg.slice(0, 120)}`);
-      if (isDaily) { _dailyQuotaExhausted = true; console.warn("[tts] daily quota exhausted — all further TTS calls skipped"); break; }
+      if (isDaily || isBilling) { _dailyQuotaExhausted = true; console.warn(`[tts] fatal quota/billing error — all further TTS calls skipped`); break; }
       if (attempt < maxAttempts) {
         await new Promise(r => setTimeout(r, is429 ? 10_000 * attempt : 1_500 * attempt));
       }
