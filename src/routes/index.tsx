@@ -15,6 +15,7 @@ import { BriefingList } from "@/components/BriefingList";
 import { fetchBriefing } from "@/lib/news/briefing.functions";
 import { useMonologue } from "@/hooks/useMonologue";
 import type { BriefingSection, BriefingTopic } from "@/lib/news/generator";
+import { SECTION_MAP } from "@/lib/news/sources";
 
 const LOCAL_MODE = import.meta.env.VITE_LOCAL_MODE === "true";
 
@@ -208,7 +209,7 @@ function BriefingSurface() {
         {/* Idle hint */}
         {mono.state === "idle" && !briefingQuery.isLoading && hasAudio && (
           <p className="mt-3 text-center text-sm text-muted-foreground">
-            Tap the orb to start listening
+            {mono.language === "hi" ? "सुनना शुरू करने के लिए ऑर्ब दबाएं" : "Tap the orb to start listening"}
           </p>
         )}
 
@@ -217,14 +218,14 @@ function BriefingSurface() {
           <div className="mt-8 w-full max-w-2xl space-y-4">
             <SectionGroup
               group="india"
-              title="🇮🇳 India"
+              title={mono.language === "hi" ? "🇮🇳 भारत" : "🇮🇳 India"}
               sections={briefing!.sections.filter((s) => s.group === "india")}
               mono={mono}
               allSections={mono.sectionsWithAudio}
             />
             <SectionGroup
               group="global"
-              title="🌍 Global"
+              title={mono.language === "hi" ? "🌍 विश्व" : "🌍 Global"}
               sections={briefing!.sections.filter((s) => s.group === "global")}
               mono={mono}
               allSections={mono.sectionsWithAudio}
@@ -308,6 +309,7 @@ function SectionGroup({
             }}
             progress={isPlaying || isPaused ? mono.progress : 0}
             showDivider={i > 0}
+            language={mono.language}
           />
         );
       })}
@@ -329,6 +331,7 @@ function SectionRow({
   onPlayTopic,
   progress,
   showDivider,
+  language,
 }: {
   section: BriefingSection;
   isPlaying: boolean;
@@ -341,6 +344,7 @@ function SectionRow({
   onPlayTopic: (topicId: string) => void;
   progress: number;
   showDivider: boolean;
+  language?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
   const active = isPlaying || isPaused;
@@ -358,12 +362,17 @@ function SectionRow({
         {/* Section name */}
         <div className="flex-1 min-w-0">
           <p className={`flex items-center gap-2 text-sm ${active ? "font-medium text-foreground" : "text-foreground/80"}`}>
-            {section.label}
+            {language === "hi"
+              ? (SECTION_MAP.get(section.category)?.labelHi ?? section.label)
+              : section.label}
             {isPlaying && <WaveformIcon />}
           </p>
           <p className="text-xs text-muted-foreground">
-            {section.topics.length} {section.topics.length === 1 ? "story" : "stories"}
-            {!hasAudio && " · no audio"}
+            {section.topics.length}{" "}
+            {language === "hi"
+              ? "खबरें"
+              : section.topics.length === 1 ? "story" : "stories"}
+            {!hasAudio && (language === "hi" ? " · ऑडियो नहीं" : " · no audio")}
           </p>
         </div>
 

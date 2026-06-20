@@ -20,6 +20,7 @@ export type SectionCategory =
 export type SectionConfig = {
   category: SectionCategory;
   label: string;
+  labelHi: string;
   emoji: string;
   group: "india" | "global";
   required: boolean;
@@ -57,6 +58,7 @@ export const SECTIONS: SectionConfig[] = [
   {
     category:    "india-national",
     label:       "Politics & Policy",
+    labelHi:     "राजनीति और नीति",
     emoji:       "🏛️",
     group:       "india",
     required:    true,
@@ -67,6 +69,7 @@ export const SECTIONS: SectionConfig[] = [
   {
     category:    "india-business",
     label:       "Business & Economy",
+    labelHi:     "व्यापार और अर्थव्यवस्था",
     emoji:       "💰",
     group:       "india",
     required:    true,
@@ -77,6 +80,7 @@ export const SECTIONS: SectionConfig[] = [
   {
     category:    "india-sports",
     label:       "Sports",
+    labelHi:     "खेल",
     emoji:       "🏏",
     group:       "india",
     required:    false,
@@ -87,6 +91,7 @@ export const SECTIONS: SectionConfig[] = [
   {
     category:    "india-tech",
     label:       "Tech & Science",
+    labelHi:     "तकनीक और विज्ञान",
     emoji:       "💻",
     group:       "india",
     required:    false,
@@ -97,6 +102,7 @@ export const SECTIONS: SectionConfig[] = [
   {
     category:    "india-entertainment",
     label:       "Entertainment",
+    labelHi:     "मनोरंजन",
     emoji:       "🎬",
     group:       "india",
     required:    false,
@@ -107,6 +113,7 @@ export const SECTIONS: SectionConfig[] = [
   {
     category:    "india-health",
     label:       "Health",
+    labelHi:     "स्वास्थ्य",
     emoji:       "🏥",
     group:       "india",
     required:    false,
@@ -118,6 +125,7 @@ export const SECTIONS: SectionConfig[] = [
   {
     category:    "global-world",
     label:       "World Affairs",
+    labelHi:     "विश्व समाचार",
     emoji:       "🌍",
     group:       "global",
     required:    true,
@@ -128,6 +136,7 @@ export const SECTIONS: SectionConfig[] = [
   {
     category:    "global-business",
     label:       "Business & Economy",
+    labelHi:     "व्यापार और अर्थव्यवस्था",
     emoji:       "📈",
     group:       "global",
     required:    false,
@@ -138,6 +147,7 @@ export const SECTIONS: SectionConfig[] = [
   {
     category:    "global-sports",
     label:       "Sports",
+    labelHi:     "खेल",
     emoji:       "🏆",
     group:       "global",
     required:    false,
@@ -148,6 +158,7 @@ export const SECTIONS: SectionConfig[] = [
   {
     category:    "global-tech",
     label:       "Tech & Science",
+    labelHi:     "तकनीक और विज्ञान",
     emoji:       "🔬",
     group:       "global",
     required:    false,
@@ -158,6 +169,7 @@ export const SECTIONS: SectionConfig[] = [
   {
     category:    "global-entertainment",
     label:       "Entertainment",
+    labelHi:     "मनोरंजन",
     emoji:       "🎬",
     group:       "global",
     required:    false,
@@ -168,6 +180,7 @@ export const SECTIONS: SectionConfig[] = [
   {
     category:    "global-health",
     label:       "Health",
+    labelHi:     "स्वास्थ्य",
     emoji:       "🏥",
     group:       "global",
     required:    false,

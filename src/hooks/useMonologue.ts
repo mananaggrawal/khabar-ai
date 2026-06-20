@@ -66,6 +66,7 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
   const [language, setLanguage] = useState<"en" | "hi">(readLanguage);
 
   const audioRef      = useRef<HTMLAudioElement | null>(null);
+  const preloadRef    = useRef<HTMLAudioElement | null>(null);
   const pauseTimeRef  = useRef(0);
   const recognitionRef = useRef<any>(null);
   const queueAllRef   = useRef(false);
@@ -128,7 +129,12 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
   const attachAudio = useCallback(
     (url: string, startAt = 0, onEnded?: () => void) => {
       audioRef.current?.pause();
-      const audio = new Audio(url);
+      // Use preloaded audio if URL matches, otherwise create fresh
+      const preloaded = preloadRef.current;
+      const audio = (preloaded && preloaded.src === url && startAt === 0)
+        ? preloaded
+        : new Audio(url);
+      preloadRef.current = null; // clear so next track can preload
       if (startAt > 0) audio.currentTime = startAt;
       audioRef.current = audio;
 
@@ -136,7 +142,25 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
 
       audio.ontimeupdate = () => {
         if (audio.duration > 0) {
-          setProgress(audio.currentTime / audio.duration);
+          const frac = audio.currentTime / audio.duration;
+          setProgress(frac);
+
+          // Preload next track at 70% through current
+          if (frac > 0.7) {
+            const nextIdx = currentIdxRef.current + 1;
+            const nextTopic = topicsWithAudio[nextIdx];
+            if (nextTopic && preloadRef.current === null) {
+              const nextUrl = language === "hi"
+                ? nextTopic.audioUrlHi!
+                : (nextTopic.audioUrlEn ?? (nextTopic as any).audioUrl)!;
+              if (nextUrl) {
+                const preload = new Audio(nextUrl);
+                preload.preload = "auto";
+                preloadRef.current = preload;
+              }
+            }
+          }
+
           const now = Date.now();
           if (now - lastSaveRef.current > 5000) {
             lastSaveRef.current = now;
@@ -148,7 +172,6 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
                 lang: language,
               }));
             } catch {}
-            // Save per-story position
             const topic = topicsWithAudio[currentIdxRef.current];
             if (topic && audio.currentTime > 2) saveStoryPosition(topic.id, audio.currentTime);
           }
@@ -211,7 +234,7 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
                 return;
               }
             }
-            setTimeout(() => playTopicAtRef.current?.(next, true), 150);
+            setTimeout(() => playTopicAtRef.current?.(next, true), 50);
           }
         : undefined;
 
