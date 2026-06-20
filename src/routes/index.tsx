@@ -46,7 +46,7 @@ function MiniPlayer({
           animate={{ y: 0, opacity: 1 }}
           exit={{ y: 100, opacity: 0 }}
           transition={{ type: "spring", damping: 28, stiffness: 320 }}
-          style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 68px)" }}
+          style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 62px)" }}
           className="fixed inset-x-3 z-50"
         >
           <div

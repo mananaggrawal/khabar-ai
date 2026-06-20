@@ -3,31 +3,18 @@ import { cn } from "@/lib/utils";
 import type { Story } from "@/lib/news/generator";
 import { FEED_MAP, type SectionId } from "@/lib/news/sources";
 
-// Lucide icon per section — replaces emoji fallback thumbnails
-const SECTION_COLORS: Record<SectionId, string> = {
-  headlines:     "bg-[#4A2FA0]",
-  india:         "bg-[#C94A1E]",
-  world:         "bg-[#0A6B5E]",
-  business:      "bg-[#2D6A1F]",
-  technology:    "bg-[#185FA5]",
-  entertainment: "bg-[#8E2A6E]",
-  sports:        "bg-[#A83020]",
-  science:       "bg-[#1A6B8A]",
-  health:        "bg-[#C44B6B]",
-  local:         "bg-[#6B4E1A]",
-};
-
+// Lucide icon per section — subtle placeholder (matches original card aesthetic)
 const SECTION_ICON: Record<SectionId, React.ReactNode> = {
-  headlines:     <Newspaper className="size-5 text-white" />,
-  india:         <Flag      className="size-5 text-white" />,
-  world:         <Globe     className="size-5 text-white" />,
-  business:      <TrendingUp className="size-5 text-white" />,
-  technology:    <Laptop    className="size-5 text-white" />,
-  entertainment: <Film      className="size-5 text-white" />,
-  sports:        <Trophy    className="size-5 text-white" />,
-  science:       <Microscope className="size-5 text-white" />,
-  health:        <Heart     className="size-5 text-white" />,
-  local:         <MapPin    className="size-5 text-white" />,
+  headlines:     <Newspaper  className="size-5 text-primary/50" />,
+  india:         <Flag       className="size-5 text-primary/50" />,
+  world:         <Globe      className="size-5 text-primary/50" />,
+  business:      <TrendingUp className="size-5 text-primary/50" />,
+  technology:    <Laptop     className="size-5 text-primary/50" />,
+  entertainment: <Film       className="size-5 text-primary/50" />,
+  sports:        <Trophy     className="size-5 text-primary/50" />,
+  science:       <Microscope className="size-5 text-primary/50" />,
+  health:        <Heart      className="size-5 text-primary/50" />,
+  local:         <MapPin     className="size-5 text-primary/50" />,
 };
 
 function timeAgo(iso: string): string {
@@ -87,7 +74,7 @@ export function StoryCard({ story, isPlaying, hasAudio, onPlay, onPause, onTap }
         "flex items-center gap-3 rounded-2xl px-3 py-3 transition-colors cursor-pointer",
         isPlaying
           ? "bg-primary/[0.12]"
-          : "bg-card hover:bg-muted/50",
+          : "bg-card hover:bg-card/80",
       )}
     >
       {/* Thumbnail — left */}
@@ -106,20 +93,14 @@ export function StoryCard({ story, isPlaying, hasAudio, onPlay, onPause, onTap }
           />
           {/* Fallback icon shown on image error */}
           <div
-            className={cn(
-              "hidden h-[52px] w-[52px] items-center justify-center rounded-xl",
-              SECTION_COLORS[story.section] ?? "bg-muted",
-            )}
+            className="hidden h-[52px] w-[52px] items-center justify-center rounded-xl bg-muted"
             style={{ display: "none" }}
           >
             {SECTION_ICON[story.section]}
           </div>
         </div>
       ) : (
-        <div className={cn(
-          "flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-xl",
-          SECTION_COLORS[story.section] ?? "bg-muted",
-        )}>
+        <div className="flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-xl bg-muted">
           {SECTION_ICON[story.section]}
         </div>
       )}
@@ -146,7 +127,7 @@ export function StoryCard({ story, isPlaying, hasAudio, onPlay, onPause, onTap }
             "flex size-9 shrink-0 items-center justify-center rounded-full border transition-colors",
             isPlaying
               ? "border-primary bg-primary text-white"
-              : "border-white/[0.15] bg-white/[0.04] text-muted-foreground hover:border-white/30 hover:text-foreground",
+              : "border-border bg-background text-muted-foreground hover:border-border/80 hover:text-foreground",
           )}
         >
           {isPlaying
