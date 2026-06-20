@@ -14,7 +14,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fetchRss, type RssItem } from "./rss";
 import { FEEDS, FEED_MAP, DEFAULT_CITY, type SectionId } from "./sources";
-import { googleTTSBatch, TTS_BATCH_SIZE } from "@/lib/tts/google";
+import { googleTTSBatch, TTS_BATCH_SIZE, isDailyQuotaExhausted } from "@/lib/tts/google";
 import { saveBriefingToStorage, loadBriefingFromStorage } from "@/lib/supabase-storage";
 
 const LOCAL_MODE = process.env.LOCAL_MODE === "true";
@@ -348,6 +348,13 @@ async function generateAllTTS(
   async function processStream(items: TtsItem[], lang: "en" | "hi") {
     const total = Math.ceil(items.length / TTS_BATCH_SIZE);
     for (let b = 0; b < items.length; b += TTS_BATCH_SIZE) {
+      // Stop early if quota was exhausted by a previous batch (EN or HI)
+      if (isDailyQuotaExhausted()) {
+        const remaining = items.length - b;
+        logger(`  TTS ${lang.toUpperCase()} — daily quota exhausted, skipping ${remaining} remaining stories`);
+        break;
+      }
+
       const batch    = items.slice(b, b + TTS_BATCH_SIZE);
       const batchNum = Math.floor(b / TTS_BATCH_SIZE) + 1;
       logger(`  TTS ${lang.toUpperCase()} batch ${batchNum}/${total} (${batch.length} stories)…`);
@@ -612,6 +619,12 @@ export async function generateMissingTTS(
   async function processStream(items: TtsItem[], lang: "en" | "hi") {
     const total = Math.ceil(items.length / TTS_BATCH_SIZE);
     for (let b = 0; b < items.length; b += TTS_BATCH_SIZE) {
+      if (isDailyQuotaExhausted()) {
+        const remaining = items.length - b;
+        log(`  TTS ${lang.toUpperCase()} — daily quota exhausted, skipping ${remaining} remaining stories`);
+        break;
+      }
+
       const batch    = items.slice(b, b + TTS_BATCH_SIZE);
       const batchNum = Math.floor(b / TTS_BATCH_SIZE) + 1;
       log(`  TTS ${lang.toUpperCase()} batch ${batchNum}/${total} (${batch.length} stories)…`);

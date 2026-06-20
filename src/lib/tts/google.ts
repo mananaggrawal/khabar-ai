@@ -15,6 +15,15 @@ import { uploadAudio } from "@/lib/supabase-storage";
 
 const LOCAL_MODE = process.env.LOCAL_MODE === "true";
 
+// ── Daily quota guard ─────────────────────────────────────────────────────────
+// Once the per-model-per-day limit is hit, every subsequent API call that day
+// will also fail. Flip this flag on first quota error so we skip the network
+// entirely for the rest of the run — avoids burning retries on dead quota.
+let _dailyQuotaExhausted = false;
+
+/** True once a per_model_per_day quota error has been seen this process run. */
+export const isDailyQuotaExhausted = () => _dailyQuotaExhausted;
+
 // ── Config ────────────────────────────────────────────────────────────────────
 
 const MODEL       = "gemini-3.1-flash-tts-preview";
@@ -87,6 +96,9 @@ Never: Robotic, overly formal news anchor style, या performance जैसा
 // ── Core synthesis ────────────────────────────────────────────────────────────
 
 async function synthesizeRaw(prompt: string): Promise<Buffer> {
+  if (_dailyQuotaExhausted) {
+    throw new Error("Gemini TTS daily quota exhausted — skipping API call");
+  }
   const res = await fetch(GEMINI_TTS_URL(getKey()), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -132,7 +144,7 @@ async function synthesizeWithRetry(
       const isDaily = msg.includes("per_day") || msg.includes("per_model_per_day");
       const is429   = msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED");
       console.warn(`[tts] ${tag} attempt ${attempt}/${maxAttempts}: ${msg.slice(0, 120)}`);
-      if (isDaily) { console.warn("[tts] daily quota exhausted — aborting retries"); break; }
+      if (isDaily) { _dailyQuotaExhausted = true; console.warn("[tts] daily quota exhausted — all further TTS calls skipped"); break; }
       if (attempt < maxAttempts) {
         await new Promise(r => setTimeout(r, is429 ? 10_000 * attempt : 1_500 * attempt));
       }
@@ -349,6 +361,11 @@ export async function googleTTSBatch(
 
   // Fallback to individual calls if batch synthesis or splitting failed
   if (!segments) {
+    if (_dailyQuotaExhausted) {
+      // No point trying individual calls — quota is dead for the rest of this run
+      log(`  ✗ ${tag} — daily quota exhausted, skipping ${items.length} stories`);
+      return items.map(() => "");
+    }
     log(`  ↩ ${tag} — falling back to individual calls`);
     return individualFallback(items, language, log);
   }
