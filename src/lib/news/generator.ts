@@ -283,7 +283,9 @@ async function clubAndScriptBatch(
 
   const label = FEED_MAP.get(sectionId)?.label ?? sectionId;
 
-  const prompt = `You are Khabar AI — Indian news editor.
+  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+
+  const prompt = `You are Khabar AI — Indian news editor. Today's date is ${today}.
 
 Below are ${sectionStories.length} stories from the "${label}" section.
 
@@ -298,6 +300,7 @@ SCRIPT RULES:
 - Warm Indian English, conversational — not a broadcaster
 - Start directly with the news. No greeting, no "In other news", no sign-off
 - Name specific people, companies, countries — no vague pronouns
+- Never guess or hedge on the year — these are today's stories (${today})
 - scriptHi: same content in Hindi, keep English names/brands/numbers as-is
 
 CRITICAL: Every story (0 to ${sectionStories.length - 1}) must appear in exactly one group's sourceIndices.
