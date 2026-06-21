@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createPortal } from "react-dom";
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -19,8 +19,17 @@ import type { Story } from "@/lib/news/generator";
 
 // ── Route ─────────────────────────────────────────────────────────────────────
 
+const LOCAL_MODE = import.meta.env.VITE_LOCAL_MODE === "true";
+
 export const Route = createFileRoute("/")({
   head: () => ({ meta: [{ title: "Khabar AI" }] }),
+  ssr: false,
+  beforeLoad: async () => {
+    if (LOCAL_MODE) return;
+    const { supabase } = await import("@/integrations/supabase/client");
+    const { data, error } = await supabase.auth.getUser();
+    if (error || !data.user) throw redirect({ to: "/auth" });
+  },
   component: HomePage,
 });
 
@@ -216,9 +225,9 @@ function HomePage() {
         </span>
       </header>
 
-      {/* Loading state */}
+      {/* Loading state — fixed overlay so orb is perfectly centred on screen */}
       {briefingQuery.isLoading && (
-        <div className="flex flex-col flex-1 items-center justify-center gap-5">
+        <div className="fixed inset-0 z-10 flex flex-col items-center justify-center gap-5 bg-background">
           <VoiceOrb state="idle" size={160} />
           <div className="flex flex-col items-center gap-1">
             <span className="font-serif text-2xl tracking-tight">
