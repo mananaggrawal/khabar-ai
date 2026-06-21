@@ -61,6 +61,13 @@ export type Logger = (msg: string) => void;
 const TARGET_WPM   = 150;  // average reading/speech rate
 const TARGET_MINS  = 45;   // safety valve — all sections should survive under this
 
+// Max clubbed groups per section — Gemini must merge down to this many stories.
+// Prevents science/local etc. from returning 70+ individual stories.
+const MAX_GROUPS_PER_SECTION = 12;
+
+// If a section has more raw stories than this, split into chunks before clubbing.
+const CLUB_CHUNK_SIZE = 25;
+
 // Sections that are never trimmed by the time guard
 const PRIORITY_SECTIONS: SectionId[] = ["headlines", "business", "world"];
 
@@ -264,9 +271,11 @@ interface ClubbedGroup {
   sourceIndices: number[];
 }
 
-async function clubAndScriptSection(
+/** Club + script a single batch of stories (≤ CLUB_CHUNK_SIZE). */
+async function clubAndScriptBatch(
   sectionStories: Story[],
   sectionId: SectionId,
+  maxGroups: number,
 ): Promise<Story[]> {
   if (sectionStories.length === 0) return [];
 
@@ -280,6 +289,7 @@ YOUR JOB:
 1. Group stories that cover the same event, person, or topic. Different sources covering the same development → one group.
 2. Stories with no close match → their own group (size 1).
 3. Write one script per group that synthesises ALL its sources. No source's key information may be omitted.
+4. IMPORTANT: Produce at most ${maxGroups} groups total. If there are more distinct topics than ${maxGroups}, prioritise the most significant/impactful stories and fold minor duplicates into the nearest related group.
 
 SCRIPT RULES:
 - 60-80 words, 3-4 punchy sentences
@@ -353,15 +363,52 @@ ${sectionStories.map((s, i) => `${i}. [${s.source}] ${s.title}`).join("\n")}`;
 
     return output;
   } catch (err: any) {
-    console.warn(`[generator] club ${sectionId} failed (${err.message}) — scripting individually`);
-    // Fallback: script each story individually
+    console.warn(`[generator] club ${sectionId} batch failed (${err.message}) — scripting individually`);
     return sectionStories.map(s => ({
       ...s,
+      sources: [{ title: s.title, source: s.source, link: s.link }],
       scriptEn: `${s.title}. More details are emerging.`,
       scriptHi: `${s.title}। अधिक जानकारी आ रही है।`,
       audioStartSec: 0,
     }));
   }
+}
+
+/**
+ * Club + script a full section, chunking into batches of CLUB_CHUNK_SIZE
+ * if the section is large. Each chunk gets a proportional MAX_GROUPS cap.
+ */
+async function clubAndScriptSection(
+  sectionStories: Story[],
+  sectionId: SectionId,
+): Promise<Story[]> {
+  if (sectionStories.length === 0) return [];
+
+  if (sectionStories.length <= CLUB_CHUNK_SIZE) {
+    return clubAndScriptBatch(sectionStories, sectionId, MAX_GROUPS_PER_SECTION);
+  }
+
+  // Large section: split into chunks
+  const chunks: Story[][] = [];
+  for (let i = 0; i < sectionStories.length; i += CLUB_CHUNK_SIZE) {
+    chunks.push(sectionStories.slice(i, i + CLUB_CHUNK_SIZE));
+  }
+
+  // Groups budget per chunk — distribute MAX_GROUPS_PER_SECTION proportionally
+  const groupsPerChunk = Math.max(
+    3,
+    Math.ceil(MAX_GROUPS_PER_SECTION / chunks.length),
+  );
+
+  console.log(
+    `[generator] ${sectionId}: ${sectionStories.length} stories → ${chunks.length} chunks × ~${groupsPerChunk} groups each`,
+  );
+
+  const chunkResults = await Promise.all(
+    chunks.map(chunk => clubAndScriptBatch(chunk, sectionId, groupsPerChunk)),
+  );
+
+  return chunkResults.flat();
 }
 
 async function clubAndScriptAllSections(

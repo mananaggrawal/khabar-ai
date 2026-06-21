@@ -409,6 +409,16 @@ function adminPage(supabaseUrl, supabaseKey) {
     .log-done { color: var(--primary); font-weight: 500; }
     .log-error { color: oklch(0.65 0.22 25); }
 
+    /* Quota warning banner */
+    .quota-banner {
+      display: none;
+      align-items: center; gap: 10px;
+      background: oklch(0.65 0.22 25 / 0.1); border: 1px solid oklch(0.65 0.22 25 / 0.35);
+      border-radius: 12px; padding: 12px 16px; margin-bottom: 16px;
+      font-size: 13px; color: oklch(0.80 0.15 25);
+    }
+    .quota-banner.visible { display: flex; }
+
     /* Running banner */
     .running-banner {
       display: none;
@@ -841,7 +851,7 @@ function adminPage(supabaseUrl, supabaseKey) {
             if (ev.type === 'log') {
               appendLog('log', ev.msg);
             } else if (ev.type === 'done') {
-              appendLog('done', 'Done — ' + ev.sections + ' sections, ' + ev.totalTopics + ' topics');
+              appendLog('done', 'Done — ' + ev.stories + ' stories (' + ev.date + ')');
               loadStatus();
             } else if (ev.type === 'error') {
               appendLog('error', ev.msg);
@@ -899,7 +909,7 @@ function adminPage(supabaseUrl, supabaseKey) {
               appendPatchLog('log', ev.msg);
             } else if (ev.type === 'done') {
               const added = ev.added?.length ? ev.added.join(', ') : 'none';
-              appendPatchLog('done', 'Done — added: ' + added + ' · ' + ev.sections + ' sections total');
+              appendPatchLog('done', 'Done — added: ' + added + ' · ' + ev.stories + ' stories total');
               loadStatus();
             } else if (ev.type === 'error') {
               appendPatchLog('error', ev.msg);
