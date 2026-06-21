@@ -16,15 +16,19 @@ function client() {
   return createClient(url, key, { auth: { persistSession: false } });
 }
 
-export async function uploadAudio(filename: string, wav: Buffer): Promise<string> {
+export async function uploadAudio(
+  filename: string,
+  data: Buffer,
+  contentType = "audio/wav",
+): Promise<string> {
   const path = `audio/${filename}`;
-  const { error } = await client().storage.from(BUCKET).upload(path, wav, {
-    contentType: "audio/wav",
+  const { error } = await client().storage.from(BUCKET).upload(path, data, {
+    contentType,
     upsert: true,
   });
   if (error) throw new Error(`Storage audio upload failed: ${error.message}`);
-  const { data } = client().storage.from(BUCKET).getPublicUrl(path);
-  return data.publicUrl;
+  const { data: urlData } = client().storage.from(BUCKET).getPublicUrl(path);
+  return urlData.publicUrl;
 }
 
 export async function saveBriefingToStorage(date: string, briefing: unknown): Promise<void> {

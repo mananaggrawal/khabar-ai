@@ -4,7 +4,7 @@
  * needing routeTree.gen.ts to be updated.
  */
 import { generateDailyBriefing, generateMissingSections, generateMissingTTS, getLatestBriefing as getTodayBriefing } from "@/lib/news/generator";
-import { googleTTS } from "@/lib/tts/google";
+import { elevenLabsTTS, isQuotaExhausted } from "@/lib/tts/elevenlabs";
 import { loadBriefingFromStorage } from "@/lib/supabase-storage";
 import { requestAbort, resetAbort } from "@/lib/abort";
 
@@ -138,6 +138,7 @@ export async function handleStatus(request: Request): Promise<Response> {
     running: generating,
     runningJob,
     todayStats,
+    ttsQuotaExhausted: isQuotaExhausted(),
   });
 }
 
@@ -320,6 +321,6 @@ async function answerQuestion(question: string, script: string): Promise<string>
 }
 
 async function textToSpeech(text: string): Promise<string> {
-  const { url } = await googleTTS(text, `answer-${Date.now()}`);
+  const { url } = await elevenLabsTTS(text, `answer-${Date.now()}`);
   return url;
 }
