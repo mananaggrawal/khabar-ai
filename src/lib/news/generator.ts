@@ -1,12 +1,16 @@
 /**
- * Khabar AI Briefing Generator — v2
+ * Khabar AI Briefing Generator — v3
  *
  * Pipeline:
- *  1. Fetch 10 Google News topic feeds in parallel
+ *  1. Fetch all Google News topic feeds in parallel (no caps — take everything)
  *  2. Parse + deduplicate stories (URL-hash + title-prefix)
- *  3. Batch-generate spoken scripts via Gemini Flash (20 stories / call, EN+HI together)
- *  4. Batch TTS: merge BATCH_SIZE stories per call, split at silence boundaries
- *  5. Save flat DailyBriefing { stories[] } to Supabase Storage
+ *  3. Per-section club + script (1 Gemini call/section): groups related stories,
+ *     synthesises them into one richer story, writes EN+HI scripts (60-80 words)
+ *  4. Time guard — if estimated listen time > 15 min, trim from tail of
+ *     non-priority sections (Headlines / Business / World are never trimmed)
+ *  5. Per-story TTS: one googleTTS call per story per language
+ *     → abort works between every story, timestamps are exact (audioStartSec = 0)
+ *  6. Save flat DailyBriefing { stories[] } to Supabase Storage
  */
 
 import { createHash } from "node:crypto";
@@ -14,7 +18,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fetchRss, type RssItem } from "./rss";
 import { FEEDS, FEED_MAP, DEFAULT_CITY, type SectionId } from "./sources";
-import { googleTTS, googleTTSSection } from "@/lib/tts/google";
+import { googleTTS } from "@/lib/tts/google";
 import { saveBriefingToStorage, loadBriefingFromStorage } from "@/lib/supabase-storage";
 import { isAbortRequested } from "@/lib/abort";
 
@@ -23,18 +27,18 @@ const LOCAL_MODE = process.env.LOCAL_MODE === "true";
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type Story = {
-  id: string;          // 16-char hex hash of link URL
-  title: string;       // original RSS headline
-  source: string;      // publisher name (extracted by RSS parser)
-  link: string;        // article URL (Google News redirect)
-  publishedAt: string; // ISO date string
+  id: string;
+  title: string;
+  source: string;
+  link: string;
+  publishedAt: string;
   section: SectionId;
   imageUrl?: string;
   scriptEn: string;
   scriptHi: string;
   audioUrlEn?: string;
   audioUrlHi?: string;
-  audioStartSec?: number; // start offset within section audio file (seconds)
+  audioStartSec?: number; // always 0 — kept for compatibility with player
 };
 
 export type DailyBriefing = {
@@ -44,6 +48,14 @@ export type DailyBriefing = {
 };
 
 export type Logger = (msg: string) => void;
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const TARGET_WPM   = 150;  // average reading/speech rate
+const TARGET_MINS  = 15;   // target briefing length
+
+// Sections that are never trimmed by the time guard
+const PRIORITY_SECTIONS: SectionId[] = ["headlines", "business", "world"];
 
 // ─── Story ID ─────────────────────────────────────────────────────────────────
 
@@ -97,7 +109,7 @@ async function geminiJson(prompt: string): Promise<any> {
   return parseGeminiJson(text);
 }
 
-// ─── Step 1: Fetch all feeds ───────────────────────────────────────────────────
+// ─── Step 1: Fetch all feeds ──────────────────────────────────────────────────
 
 async function fetchAllFeeds(city: string): Promise<Map<SectionId, RssItem[]>> {
   const results = await Promise.allSettled(
@@ -124,11 +136,10 @@ function normalize(s: string): string {
 }
 
 function buildStories(feedMap: Map<SectionId, RssItem[]>): Story[] {
-  const seenIds = new Set<string>();
+  const seenIds    = new Set<string>();
   const seenTitles = new Set<string>();
   const stories: Story[] = [];
 
-  // Process topic-specific feeds first; headlines last (avoids duplicate assignment)
   const order: SectionId[] = [
     "india", "world", "business", "technology", "entertainment",
     "sports", "science", "health", "local", "headlines",
@@ -137,20 +148,20 @@ function buildStories(feedMap: Map<SectionId, RssItem[]>): Story[] {
   for (const sectionId of order) {
     const items = feedMap.get(sectionId) ?? [];
     for (const item of items) {
-      const id = storyId(item.link);
+      const id       = storyId(item.link);
       const titleKey = normalize(item.title).slice(0, 60);
       if (seenIds.has(id) || seenTitles.has(titleKey)) continue;
       seenIds.add(id);
       seenTitles.add(titleKey);
       stories.push({
         id,
-        title: item.title,
-        source: item.source,
-        link: item.link,
+        title:       item.title,
+        source:      item.source,
+        link:        item.link,
         publishedAt: item.pubDate
           ? new Date(item.pubDate).toISOString()
           : new Date().toISOString(),
-        section: sectionId,
+        section:  sectionId,
         imageUrl: item.imageUrl,
         scriptEn: "",
         scriptHi: "",
@@ -161,11 +172,9 @@ function buildStories(feedMap: Map<SectionId, RssItem[]>): Story[] {
   return stories;
 }
 
-// ─── Step 2b: Fetch OG images from publisher pages ───────────────────────────
+// ─── Step 2b: OG images ───────────────────────────────────────────────────────
 
-/** Extract og:image or twitter:image from raw HTML head. */
 function extractOgImage(html: string): string | undefined {
-  // Only scan the first 20KB — OG tags live in <head>
   const head = html.slice(0, 20_000);
   const patterns = [
     /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i,
@@ -182,19 +191,18 @@ function extractOgImage(html: string): string | undefined {
 
 async function fetchOgImage(url: string): Promise<string | undefined> {
   try {
-    const ctrl = new AbortController();
+    const ctrl  = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 5000);
-    const res = await fetch(url, {
+    const res   = await fetch(url, {
       signal: ctrl.signal,
       headers: {
         "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
-        "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+        "Accept":     "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
       },
       redirect: "follow",
     });
     clearTimeout(timer);
     if (!res.ok) return undefined;
-    // Read in chunks until we have 20KB or stream ends
     const reader = res.body?.getReader();
     if (!reader) return undefined;
     const chunks: Uint8Array[] = [];
@@ -217,14 +225,14 @@ async function fetchOgImage(url: string): Promise<string | undefined> {
 
 async function fetchAllOgImages(stories: Story[], logger: Logger): Promise<Story[]> {
   logger(`Fetching OG images for ${stories.length} stories (10 concurrent)…`);
-  const updated = stories.map((s) => ({ ...s }));
+  const updated     = stories.map((s) => ({ ...s }));
   const CONCURRENCY = 10;
 
   for (let i = 0; i < stories.length; i += CONCURRENCY) {
     const slice = stories.slice(i, i + CONCURRENCY);
     await Promise.allSettled(
       slice.map(async (story, j) => {
-        if (updated[i + j].imageUrl) return; // already have one from RSS
+        if (updated[i + j].imageUrl) return;
         const img = await fetchOgImage(story.link);
         if (img) updated[i + j] = { ...updated[i + j], imageUrl: img };
       }),
@@ -236,157 +244,237 @@ async function fetchAllOgImages(stories: Story[], logger: Logger): Promise<Story
   return updated;
 }
 
-// ─── Step 3: Batch generate spoken scripts ────────────────────────────────────
+// ─── Step 3: Club + script per section ───────────────────────────────────────
+//
+// One Gemini call per section. Gemini groups related stories by topic,
+// writes one synthesised EN+HI script per group (60-80 words).
+// Every raw story must appear in exactly one group — no information dropped.
 
-const SCRIPT_BATCH_SIZE = 20;
+interface ClubbedGroup {
+  title:         string;
+  scriptEn:      string;
+  scriptHi:      string;
+  sourceIndices: number[];
+}
 
-async function generateScriptBatch(
-  batch: { title: string; source: string; section: SectionId }[],
-): Promise<{ en: string; hi: string }[]> {
-  const lines = batch
-    .map((s, i) => `${i + 1}. [${s.source} · ${s.section}] ${s.title}`)
-    .join("\n");
+async function clubAndScriptSection(
+  sectionStories: Story[],
+  sectionId: SectionId,
+): Promise<Story[]> {
+  if (sectionStories.length === 0) return [];
 
-  const prompt = `You are Khabar AI — a warm, conversational Indian news voice.
+  const label = FEED_MAP.get(sectionId)?.label ?? sectionId;
 
-Write a short spoken script for each headline. Each script must be 2-3 short punchy sentences (25–35 words total), rapid-fire style — like a news ticker read aloud:
-• Sentence 1: What happened — name the specific people, companies, countries involved. No vague pronouns.
-• Sentence 2 (or 2-3): Why it matters or the key consequence. Keep it tight.
+  const prompt = `You are Khabar AI — Indian news editor.
 
-Style: conversational, warm, direct. Jump straight into the news — no greeting, no "In other news", no sign-off.
-For India stories: write from an Indian perspective.
-For global stories: always name the specific country or institution, never say "the government" without specifying which.
-Hindi: keep proper nouns (names, places, companies) in English. Match the warm conversational tone.
+Below are ${sectionStories.length} stories from the "${label}" section.
 
-Return a JSON array with exactly ${batch.length} objects in the same order as the input:
-[{"en": "English script here.", "hi": "Hindi script yahan."}, ...]
+YOUR JOB:
+1. Group stories that cover the same event, person, or topic. Different sources covering the same development → one group.
+2. Stories with no close match → their own group (size 1).
+3. Write one script per group that synthesises ALL its sources. No source's key information may be omitted.
 
-Headlines:
-${lines}`;
+SCRIPT RULES:
+- 60-80 words, 3-4 punchy sentences
+- Warm Indian English, conversational — not a broadcaster
+- Start directly with the news. No greeting, no "In other news", no sign-off
+- Name specific people, companies, countries — no vague pronouns
+- scriptHi: same content in Hindi, keep English names/brands/numbers as-is
+
+CRITICAL: Every story (0 to ${sectionStories.length - 1}) must appear in exactly one group's sourceIndices.
+
+Return JSON array only, no markdown:
+[{"title":"...","scriptEn":"...","scriptHi":"...","sourceIndices":[0,1,3]}]
+
+Stories:
+${sectionStories.map((s, i) => `${i}. [${s.source}] ${s.title}`).join("\n")}`;
 
   try {
-    const result = await geminiJson(prompt);
-    if (!Array.isArray(result)) throw new Error("not an array");
-    return batch.map((s, i) => ({
-      en: String(result[i]?.en ?? `${s.title}.`),
-      hi: String(result[i]?.hi ?? `${s.title}।`),
-    }));
+    const result: ClubbedGroup[] = await geminiJson(prompt);
+    if (!Array.isArray(result) || result.length === 0) throw new Error("empty result");
+
+    // Track which source indices are covered
+    const covered = new Set<number>();
+    for (const g of result) (g.sourceIndices ?? []).forEach(i => covered.add(i));
+
+    // Build output stories
+    const output: Story[] = [];
+
+    for (const group of result) {
+      const indices = (group.sourceIndices ?? []).filter(
+        i => i >= 0 && i < sectionStories.length,
+      );
+      if (indices.length === 0) continue;
+
+      // Use story with an image as primary, otherwise first
+      const primaryIdx = indices.find(i => sectionStories[i]?.imageUrl) ?? indices[0];
+      const primary    = sectionStories[primaryIdx];
+
+      output.push({
+        ...primary,
+        id:       primary.id,
+        title:    group.title   || primary.title,
+        scriptEn: group.scriptEn || `${primary.title}. Details are emerging.`,
+        scriptHi: group.scriptHi || `${primary.title}। विवरण आ रहे हैं।`,
+        audioUrlEn:   undefined,
+        audioUrlHi:   undefined,
+        audioStartSec: 0,
+      });
+    }
+
+    // Any uncovered stories → simple fallback script
+    for (let i = 0; i < sectionStories.length; i++) {
+      if (covered.has(i)) continue;
+      const s = sectionStories[i];
+      console.warn(`[generator] section ${sectionId} index ${i} not covered by clubbing — adding standalone`);
+      output.push({
+        ...s,
+        scriptEn: `${s.title}. More details are emerging on this story.`,
+        scriptHi: `${s.title}। इस खबर के बारे में अधिक जानकारी आ रही है।`,
+        audioStartSec: 0,
+      });
+    }
+
+    return output;
   } catch (err: any) {
-    console.warn(`[generator] script batch failed: ${err.message}`);
-    return batch.map((s) => ({
-      en: `${s.title}. Details are still emerging.`,
-      hi: `${s.title}। अधिक जानकारी जल्द आएगी।`,
+    console.warn(`[generator] club ${sectionId} failed (${err.message}) — scripting individually`);
+    // Fallback: script each story individually
+    return sectionStories.map(s => ({
+      ...s,
+      scriptEn: `${s.title}. More details are emerging.`,
+      scriptHi: `${s.title}। अधिक जानकारी आ रही है।`,
+      audioStartSec: 0,
     }));
   }
 }
 
-async function generateAllScripts(
+async function clubAndScriptAllSections(
   stories: Story[],
   logger: Logger,
-  onBatchDone?: (stories: Story[]) => Promise<void>,
+  onSectionDone?: (clubbed: Story[]) => Promise<void>,
 ): Promise<Story[]> {
-  const updated = [...stories];
-  const batches: number[][] = [];
-  for (let i = 0; i < stories.length; i += SCRIPT_BATCH_SIZE) {
-    batches.push(
-      Array.from({ length: Math.min(SCRIPT_BATCH_SIZE, stories.length - i) }, (_, j) => i + j),
-    );
+  // Group by section
+  const bySection = new Map<SectionId, Story[]>();
+  for (const story of stories) {
+    const arr = bySection.get(story.section) ?? [];
+    arr.push(story);
+    bySection.set(story.section, arr);
   }
 
-  logger(`Generating scripts: ${stories.length} stories in ${batches.length} batches…`);
+  // Priority sections first, then the rest
+  const sectionOrder: SectionId[] = [
+    ...PRIORITY_SECTIONS.filter(id => bySection.has(id)),
+    ...[...bySection.keys()].filter(id => !PRIORITY_SECTIONS.includes(id)),
+  ];
 
-  const CONCURRENCY = 3;
-  for (let i = 0; i < batches.length; i += CONCURRENCY) {
-    const chunk = batches.slice(i, i + CONCURRENCY);
-    await Promise.all(
-      chunk.map(async (indices) => {
-        const input = indices.map((idx) => ({
-          title: stories[idx].title,
-          source: stories[idx].source,
-          section: stories[idx].section,
-        }));
-        const scripts = await generateScriptBatch(input);
-        indices.forEach((idx, j) => {
-          updated[idx] = { ...updated[idx], scriptEn: scripts[j].en, scriptHi: scripts[j].hi };
-        });
-      }),
-    );
-    const batchNum = Math.floor(i / CONCURRENCY) + 1;
-    const batchTotal = Math.ceil(batches.length / CONCURRENCY);
-    logger(`  Scripts batch ${batchNum}/${batchTotal} done`);
-    if (onBatchDone) await onBatchDone([...updated]);
-    if (isAbortRequested()) { logger("⛔ Aborted by stop request"); break; }
-    if (i + CONCURRENCY < batches.length) {
-      await new Promise((r) => setTimeout(r, 400));
+  logger(`Club + script: ${stories.length} raw stories across ${bySection.size} sections…`);
+
+  const allClubbedStories: Story[] = [];
+
+  for (const sectionId of sectionOrder) {
+    if (isAbortRequested()) { logger("⛔ Aborted"); break; }
+
+    const sectionStories = bySection.get(sectionId) ?? [];
+    const emoji          = FEED_MAP.get(sectionId)?.emoji ?? "📰";
+    logger(`  ${emoji} ${sectionId}: ${sectionStories.length} raw stories → clubbing…`);
+
+    try {
+      const clubbed = await clubAndScriptSection(sectionStories, sectionId);
+      allClubbedStories.push(...clubbed);
+      logger(`    → ${clubbed.length} stories after clubbing`);
+    } catch (err: any) {
+      logger(`    ✗ ${sectionId}: ${err.message?.slice(0, 100)}`);
     }
+
+    if (onSectionDone) await onSectionDone([...allClubbedStories]);
   }
 
-  return updated;
+  return allClubbedStories;
 }
 
-// ─── Step 4: TTS (one call per section per language) ──────────────────────────
+// ─── Step 4: Time guard ───────────────────────────────────────────────────────
 //
-// 10 sections × 2 languages = 20 API calls for a full briefing.
-// Per-story start times are estimated via word-count proportions × total duration.
+// Estimates listen time from word count. If over TARGET_MINS, trims stories
+// from the tail of non-priority sections (lowest priority first).
+
+const TRIM_ORDER: SectionId[] = [
+  "local", "health", "science", "entertainment", "sports", "technology", "india",
+];
+
+function estimateMins(stories: Story[]): number {
+  const words = stories.reduce((n, s) => n + s.scriptEn.split(/\s+/).length, 0);
+  return words / TARGET_WPM;
+}
+
+function applyTimeGuard(stories: Story[], logger: Logger): Story[] {
+  const est = estimateMins(stories);
+  logger(`Estimated listen time: ${est.toFixed(1)} min (${stories.length} stories)`);
+
+  if (est <= TARGET_MINS) return stories;
+
+  let trimmed = [...stories];
+
+  outer: for (const sectionId of TRIM_ORDER) {
+    // Remove stories from this section one at a time (from the back) until under budget
+    while (estimateMins(trimmed) > TARGET_MINS) {
+      const indices = trimmed
+        .map((s, i) => (s.section === sectionId ? i : -1))
+        .filter(i => i >= 0);
+      if (indices.length === 0) continue outer;
+      const last = indices[indices.length - 1];
+      trimmed.splice(last, 1);
+      logger(`  trimmed 1 story from ${sectionId}`);
+    }
+    if (estimateMins(trimmed) <= TARGET_MINS) break;
+  }
+
+  logger(`After time guard: ${trimmed.length} stories, ~${estimateMins(trimmed).toFixed(1)} min`);
+  return trimmed;
+}
+
+// ─── Step 5: TTS — one call per story per language ───────────────────────────
 
 async function generateAllTTS(
   stories: Story[],
   date: string,
   logger: Logger,
-  onSectionDone?: (stories: Story[]) => Promise<void>,
+  onStoryDone?: (stories: Story[]) => Promise<void>,
 ): Promise<Story[]> {
-  const updated = stories.map((s) => ({ ...s }));
+  const updated = stories.map(s => ({ ...s }));
 
-  // Group story indices by section (preserving order)
-  const sectionGroups = new Map<SectionId, number[]>();
-  stories.forEach((story, idx) => {
-    if (!story.scriptEn && !story.scriptHi) return;
-    const arr = sectionGroups.get(story.section) ?? [];
-    arr.push(idx);
-    sectionGroups.set(story.section, arr);
-  });
+  logger(`TTS: ${stories.length} stories × 2 languages = ${stories.length * 2} calls…`);
 
-  logger(`TTS: ${sectionGroups.size} sections × 2 languages = ${sectionGroups.size * 2} calls…`);
+  for (let i = 0; i < stories.length; i++) {
+    if (isAbortRequested()) { logger("⛔ Aborted"); break; }
 
-  for (const [sectionId, indices] of sectionGroups) {
-    if (isAbortRequested()) { logger("⛔ Aborted by stop request"); break; }
-    // ── EN ──
-    const enScripts = indices.map(i => stories[i].scriptEn).filter(Boolean);
-    if (enScripts.length > 0) {
-      const filename = `${date}-${sectionId}-en`;
+    const story    = stories[i];
+    const fileBase = `${date}-${story.id}`;
+
+    // EN
+    if (story.scriptEn) {
       try {
-        const { url, durationSec, storyStartSecs } = await googleTTSSection(enScripts, filename);
-        let scriptIdx = 0;
-        indices.forEach((storyIdx) => {
-          if (!stories[storyIdx].scriptEn) return;
-          updated[storyIdx].audioUrlEn = url;
-          updated[storyIdx].audioStartSec = storyStartSecs[scriptIdx++] ?? 0;
-        });
-        logger(`    ✓ ${filename} (${enScripts.length} stories, ${durationSec.toFixed(1)}s)`);
+        const { url } = await googleTTS(story.scriptEn, `${fileBase}-en`);
+        updated[i].audioUrlEn  = url;
+        updated[i].audioStartSec = 0;
       } catch (err: any) {
-        logger(`    ✗ ${filename}: ${err.message?.slice(0, 160)}`);
+        logger(`  ✗ EN [${i + 1}/${stories.length}]: ${err.message?.slice(0, 80)}`);
       }
     }
 
-    // ── HI ──
-    const hiScripts = indices.map(i => stories[i].scriptHi).filter(Boolean);
-    if (hiScripts.length > 0) {
-      const filename = `${date}-${sectionId}-hi`;
+    if (isAbortRequested()) { logger("⛔ Aborted"); break; }
+
+    // HI
+    if (story.scriptHi) {
       try {
-        const { url, durationSec } = await googleTTSSection(hiScripts, filename);
-        indices.forEach((storyIdx) => {
-          if (!stories[storyIdx].scriptHi) return;
-          updated[storyIdx].audioUrlHi = url;
-        });
-        logger(`    ✓ ${filename} (${hiScripts.length} stories, ${durationSec.toFixed(1)}s)`);
+        const { url } = await googleTTS(story.scriptHi, `${fileBase}-hi`);
+        updated[i].audioUrlHi = url;
       } catch (err: any) {
-        logger(`    ✗ ${filename}: ${err.message?.slice(0, 160)}`);
+        logger(`  ✗ HI [${i + 1}/${stories.length}]: ${err.message?.slice(0, 80)}`);
       }
     }
 
-    // Save after each section so progress survives quota hits or crashes
-    if (onSectionDone) await onSectionDone([...updated]);
-    logger(`  💾 saved progress after section: ${sectionId}`);
+    logger(`  ✓ [${i + 1}/${stories.length}] ${story.title.slice(0, 55)}`);
+    if (onStoryDone) await onStoryDone([...updated]);
   }
 
   return updated;
@@ -409,7 +497,6 @@ export async function saveBriefing(briefing: DailyBriefing): Promise<void> {
   await writeFile(path, JSON.stringify(all, null, 2));
 }
 
-/** Map old section category strings to new SectionId */
 function mapOldCategory(cat: string): SectionId {
   const m: Record<string, SectionId> = {
     "india-national": "india",   "india-business": "business",
@@ -423,32 +510,31 @@ function mapOldCategory(cat: string): SectionId {
 }
 
 function normalizeBriefing(raw: any): DailyBriefing {
-  // New format
   if (Array.isArray(raw.stories)) return raw as DailyBriefing;
 
-  // Migrate old sections[].topics[] format
   const stories: Story[] = [];
   if (Array.isArray(raw.sections)) {
     for (const section of raw.sections) {
       for (const topic of (section.topics ?? [])) {
         stories.push({
-          id: topic.id ?? storyId(topic.sourceUrl ?? String(Math.random())),
-          title: topic.headline ?? topic.title ?? "",
-          source: topic.sourceName ?? "Unknown",
-          link: topic.sourceUrl ?? "",
+          id:          topic.id ?? storyId(topic.sourceUrl ?? String(Math.random())),
+          title:       topic.headline ?? topic.title ?? "",
+          source:      topic.sourceName ?? "Unknown",
+          link:        topic.sourceUrl ?? "",
           publishedAt: raw.generatedAt ?? new Date().toISOString(),
-          section: mapOldCategory(section.category),
-          scriptEn: topic.monologueScript ?? "",
-          scriptHi: "",
-          audioUrlEn: topic.audioUrlEn ?? (topic as any).audioUrl,
-          audioUrlHi: topic.audioUrlHi,
+          section:     mapOldCategory(section.category),
+          scriptEn:    topic.monologueScript ?? "",
+          scriptHi:    "",
+          audioUrlEn:  topic.audioUrlEn ?? (topic as any).audioUrl,
+          audioUrlHi:  topic.audioUrlHi,
+          audioStartSec: 0,
         });
       }
     }
   }
 
   return {
-    date: raw.date ?? (raw.generatedAt ?? "").slice(0, 10),
+    date:        raw.date ?? (raw.generatedAt ?? "").slice(0, 10),
     generatedAt: raw.generatedAt ?? new Date().toISOString(),
     stories,
   };
@@ -470,7 +556,6 @@ export async function getLatestBriefing(): Promise<DailyBriefing | null> {
   } catch { return null; }
 }
 
-// Keep getTodayBriefing for backward compat (handleAsk uses it)
 export const getTodayBriefing = getLatestBriefing;
 
 // ─── Main generator ───────────────────────────────────────────────────────────
@@ -480,41 +565,50 @@ export async function generateDailyBriefing(
   city = DEFAULT_CITY,
 ): Promise<DailyBriefing> {
   const date = new Date().toISOString().slice(0, 10);
-  const log = (msg: string) => { console.log(`[generator] ${msg}`); logger(msg); };
+  const log  = (msg: string) => { console.log(`[generator] ${msg}`); logger(msg); };
 
   log(`Starting briefing for ${date} (city: ${city})`);
 
-  // Step 1: Fetch all feeds in parallel
+  // Step 1: Fetch all feeds
   log(`Fetching ${FEEDS.length} Google News feeds…`);
-  const feedMap = await fetchAllFeeds(city);
+  const feedMap  = await fetchAllFeeds(city);
   const rawTotal = [...feedMap.values()].reduce((n, v) => n + v.length, 0);
   log(`Fetched ${rawTotal} raw items from ${feedMap.size} feeds`);
 
-  // Step 2: Deduplicate
-  const stories = buildStories(feedMap);
-  log(`After dedup: ${stories.length} unique stories`);
+  // Step 2: Dedup
+  const rawStories = buildStories(feedMap);
+  log(`After dedup: ${rawStories.length} unique stories`);
   for (const feed of FEEDS) {
-    const n = stories.filter((s) => s.section === feed.id).length;
+    const n = rawStories.filter(s => s.section === feed.id).length;
     if (n > 0) log(`  ${feed.emoji} ${feed.label}: ${n}`);
   }
 
-  // Steps 2b + 3 run in parallel — OG images and scripts are independent
-  log(`Fetching OG images and scripts in parallel…`);
-  const [withImages, withScripts] = await Promise.all([
-    fetchAllOgImages(stories, log),
-    generateAllScripts(stories, log, async (partial) => {
+  // Steps 2b + 3 in parallel: OG images and club+script are independent
+  log(`Fetching OG images and clubbing+scripting in parallel…`);
+  const [withImages, clubbed] = await Promise.all([
+    fetchAllOgImages(rawStories, log),
+    clubAndScriptAllSections(rawStories, log, async (partial) => {
       await saveBriefing({ date, generatedAt: new Date().toISOString(), stories: partial });
+      log(`  💾 saved ${partial.length} clubbed stories so far`);
     }),
   ]);
 
-  // Merge: scripts take priority; images fill in imageUrl
-  const merged = withScripts.map((s, i) => ({
+  // Merge images into clubbed stories by matching id
+  const imageById = new Map(withImages.map(s => [s.id, s.imageUrl]));
+  const merged = clubbed.map(s => ({
     ...s,
-    imageUrl: s.imageUrl ?? withImages[i]?.imageUrl,
+    imageUrl: s.imageUrl ?? imageById.get(s.id),
   }));
 
-  // Step 4: TTS — save after each section so progress survives interruptions
-  const withAudio = await generateAllTTS(merged, date, log, async (partialStories) => {
+  // Step 4: Time guard
+  const guarded = applyTimeGuard(merged, log);
+
+  // Save after scripting (before TTS so scripts survive TTS quota failures)
+  await saveBriefing({ date, generatedAt: new Date().toISOString(), stories: guarded });
+  log(`Scripts done — ${guarded.length} stories, saving before TTS…`);
+
+  // Step 5: Per-story TTS
+  const withAudio = await generateAllTTS(guarded, date, log, async (partialStories) => {
     await saveBriefing({ date, generatedAt: new Date().toISOString(), stories: partialStories });
   });
 
@@ -524,13 +618,12 @@ export async function generateDailyBriefing(
     stories: withAudio,
   };
 
-  log(`Saving briefing…`);
   await saveBriefing(briefing);
   log(`Done — ${briefing.stories.length} stories`);
   return briefing;
 }
 
-// ─── Refresh: add newly published stories to existing briefing ────────────────
+// ─── Patch: add newly published stories to existing briefing ──────────────────
 
 export async function generateMissingSections(
   logger: Logger = () => {},
@@ -546,30 +639,39 @@ export async function generateMissingSections(
   }
 
   log(`Refreshing stories for ${existing.date}…`);
-  const existingIds = new Set(existing.stories.map((s) => s.id));
+  const existingIds = new Set(existing.stories.map(s => s.id));
 
-  const feedMap = await fetchAllFeeds(city);
+  const feedMap    = await fetchAllFeeds(city);
   const allStories = buildStories(feedMap);
-  const newStories = allStories.filter((s) => !existingIds.has(s.id));
+  const newStories = allStories.filter(s => !existingIds.has(s.id));
 
   if (newStories.length === 0) {
     log("No new stories found");
     return { added: [], briefing: existing };
   }
 
-  log(`Found ${newStories.length} new stories — generating scripts + OG images + TTS…`);
-  const [withImages, withScripts] = await Promise.all([
+  log(`Found ${newStories.length} new stories — clubbing + scripting new sections…`);
+
+  // Re-club each section that has new stories (merge new + existing for that section)
+  const newSections = new Set(newStories.map(s => s.section));
+  const [withImages, clubbedNew] = await Promise.all([
     fetchAllOgImages(newStories, log),
-    generateAllScripts(newStories, log, async (partial) => {
-      await saveBriefing({ ...existing, generatedAt: new Date().toISOString(), stories: [...existing.stories, ...partial] });
-    }),
+    clubAndScriptAllSections(newStories, log),
   ]);
-  const mergedNew = withScripts.map((s, i) => ({
+
+  const imageById = new Map(withImages.map(s => [s.id, s.imageUrl]));
+  const mergedNew = clubbedNew.map(s => ({
     ...s,
-    imageUrl: s.imageUrl ?? withImages[i]?.imageUrl,
+    imageUrl: s.imageUrl ?? imageById.get(s.id),
   }));
-  const withAudio = await generateAllTTS(mergedNew, existing.date, log, async (partialStories) => {
-    await saveBriefing({ ...existing, generatedAt: new Date().toISOString(), stories: [...existing.stories, ...partialStories] });
+
+  // TTS for new stories
+  const withAudio = await generateAllTTS(mergedNew, existing.date, log, async (partial) => {
+    await saveBriefing({
+      ...existing,
+      generatedAt: new Date().toISOString(),
+      stories: [...existing.stories, ...partial],
+    });
   });
 
   const merged: DailyBriefing = {
@@ -579,12 +681,12 @@ export async function generateMissingSections(
   };
 
   await saveBriefing(merged);
-  const addedSections = [...new Set(withAudio.map((s) => FEED_MAP.get(s.section)?.label ?? s.section))];
-  log(`Added ${withAudio.length} stories across: ${addedSections.join(", ")}`);
-  return { added: addedSections, briefing: merged };
+  const addedLabels = [...newSections].map(s => FEED_MAP.get(s)?.label ?? s);
+  log(`Added ${withAudio.length} stories across: ${addedLabels.join(", ")}`);
+  return { added: addedLabels, briefing: merged };
 }
 
-// ─── TTS-only patch: re-run TTS on stories with scripts but no audio ──────────
+// ─── TTS-only patch ───────────────────────────────────────────────────────────
 
 export async function generateMissingTTS(
   logger: Logger = () => {},
@@ -592,92 +694,61 @@ export async function generateMissingTTS(
   const log = (msg: string) => { console.log(`[generator] ${msg}`); logger(msg); };
 
   const existing = await getLatestBriefing();
-  if (!existing) {
-    throw new Error("No existing briefing found — run full generation first");
-  }
+  if (!existing) throw new Error("No existing briefing — run full generation first");
 
-  const anyMissing = existing.stories.some(
-    (s) => (s.scriptEn && !s.audioUrlEn) || (s.scriptHi && !s.audioUrlHi),
+  const missing = existing.stories.filter(
+    s => (s.scriptEn && !s.audioUrlEn) || (s.scriptHi && !s.audioUrlHi),
   );
 
-  if (!anyMissing) {
+  if (missing.length === 0) {
     log("All stories already have audio — nothing to do");
     return { patched: 0, briefing: existing };
   }
 
-  const date = existing.date;
+  log(`TTS patch: ${missing.length} stories missing audio…`);
 
-  // Find which sections need regeneration
-  const missingSections = new Set<SectionId>();
-  existing.stories.forEach(s => {
-    if ((s.scriptEn && !s.audioUrlEn) || (s.scriptHi && !s.audioUrlHi)) {
-      missingSections.add(s.section);
-    }
-  });
+  const updated = existing.stories.map(s => ({ ...s }));
+  let patched   = 0;
 
-  log(`TTS patch for ${date}: regenerating ${missingSections.size} sections (${[...missingSections].join(", ")})…`);
+  for (const story of missing) {
+    if (isAbortRequested()) { log("⛔ Aborted"); break; }
 
-  const updated = existing.stories.map((s) => ({ ...s }));
+    const idx      = updated.findIndex(s => s.id === story.id);
+    if (idx < 0) continue;
+    const fileBase = `${existing.date}-${story.id}`;
 
-  for (const sectionId of missingSections) {
-    if (isAbortRequested()) { log("⛔ Aborted by stop request"); break; }
-    const sectionIndices = existing.stories
-      .map((s, i) => ({ s, i }))
-      .filter(({ s }) => s.section === sectionId)
-      .map(({ i }) => i);
-
-    // ── EN ──
-    const enScripts = sectionIndices.map(i => existing.stories[i].scriptEn).filter(Boolean);
-    if (enScripts.length > 0) {
-      const filename = `${date}-${sectionId}-en`;
+    if (story.scriptEn && !story.audioUrlEn) {
       try {
-        const { url, durationSec, storyStartSecs } = await googleTTSSection(enScripts, filename);
-        let scriptIdx = 0;
-        sectionIndices.forEach((storyIdx) => {
-          if (!existing.stories[storyIdx].scriptEn) return;
-          updated[storyIdx].audioUrlEn = url;
-          updated[storyIdx].audioStartSec = storyStartSecs[scriptIdx++] ?? 0;
-        });
-        log(`    ✓ ${filename} (${enScripts.length} stories, ${durationSec.toFixed(1)}s)`);
+        const { url } = await googleTTS(story.scriptEn, `${fileBase}-en`);
+        updated[idx].audioUrlEn  = url;
+        updated[idx].audioStartSec = 0;
+        patched++;
       } catch (err: any) {
-        log(`    ✗ ${filename}: ${err.message?.slice(0, 160)}`);
+        log(`  ✗ EN ${story.id}: ${err.message?.slice(0, 80)}`);
       }
     }
 
-    // ── HI ──
-    const hiScripts = sectionIndices.map(i => existing.stories[i].scriptHi).filter(Boolean);
-    if (hiScripts.length > 0) {
-      const filename = `${date}-${sectionId}-hi`;
+    if (isAbortRequested()) { log("⛔ Aborted"); break; }
+
+    if (story.scriptHi && !story.audioUrlHi) {
       try {
-        const { url, durationSec } = await googleTTSSection(hiScripts, filename);
-        sectionIndices.forEach((storyIdx) => {
-          if (!existing.stories[storyIdx].scriptHi) return;
-          updated[storyIdx].audioUrlHi = url;
-        });
-        log(`    ✓ ${filename} (${hiScripts.length} stories, ${durationSec.toFixed(1)}s)`);
+        const { url } = await googleTTS(story.scriptHi, `${fileBase}-hi`);
+        updated[idx].audioUrlHi = url;
+        patched++;
       } catch (err: any) {
-        log(`    ✗ ${filename}: ${err.message?.slice(0, 160)}`);
+        log(`  ✗ HI ${story.id}: ${err.message?.slice(0, 80)}`);
       }
     }
 
-    // Save after each section so progress survives quota hits or crashes
+    log(`  ✓ ${story.title.slice(0, 55)}`);
     await saveBriefing({ ...existing, generatedAt: new Date().toISOString(), stories: updated });
-    log(`  💾 saved progress after section: ${sectionId}`);
   }
-
-  const patched = updated.filter((s, i) => {
-    const orig = existing.stories[i];
-    return (!orig.audioUrlEn && s.audioUrlEn) || (!orig.audioUrlHi && s.audioUrlHi);
-  }).length;
 
   const briefing: DailyBriefing = {
     ...existing,
     generatedAt: new Date().toISOString(),
     stories: updated,
   };
-
-  log(`Saving briefing…`);
   await saveBriefing(briefing);
-  log(`Done — patched audio for ${patched} stories`);
   return { patched, briefing };
 }

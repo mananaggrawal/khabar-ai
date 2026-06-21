@@ -29,6 +29,17 @@ const MODEL       = "gemini-2.5-flash-preview-tts";
 const VOICE       = "Algieba";
 const SAMPLE_RATE = 24_000; // Hz — Gemini TTS always outputs 24 kHz PCM
 
+// ── Style instructions (short — lock in accent + tone, minimal tokens) ────────
+
+const STYLE_EN =
+  "Indian English male voice. Warm, clear, conversational news delivery. " +
+  "Speak like an informed friend — not a broadcaster. " +
+  "Natural pacing, brief pauses between stories.";
+
+const STYLE_HI =
+  "Indian Hindi male voice. Warm, clear delivery. Conversational, not formal. " +
+  "Natural pauses between stories. Keep English names and brands in original pronunciation.";
+
 const GEMINI_TTS_URL = (key: string) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${key}`;
 
@@ -40,22 +51,24 @@ function getKey(): string {
 
 // ── Core synthesis ────────────────────────────────────────────────────────────
 
-async function synthesizeRaw(prompt: string): Promise<Buffer> {
+async function synthesizeRaw(prompt: string, style?: string): Promise<Buffer> {
   if (_dailyQuotaExhausted) {
     throw new Error("Gemini TTS daily quota exhausted — skipping API call");
   }
+  const body: Record<string, unknown> = {
+    contents: [{ parts: [{ text: prompt }], role: "user" }],
+    generationConfig: {
+      responseModalities: ["AUDIO"],
+      speechConfig: {
+        voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } },
+      },
+    },
+  };
+  if (style) body.system_instruction = { parts: [{ text: style }] };
   const res = await fetch(GEMINI_TTS_URL(getKey()), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }], role: "user" }],
-      generationConfig: {
-        responseModalities: ["AUDIO"],
-        speechConfig: {
-          voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } },
-        },
-      },
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!res.ok) {
@@ -77,12 +90,13 @@ async function synthesizeRaw(prompt: string): Promise<Buffer> {
 async function synthesizeWithRetry(
   prompt: string,
   tag: string,
+  style?: string,
   maxAttempts = 4,
 ): Promise<Buffer> {
   let lastErr: Error | null = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      return await synthesizeRaw(prompt);
+      return await synthesizeRaw(prompt, style);
     } catch (err: any) {
       lastErr = err;
       const msg: string = err.message ?? "";
@@ -219,7 +233,7 @@ export async function googleTTS(
   text: string,
   filename: string,
 ): Promise<{ url: string; durationSec: number }> {
-  const pcm = await synthesizeWithRetry(text, filename);
+  const pcm = await synthesizeWithRetry(text, filename, STYLE_EN);
   return saveWav(pcmToWav(pcm), filename);
 }
 
@@ -234,7 +248,9 @@ export async function googleTTSSection(
 ): Promise<{ url: string; durationSec: number; storyStartSecs: number[] }> {
   const wordCounts = scripts.map(s => s.split(/\s+/).length);
   const combined   = scripts.join("\n\n");
-  const pcm        = await synthesizeWithRetry(combined, filename);
+  const lang       = filename.endsWith("-hi") ? "hi" : "en";
+  const style      = lang === "hi" ? STYLE_HI : STYLE_EN;
+  const pcm        = await synthesizeWithRetry(combined, filename, style);
   const storyStartSecs = findStoryBoundaries(pcm, wordCounts);
   const { url, durationSec } = await saveWav(pcmToWav(pcm), filename);
   return { url, durationSec, storyStartSecs };

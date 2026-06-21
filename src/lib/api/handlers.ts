@@ -320,5 +320,6 @@ async function answerQuestion(question: string, script: string): Promise<string>
 }
 
 async function textToSpeech(text: string): Promise<string> {
-  return googleTTS(text, `answer-${Date.now()}`);
+  const { url } = await googleTTS(text, `answer-${Date.now()}`);
+  return url;
 }
