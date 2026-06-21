@@ -63,7 +63,9 @@ const TARGET_MINS  = 45;   // safety valve — all sections should survive under
 
 // Max clubbed groups per section — Gemini must merge down to this many stories.
 // Prevents science/local etc. from returning 70+ individual stories.
-const MAX_GROUPS_PER_SECTION = 12;
+// 20 is aggressive enough to fix unclubbed sections while letting well-merging
+// sections (business, technology) keep more diverse coverage.
+const MAX_GROUPS_PER_SECTION = 20;
 
 // If a section has more raw stories than this, split into chunks before clubbing.
 const CLUB_CHUNK_SIZE = 25;

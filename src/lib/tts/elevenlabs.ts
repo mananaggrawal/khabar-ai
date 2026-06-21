@@ -3,7 +3,9 @@
  *
  * Model: eleven_flash_v2_5 — cheapest multilingual model (50% lower cost vs v2),
  *        supports both English and Hindi.
- * Accent: language_code steers accent — "en-IN" for Indian English, "hi" for Hindi.
+ * language_code: only set for Hindi ("hi"). "en-IN" is not a valid ElevenLabs
+ *        language code and causes 400 errors — English is left unset so the
+ *        voice speaks in its natural accent.
  * Voice:  configured via ELEVENLABS_VOICE_ID env var.
  * Output: MP3 @ 44.1 kHz / 128 kbps.
  */
@@ -15,16 +17,11 @@ import { uploadAudio } from "@/lib/supabase-storage";
 const LOCAL_MODE = process.env.LOCAL_MODE === "true";
 
 // ── Quota guard ────────────────────────────────────────────────────────────────
-// ElevenLabs uses character-based credits. On exhaustion flip this flag so we
-// skip the API entirely for the rest of the run.
 let _quotaExhausted = false;
-
-/** True once an insufficient_credits / quota error has been seen this run. */
 export const isQuotaExhausted = () => _quotaExhausted;
 
 // ── Config ─────────────────────────────────────────────────────────────────────
 
-// Flash v2.5: cheapest multilingual model (32 languages incl. Hindi), 50% cheaper per char
 const MODEL_ID   = "eleven_flash_v2_5";
 const OUTPUT_FMT = "mp3_44100_128";
 
@@ -38,19 +35,28 @@ function getVoiceId(): string {
   return process.env.ELEVENLABS_VOICE_ID ?? "nPczCjzI2devNBz1zQrb";
 }
 
-/** Detect language from filename suffix (-en → Indian English, -hi → Hindi). */
-function languageCode(filename: string): string {
-  return filename.endsWith("-hi") ? "hi" : "en-IN";
-}
-
 // ── Core synthesis ─────────────────────────────────────────────────────────────
 
 async function synthesize(text: string, filename: string): Promise<Buffer> {
   if (_quotaExhausted) throw new Error("ElevenLabs quota exhausted — skipping API call");
 
-  const voiceId  = getVoiceId();
-  const langCode = languageCode(filename);
-  const url      = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=${OUTPUT_FMT}`;
+  const voiceId = getVoiceId();
+  const isHindi = filename.endsWith("-hi");
+  const url     = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=${OUTPUT_FMT}`;
+
+  // language_code "hi" steers Flash v2.5 into Hindi.
+  // English: omit language_code entirely — "en-IN" is invalid and returns 400.
+  const payload: Record<string, unknown> = {
+    text,
+    model_id: MODEL_ID,
+    voice_settings: {
+      stability:         0.5,
+      similarity_boost:  0.75,
+      style:             0.0,
+      use_speaker_boost: true,
+    },
+  };
+  if (isHindi) payload.language_code = "hi";
 
   const res = await fetch(url, {
     method: "POST",
@@ -58,17 +64,7 @@ async function synthesize(text: string, filename: string): Promise<Buffer> {
       "xi-api-key":   getKey(),
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      text,
-      model_id:      MODEL_ID,
-      language_code: langCode,   // "en-IN" → Indian English accent; "hi" → Hindi
-      voice_settings: {
-        stability:         0.5,
-        similarity_boost:  0.75,
-        style:             0.0,
-        use_speaker_boost: true,
-      },
-    }),
+    body: JSON.stringify(payload),
   });
 
   if (!res.ok) {
@@ -119,11 +115,10 @@ async function synthesizeWithRetry(
 }
 
 // ── Duration estimation ────────────────────────────────────────────────────────
-// ElevenLabs doesn't return duration in the response — estimate from word count.
 
 function estimateDurationSec(text: string): number {
   const words = text.trim().split(/\s+/).length;
-  return (words / 150) * 60; // ~150 wpm
+  return (words / 150) * 60;
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────────
@@ -135,7 +130,7 @@ export async function elevenLabsTTS(
   const mp3         = await synthesizeWithRetry(text, filename);
   const durationSec = estimateDurationSec(text);
   const kb          = (mp3.length / 1024).toFixed(0);
-  const lang        = filename.endsWith("-hi") ? "HI" : "EN-IN";
+  const lang        = filename.endsWith("-hi") ? "HI" : "EN";
 
   if (LOCAL_MODE) {
     const dir = join(process.cwd(), "public", "audio");
