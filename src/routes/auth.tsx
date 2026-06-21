@@ -3,9 +3,9 @@ import { useEffect, useState } from "react";
 
 function useApplyTheme() {
   useEffect(() => {
-    const saved = localStorage.getItem("khabar-theme");
-    const dark = saved === "dark";
-    document.documentElement.classList.toggle("light", !dark);
+    // Sign-in page is always light mode
+    document.documentElement.classList.remove("dark");
+    document.documentElement.classList.add("light");
   }, []);
 }
 import { supabase } from "@/integrations/supabase/client";
