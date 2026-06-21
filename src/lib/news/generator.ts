@@ -279,7 +279,11 @@ ${lines}`;
   }
 }
 
-async function generateAllScripts(stories: Story[], logger: Logger): Promise<Story[]> {
+async function generateAllScripts(
+  stories: Story[],
+  logger: Logger,
+  onBatchDone?: (stories: Story[]) => Promise<void>,
+): Promise<Story[]> {
   const updated = [...stories];
   const batches: number[][] = [];
   for (let i = 0; i < stories.length; i += SCRIPT_BATCH_SIZE) {
@@ -290,7 +294,6 @@ async function generateAllScripts(stories: Story[], logger: Logger): Promise<Sto
 
   logger(`Generating scripts: ${stories.length} stories in ${batches.length} batches…`);
 
-  // Up to 3 batches in parallel
   const CONCURRENCY = 3;
   for (let i = 0; i < batches.length; i += CONCURRENCY) {
     const chunk = batches.slice(i, i + CONCURRENCY);
@@ -307,7 +310,10 @@ async function generateAllScripts(stories: Story[], logger: Logger): Promise<Sto
         });
       }),
     );
-    logger(`  Scripts batch ${Math.floor(i / CONCURRENCY) + 1}/${Math.ceil(batches.length / CONCURRENCY)} done`);
+    const batchNum = Math.floor(i / CONCURRENCY) + 1;
+    const batchTotal = Math.ceil(batches.length / CONCURRENCY);
+    logger(`  Scripts batch ${batchNum}/${batchTotal} done`);
+    if (onBatchDone) await onBatchDone([...updated]);
     if (i + CONCURRENCY < batches.length) {
       await new Promise((r) => setTimeout(r, 400));
     }
@@ -493,7 +499,9 @@ export async function generateDailyBriefing(
   log(`Fetching OG images and scripts in parallel…`);
   const [withImages, withScripts] = await Promise.all([
     fetchAllOgImages(stories, log),
-    generateAllScripts(stories, log),
+    generateAllScripts(stories, log, async (partial) => {
+      await saveBriefing({ date, generatedAt: new Date().toISOString(), stories: partial });
+    }),
   ]);
 
   // Merge: scripts take priority; images fill in imageUrl
@@ -549,7 +557,9 @@ export async function generateMissingSections(
   log(`Found ${newStories.length} new stories — generating scripts + OG images + TTS…`);
   const [withImages, withScripts] = await Promise.all([
     fetchAllOgImages(newStories, log),
-    generateAllScripts(newStories, log),
+    generateAllScripts(newStories, log, async (partial) => {
+      await saveBriefing({ ...existing, generatedAt: new Date().toISOString(), stories: [...existing.stories, ...partial] });
+    }),
   ]);
   const mergedNew = withScripts.map((s, i) => ({
     ...s,
