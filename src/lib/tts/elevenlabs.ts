@@ -31,8 +31,11 @@ function getKey(): string {
   return k;
 }
 
-function getVoiceId(): string {
-  return process.env.ELEVENLABS_VOICE_ID ?? "nPczCjzI2devNBz1zQrb";
+function getVoiceId(filename: string): string {
+  if (filename.endsWith("-hi")) {
+    return process.env.ELEVENLABS_VOICE_ID_HI ?? process.env.ELEVENLABS_VOICE_ID ?? "WuePGPKIAIKI8COZpzce";
+  }
+  return process.env.ELEVENLABS_VOICE_ID ?? "nwj0s2LU9bDWRKND5yzA";
 }
 
 // ── Core synthesis ─────────────────────────────────────────────────────────────
@@ -40,8 +43,8 @@ function getVoiceId(): string {
 async function synthesize(text: string, filename: string): Promise<Buffer> {
   if (_quotaExhausted) throw new Error("ElevenLabs quota exhausted — skipping API call");
 
-  const voiceId = getVoiceId();
   const isHindi = filename.endsWith("-hi");
+  const voiceId = getVoiceId(filename);
   const url     = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=${OUTPUT_FMT}`;
 
   // language_code "hi" steers Flash v2.5 into Hindi.
