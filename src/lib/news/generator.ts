@@ -26,6 +26,12 @@ const LOCAL_MODE = process.env.LOCAL_MODE === "true";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+export type StorySource = {
+  title: string;
+  source: string; // publication name
+  link: string;
+};
+
 export type Story = {
   id: string;
   title: string;
@@ -34,6 +40,7 @@ export type Story = {
   publishedAt: string;
   section: SectionId;
   imageUrl?: string;
+  sources?: StorySource[]; // all raw articles that were merged into this story
   scriptEn: string;
   scriptHi: string;
   audioUrlEn?: string;
@@ -310,10 +317,18 @@ ${sectionStories.map((s, i) => `${i}. [${s.source}] ${s.title}`).join("\n")}`;
       const primaryIdx = indices.find(i => sectionStories[i]?.imageUrl) ?? indices[0];
       const primary    = sectionStories[primaryIdx];
 
+      // Collect all merged source articles
+      const sources: StorySource[] = indices.map(i => ({
+        title:  sectionStories[i].title,
+        source: sectionStories[i].source,
+        link:   sectionStories[i].link,
+      }));
+
       output.push({
         ...primary,
         id:       primary.id,
         title:    group.title   || primary.title,
+        sources,
         scriptEn: group.scriptEn || `${primary.title}. Details are emerging.`,
         scriptHi: group.scriptHi || `${primary.title}। विवरण आ रहे हैं।`,
         audioUrlEn:   undefined,
@@ -329,6 +344,7 @@ ${sectionStories.map((s, i) => `${i}. [${s.source}] ${s.title}`).join("\n")}`;
       console.warn(`[generator] section ${sectionId} index ${i} not covered by clubbing — adding standalone`);
       output.push({
         ...s,
+        sources: [{ title: s.title, source: s.source, link: s.link }],
         scriptEn: `${s.title}. More details are emerging on this story.`,
         scriptHi: `${s.title}। इस खबर के बारे में अधिक जानकारी आ रही है।`,
         audioStartSec: 0,

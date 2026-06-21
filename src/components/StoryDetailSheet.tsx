@@ -4,7 +4,7 @@
  */
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
-import { X, ExternalLink, ArrowUpRight, Bookmark } from "lucide-react";
+import { X, ExternalLink, ArrowUpRight, Bookmark, Newspaper } from "lucide-react";
 import type { Story } from "@/lib/news/generator";
 import { FEED_MAP } from "@/lib/news/sources";
 import { SECTION_COLOR } from "@/components/StoryCard";
@@ -133,15 +133,8 @@ export function StoryDetailSheet({
                 <p className="font-serif text-lg leading-snug text-foreground">
                   {story.title}
                 </p>
-                {story.link && (
-                  <a
-                    href={story.link}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="mt-1 flex items-center gap-0.5 text-xs font-medium text-primary hover:underline w-fit"
-                  >
-                    Go to article <ArrowUpRight className="size-3" />
-                  </a>
+                {story.source && (
+                  <p className="mt-1 text-xs text-muted-foreground">{story.source}</p>
                 )}
               </div>
               <div className="ml-3 mt-0.5 flex shrink-0 items-center gap-1">
@@ -179,6 +172,41 @@ export function StoryDetailSheet({
                   <p className="text-sm leading-relaxed text-foreground/80">
                     {script}
                   </p>
+                </div>
+              )}
+
+              {/* Sources */}
+              {story.sources && story.sources.length > 0 && (
+                <div className="mb-5">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground mb-2">
+                    Sources ({story.sources.length})
+                  </p>
+                  <div className="flex flex-col gap-2">
+                    {story.sources.map((src, i) => (
+                      <a
+                        key={i}
+                        href={src.link}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-start justify-between rounded-2xl border border-border/40 bg-white shadow-sm px-4 py-3 gap-3 transition-all active:scale-[0.99] hover:shadow"
+                      >
+                        <div className="flex items-start gap-2.5 min-w-0">
+                          <span className="shrink-0 mt-0.5 text-muted-foreground">
+                            <Newspaper className="size-3.5" />
+                          </span>
+                          <div className="min-w-0">
+                            <p className="text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground mb-0.5">
+                              {src.source}
+                            </p>
+                            <p className="text-xs text-foreground leading-snug line-clamp-2">
+                              {src.title}
+                            </p>
+                          </div>
+                        </div>
+                        <ArrowUpRight className="size-3.5 text-muted-foreground shrink-0 mt-0.5" />
+                      </a>
+                    ))}
+                  </div>
                 </div>
               )}
 
