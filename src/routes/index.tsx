@@ -233,10 +233,9 @@ function HomePage() {
       {!briefingQuery.isLoading && !briefing && (
         <div className="flex flex-1 items-center justify-center px-6 text-center">
           <div>
-            <p className="text-foreground/80 font-medium">No briefing yet</p>
+            <p className="text-foreground/80 font-medium">Today's briefing is being prepared</p>
             <p className="mt-1 text-sm text-muted-foreground">
-              Generate one from the{" "}
-              <a href="/admin" className="text-primary underline">admin panel</a>.
+              Check back shortly — your news is on its way.
             </p>
           </div>
         </div>
