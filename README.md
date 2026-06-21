@@ -1,8 +1,8 @@
 # Khabar AI
 
-A daily AI-powered news briefing app that delivers spoken news in a warm, conversational voice — like a smart friend catching you up on what happened today.
+A daily AI-powered news briefing app that delivers spoken news in a warm, conversational voice — like a smart friend catching you up on what happened today. Built as a personal tool for iPhone use.
 
-Built as a personal tool for iPhone use. Pulls from top RSS feeds, categorises stories using Gemini, writes a natural monologue script, and converts it to speech.
+Pulls from ~20 curated RSS feeds, clusters related stories using Gemini, writes bilingual (English + Hindi) monologue scripts, and converts them to natural-sounding speech via ElevenLabs.
 
 ---
 
@@ -11,12 +11,12 @@ Built as a personal tool for iPhone use. Pulls from top RSS feeds, categorises s
 Every day at 7 AM IST, Khabar AI automatically:
 
 1. Fetches headlines from ~20 curated RSS feeds (Indian and global)
-2. Sends them to Gemini Flash to categorise into 10 sections (Politics, Business, Sports, Tech, etc.)
-3. Writes a warm, conversational monologue script for each section
-4. Converts each script to speech using Gemini TTS (voice: Algieba, Indian English)
-5. Stores audio files and briefing JSON in Supabase Storage
+2. Groups related stories together using Gemini Flash — so 5 articles on the same event become one story
+3. Writes a warm, conversational bilingual script for each story (English + Hindi)
+4. Converts each script to speech using ElevenLabs Flash v2.5 with Indian English and Hindi voices
+5. Stores audio and briefing JSON in Supabase Storage
 
-You open the app, tap a section, and listen.
+Open the app, tap a section, and listen. Tap any story card to see all the source articles it was assembled from.
 
 ---
 
@@ -29,9 +29,9 @@ You open the app, tap a section, and listen.
 | Styling | Tailwind CSS v4 |
 | Auth | Supabase (Google OAuth) |
 | LLM | Google Gemini 2.5 Flash |
-| TTS | Gemini 3.1 Flash TTS |
-| Storage | Supabase Storage (`khabar` bucket) |
-| Deployment | Render (free tier) |
+| TTS | ElevenLabs Flash v2.5 (`eleven_flash_v2_5`) |
+| Storage | Supabase Storage |
+| Deployment | Render |
 | Cron | cron-job.org (external trigger) |
 
 ---
@@ -45,25 +45,26 @@ src/
 │   ├── index.tsx               # Home screen (briefing player)
 │   ├── auth.tsx                # Google OAuth login
 │   └── _authenticated/
+│       ├── browse.tsx          # Browse by section
 │       ├── history.tsx         # Past briefings
 │       └── settings.tsx        # User settings
 ├── lib/
 │   ├── news/
-│   │   ├── generator.ts        # Main orchestrator: fetch → categorise → TTS → save
+│   │   ├── generator.ts        # Main orchestrator: fetch → club → script → TTS → save
 │   │   ├── sources.ts          # RSS feed list + section definitions
 │   │   ├── rss.ts              # RSS fetcher/parser
 │   │   └── briefing.functions.ts  # Server fn: serve today's briefing to client
 │   ├── tts/
-│   │   └── google.ts           # Gemini TTS: text → WAV → Supabase Storage
+│   │   └── elevenlabs.ts       # ElevenLabs TTS: text → MP3 → Supabase Storage
 │   ├── supabase-storage.ts     # Server-side Supabase Storage client
 │   └── api/
-│       └── handlers.ts         # /api/admin/generate + /api/ask handlers
+│       └── handlers.ts         # /api/admin/* endpoints
 ├── components/
 │   ├── VoiceOrb.tsx            # Animated orb (idle/playing/loading states)
-│   └── BriefingList.tsx        # News items list with source logos
+│   ├── StoryCard.tsx           # News item card with play button
+│   └── StoryDetailSheet.tsx    # Story detail with all source articles
 ├── hooks/
 │   └── useMonologue.ts         # Audio playback state machine
-├── start.ts                    # Server entry: middleware, API routes, auth
 └── integrations/
     └── supabase/               # Supabase client, auth middleware, types
 ```
@@ -82,33 +83,32 @@ POST /api/admin/generate  (x-admin-key header)
 fetchAllFeeds()           -- pulls all RSS feeds in parallel
     │
     ▼
-geminiCategorise()        -- one Gemini call: assigns each headline to a section
+for each section (Headlines, Business, Sports, …):
+    clubAndScriptSection()
+        ├── splits stories into chunks of 25
+        ├── Gemini call per chunk: groups related stories + writes EN+HI scripts
+        └── returns clubbed stories with scripts and source article lists
     │
-    ▼
-for each section:
-    generateMonologue()   -- Gemini writes conversational script
-    googleTTS()           -- Gemini TTS converts to WAV
-    uploadAudio()         -- uploads WAV to Supabase Storage
-    │
-    ▼
-saveBriefing()            -- saves briefing JSON to Supabase Storage
+    for each clubbed story:
+        elevenLabsTTS(scriptEn)   -- EN MP3 → Supabase Storage
+        elevenLabsTTS(scriptHi)   -- HI MP3 → Supabase Storage
+        saveBriefing()            -- checkpoint: saves progress after each story
 ```
 
-Single-pull architecture: one batch of RSS feeds → one categorisation call → parallel section generation. No repeated feed fetching.
+**Club-first architecture:** raw articles are grouped before any TTS is generated. 80 articles on a slow news day might become 25 clubbed stories. Each story card in the app links back to all the source articles it was assembled from.
 
 ---
 
 ## Voice Design
 
-Voice: **Algieba** (Gemini TTS) — smooth Indian English.
+Two voices, both Indian accents via ElevenLabs:
 
-The TTS prompt instructs the model to speak like a smart, well-informed friend sharing things they learned today. Not a broadcaster, not an AI assistant. Warm, curious, relaxed.
+- **English** — voice `nwj0s2LU9bDWRKND5yzA` (natural Indian English cadence)
+- **Hindi** — voice `WuePGPKIAIKI8COZpzce` (native Hindi speaker)
 
-Style cues embedded in the prompt:
-- Slow down for important developments
-- Vary tone by content type (curious for surprises, thoughtful for politics, energetic for sports)
-- Natural pauses between stories
-- Never sound robotic or like a presenter
+Model: `eleven_flash_v2_5` — the cheapest ElevenLabs model at $0.05/1K chars, with full multilingual support. Language is steered via `language_code: "hi"` for Hindi; English omits the parameter (ElevenLabs does not support `en-IN` as a code).
+
+Scripts are written to sound like a well-informed friend, not a news anchor — warm, curious, and conversational. Each script is 60–80 words, one story at a time.
 
 ---
 
@@ -117,8 +117,9 @@ Style cues embedded in the prompt:
 ### Prerequisites
 
 - Node.js 20+
-- A Supabase project
-- A Gemini API key (get one free at [aistudio.google.com](https://aistudio.google.com))
+- A Supabase project (or use `LOCAL_MODE=true` to skip auth entirely)
+- A Gemini API key — free at [aistudio.google.com](https://aistudio.google.com)
+- An ElevenLabs API key — [elevenlabs.io](https://elevenlabs.io)
 
 ### Setup
 
@@ -134,19 +135,24 @@ Create a `.env` file:
 # Supabase
 SUPABASE_URL="https://your-project.supabase.co"
 SUPABASE_PUBLISHABLE_KEY="sb_publishable_..."
-SUPABASE_SERVICE_ROLE_KEY="eyJ..."   # for server-side storage access
+SUPABASE_SERVICE_ROLE_KEY="eyJ..."
 VITE_SUPABASE_URL="https://your-project.supabase.co"
 VITE_SUPABASE_PROJECT_ID="your-project-id"
 VITE_SUPABASE_PUBLISHABLE_KEY="sb_publishable_..."
 
-# Gemini
+# Gemini (LLM for categorisation + scripting)
 GEMINI_API_KEY="AIza..."
 
+# ElevenLabs (TTS)
+ELEVENLABS_API_KEY="sk_..."
+ELEVENLABS_VOICE_ID="nwj0s2LU9bDWRKND5yzA"       # English voice
+ELEVENLABS_VOICE_ID_HI="WuePGPKIAIKI8COZpzce"    # Hindi voice
+
 # App
-ADMIN_KEY="your-secret-key"          # protects /api/admin/generate
-LOCAL_MODE=true                       # use local files instead of Supabase Storage
+ADMIN_KEY="your-secret-key"
+LOCAL_MODE=true        # skips Supabase auth; uses local files
 VITE_LOCAL_MODE=true
-BRIEFING_HOME=in                      # "in" for India focus
+BRIEFING_HOME=in       # "in" for India-focused feeds
 ```
 
 ```bash
@@ -160,7 +166,7 @@ curl -X POST http://localhost:5173/api/admin/generate \
   -H "x-admin-key: your-secret-key"
 ```
 
-This takes 3–5 minutes (TTS for each section). Generated audio goes to `public/audio/` and briefing JSON to `.local-data/briefings.json`.
+Takes 5–10 minutes to process all sections. Generated MP3s go to `public/audio/` and the briefing JSON to `.local-data/briefings.json`.
 
 ---
 
@@ -168,32 +174,32 @@ This takes 3–5 minutes (TTS for each section). Generated audio goes to `public
 
 ### 1. Supabase setup
 
-- Create a new project at [supabase.com](https://supabase.com)
+- Create a project at [supabase.com](https://supabase.com)
 - Enable Google OAuth: Authentication → Providers → Google
 - Create a storage bucket named `khabar` (set to Public)
-- Run the DB migrations (profiles table + RLS policies)
 
 ### 2. Deploy to Render
 
-Connect your GitHub repo at [render.com](https://render.com). The `render.yaml` configures the service automatically.
-
-Add these environment variables in the Render dashboard:
+Connect your GitHub repo at [render.com](https://render.com). Add these environment variables in the Render dashboard:
 
 | Key | Value |
 |---|---|
 | `SUPABASE_URL` | Your Supabase project URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | Service role JWT (from Supabase settings) |
-| `VITE_SUPABASE_URL` | Same as SUPABASE_URL |
+| `SUPABASE_PUBLISHABLE_KEY` | Publishable key from Supabase |
+| `SUPABASE_SERVICE_ROLE_KEY` | Service role JWT |
+| `VITE_SUPABASE_URL` | Same as `SUPABASE_URL` |
 | `VITE_SUPABASE_PROJECT_ID` | Your project ref ID |
-| `VITE_SUPABASE_PUBLISHABLE_KEY` | Publishable key from Supabase |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | Same as `SUPABASE_PUBLISHABLE_KEY` |
 | `GEMINI_API_KEY` | Your Gemini API key |
-| `ADMIN_KEY` | A secret string to protect the generate endpoint |
+| `ELEVENLABS_API_KEY` | Your ElevenLabs API key |
+| `ELEVENLABS_VOICE_ID` | English voice ID |
+| `ELEVENLABS_VOICE_ID_HI` | Hindi voice ID |
+| `ADMIN_KEY` | A secret string protecting the generate endpoint |
 | `LOCAL_MODE` | `false` |
 | `VITE_LOCAL_MODE` | `false` |
-| `NODE_ENV` | `production` |
 | `BRIEFING_HOME` | `in` |
 
-### 3. Configure Google OAuth
+### 3. Google OAuth
 
 In Google Cloud Console:
 - Add your Render URL to Authorized JavaScript Origins
@@ -203,21 +209,21 @@ In Supabase → Authentication → URL Configuration:
 - Set Site URL to your Render URL
 - Add your Render URL to Redirect URLs
 
-### 4. Set up the daily cron
+### 4. Daily cron
 
 At [cron-job.org](https://cron-job.org), create a job:
-- URL: `https://khabar-ai.onrender.com/api/admin/generate`
+- URL: `https://your-app.onrender.com/api/admin/generate`
 - Method: POST
 - Header: `x-admin-key: your-admin-key`
 - Schedule: `30 1 * * *` (1:30 AM UTC = 7 AM IST)
 
 ---
 
-## Known Issues & Workarounds
+## Known Issues
 
-**TanStack Start + Vite 8 build bug:** `@tanstack/start-plugin-core@1.171` uses `onRouteTreeChanged` and `init` plugin lifecycle hooks that `@tanstack/router-plugin@1.168` doesn't implement, leaving `globalThis.TSS_ROUTES_MANIFEST` as null and crashing the SSR build.
+**TanStack Start + Vite build bug:** `@tanstack/start-plugin-core@1.171` uses plugin lifecycle hooks that `@tanstack/router-plugin@1.168` doesn't implement, leaving `globalThis.TSS_ROUTES_MANIFEST` as null and crashing the SSR build.
 
-Fix: `patches/@tanstack+start-plugin-core+1.171.18.patch` makes `buildRouteManifestRoutes` handle null gracefully (`?? {}`). Applied automatically via `postinstall: patch-package`.
+Fix: `patches/@tanstack+start-plugin-core+1.171.18.patch` makes `buildRouteManifestRoutes` handle null gracefully. Applied automatically via `postinstall: patch-package`.
 
 ---
 
