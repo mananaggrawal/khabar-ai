@@ -325,6 +325,7 @@ async function generateAllTTS(
   stories: Story[],
   date: string,
   logger: Logger,
+  onSectionDone?: (stories: Story[]) => Promise<void>,
 ): Promise<Story[]> {
   const updated = stories.map((s) => ({ ...s }));
 
@@ -364,7 +365,6 @@ async function generateAllTTS(
       const filename = `${date}-${sectionId}-hi`;
       try {
         const { url, durationSec } = await googleTTSSection(hiScripts, filename);
-        // HI uses EN audioStartSec (already set above); just store the URL
         indices.forEach((storyIdx) => {
           if (!stories[storyIdx].scriptHi) return;
           updated[storyIdx].audioUrlHi = url;
@@ -374,6 +374,10 @@ async function generateAllTTS(
         logger(`    ✗ ${filename}: ${err.message?.slice(0, 160)}`);
       }
     }
+
+    // Save after each section so progress survives quota hits or crashes
+    if (onSectionDone) await onSectionDone([...updated]);
+    logger(`  💾 saved progress after section: ${sectionId}`);
   }
 
   return updated;
@@ -498,8 +502,10 @@ export async function generateDailyBriefing(
     imageUrl: s.imageUrl ?? withImages[i]?.imageUrl,
   }));
 
-  // Step 4: TTS
-  const withAudio = await generateAllTTS(merged, date, log);
+  // Step 4: TTS — save after each section so progress survives interruptions
+  const withAudio = await generateAllTTS(merged, date, log, async (partialStories) => {
+    await saveBriefing({ date, generatedAt: new Date().toISOString(), stories: partialStories });
+  });
 
   const briefing: DailyBriefing = {
     date,
@@ -549,7 +555,9 @@ export async function generateMissingSections(
     ...s,
     imageUrl: s.imageUrl ?? withImages[i]?.imageUrl,
   }));
-  const withAudio = await generateAllTTS(mergedNew, existing.date, log);
+  const withAudio = await generateAllTTS(mergedNew, existing.date, log, async (partialStories) => {
+    await saveBriefing({ ...existing, generatedAt: new Date().toISOString(), stories: [...existing.stories, ...partialStories] });
+  });
 
   const merged: DailyBriefing = {
     ...existing,
@@ -637,6 +645,10 @@ export async function generateMissingTTS(
         log(`    ✗ ${filename}: ${err.message?.slice(0, 160)}`);
       }
     }
+
+    // Save after each section so progress survives quota hits or crashes
+    await saveBriefing({ ...existing, generatedAt: new Date().toISOString(), stories: updated });
+    log(`  💾 saved progress after section: ${sectionId}`);
   }
 
   const patched = updated.filter((s, i) => {
