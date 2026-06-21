@@ -16,6 +16,7 @@ import { fetchRss, type RssItem } from "./rss";
 import { FEEDS, FEED_MAP, DEFAULT_CITY, type SectionId } from "./sources";
 import { googleTTS, googleTTSSection } from "@/lib/tts/google";
 import { saveBriefingToStorage, loadBriefingFromStorage } from "@/lib/supabase-storage";
+import { isAbortRequested } from "@/lib/abort";
 
 const LOCAL_MODE = process.env.LOCAL_MODE === "true";
 
@@ -314,6 +315,7 @@ async function generateAllScripts(
     const batchTotal = Math.ceil(batches.length / CONCURRENCY);
     logger(`  Scripts batch ${batchNum}/${batchTotal} done`);
     if (onBatchDone) await onBatchDone([...updated]);
+    if (isAbortRequested()) { logger("⛔ Aborted by stop request"); break; }
     if (i + CONCURRENCY < batches.length) {
       await new Promise((r) => setTimeout(r, 400));
     }
@@ -347,6 +349,7 @@ async function generateAllTTS(
   logger(`TTS: ${sectionGroups.size} sections × 2 languages = ${sectionGroups.size * 2} calls…`);
 
   for (const [sectionId, indices] of sectionGroups) {
+    if (isAbortRequested()) { logger("⛔ Aborted by stop request"); break; }
     // ── EN ──
     const enScripts = indices.map(i => stories[i].scriptEn).filter(Boolean);
     if (enScripts.length > 0) {
@@ -617,6 +620,7 @@ export async function generateMissingTTS(
   const updated = existing.stories.map((s) => ({ ...s }));
 
   for (const sectionId of missingSections) {
+    if (isAbortRequested()) { log("⛔ Aborted by stop request"); break; }
     const sectionIndices = existing.stories
       .map((s, i) => ({ s, i }))
       .filter(({ s }) => s.section === sectionId)

@@ -41,7 +41,7 @@ if (!existsSync(SERVER_BUNDLE)) {
 }
 
 const { default: ssrHandler } = await import(SERVER_BUNDLE);
-const { handleGenerate, handleAsk, handleStatus, handleDownload, handleCron, handlePatchMissing, handlePatchTTS } = await import(API_BUNDLE);
+const { handleGenerate, handleAsk, handleStatus, handleDownload, handleCron, handlePatchMissing, handlePatchTTS, handleStop } = await import(API_BUNDLE);
 
 // Convert Node.js IncomingMessage to a Web Fetch Request
 async function toRequest(req) {
@@ -239,6 +239,18 @@ self.addEventListener('fetch', e => {
     return;
   }
 
+  if (pathname === "/api/admin/stop" && req.method === "POST") {
+    try {
+      const request = await toRequest(req);
+      const response = await handleStop(request);
+      await sendResponse(response, res);
+    } catch (err) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: String(err?.message ?? err) }));
+    }
+    return;
+  }
+
   if (pathname === "/api/admin/download" && req.method === "GET") {
     try {
       const request = await toRequest(req);
@@ -397,6 +409,40 @@ function adminPage(supabaseUrl, supabaseKey) {
     .log-done { color: var(--primary); font-weight: 500; }
     .log-error { color: oklch(0.65 0.22 25); }
 
+    /* Running banner */
+    .running-banner {
+      display: none;
+      align-items: center; justify-content: space-between; gap: 12px;
+      background: oklch(0.72 0.19 300 / 0.12); border: 1px solid oklch(0.72 0.19 300 / 0.3);
+      border-radius: 12px; padding: 12px 16px; margin-bottom: 16px;
+    }
+    .running-banner.visible { display: flex; }
+    .running-left { display: flex; align-items: center; gap: 10px; }
+    .running-label { font-size: 13px; font-weight: 500; color: var(--primary); }
+    .running-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .btn-stop {
+      flex-shrink: 0; padding: 6px 14px; border-radius: 999px;
+      background: oklch(0.65 0.22 25 / 0.15); border: 1px solid oklch(0.65 0.22 25 / 0.4);
+      color: oklch(0.75 0.22 25); font-family: 'Geist', ui-sans-serif, system-ui, sans-serif;
+      font-size: 12px; font-weight: 500; cursor: pointer; transition: opacity 0.15s;
+    }
+    .btn-stop:hover { opacity: 0.8; }
+
+    /* Stats grid */
+    .stats-grid {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 8px; margin-bottom: 16px;
+    }
+    .stat-card {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 10px; padding: 12px 14px;
+    }
+    .stat-label { font-size: 11px; color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 4px; }
+    .stat-value { font-size: 20px; font-weight: 600; color: var(--fg); line-height: 1; }
+    .stat-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .stat-bar { height: 3px; background: var(--border); border-radius: 999px; margin-top: 6px; overflow: hidden; }
+    .stat-bar-fill { height: 100%; background: var(--primary); border-radius: 999px; transition: width 0.4s; }
+
     /* Buttons */
     .btn-primary {
       display: flex; align-items: center; justify-content: center; gap: 8px;
@@ -472,6 +518,48 @@ function adminPage(supabaseUrl, supabaseKey) {
       </div>
     </div>
     <div class="content">
+      <!-- Running job banner -->
+      <div id="running-banner" class="running-banner">
+        <div class="running-left">
+          <span class="spin" style="color:var(--primary);font-size:16px;">&#9696;</span>
+          <div>
+            <div class="running-label" id="running-label">Running…</div>
+            <div class="running-sub" id="running-sub"></div>
+          </div>
+        </div>
+        <button class="btn-stop" onclick="stopJob()">Stop</button>
+      </div>
+
+      <!-- Today's script / audio stats -->
+      <div id="stats-section" style="display:none;">
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-label">EN Scripts</div>
+            <div class="stat-value" id="stat-en-script">—</div>
+            <div class="stat-sub" id="stat-en-script-sub"></div>
+            <div class="stat-bar"><div class="stat-bar-fill" id="bar-en-script" style="width:0%"></div></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">HI Scripts</div>
+            <div class="stat-value" id="stat-hi-script">—</div>
+            <div class="stat-sub" id="stat-hi-script-sub"></div>
+            <div class="stat-bar"><div class="stat-bar-fill" id="bar-hi-script" style="width:0%"></div></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">EN Audio</div>
+            <div class="stat-value" id="stat-en-audio">—</div>
+            <div class="stat-sub" id="stat-en-audio-sub"></div>
+            <div class="stat-bar"><div class="stat-bar-fill" id="bar-en-audio" style="width:0%"></div></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">HI Audio</div>
+            <div class="stat-value" id="stat-hi-audio">—</div>
+            <div class="stat-sub" id="stat-hi-audio-sub"></div>
+            <div class="stat-bar"><div class="stat-bar-fill" id="bar-hi-audio" style="width:0%"></div></div>
+          </div>
+        </div>
+      </div>
+
       <div class="group" style="padding:0 20px;">
         <div id="days-list" style="padding:20px 0;"></div>
       </div>
@@ -617,22 +705,75 @@ function adminPage(supabaseUrl, supabaseKey) {
     document.getElementById('gen-btn').textContent = todayStatus === 'generated' ? 'Regenerate' : 'Generate now';
   }
 
+  let _pollTimer = null;
+
+  function startPolling() {
+    if (_pollTimer) return;
+    _pollTimer = setInterval(loadStatus, 4000);
+  }
+
+  function stopPolling() {
+    if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+  }
+
+  function jobLabel(job) {
+    return { generate: 'Generating full briefing', 'patch-missing': 'Patching missing sections', 'patch-tts': 'Patching missing TTS', cron: 'Running cron job' }[job] ?? 'Running…';
+  }
+
+  function updateRunningBanner(running, runningJob) {
+    const banner = document.getElementById('running-banner');
+    const label = document.getElementById('running-label');
+    const sub = document.getElementById('running-sub');
+    if (running) {
+      label.textContent = jobLabel(runningJob);
+      sub.textContent = 'Polling for updates every 4 seconds…';
+      banner.classList.add('visible');
+      startPolling();
+    } else {
+      banner.classList.remove('visible');
+      stopPolling();
+    }
+  }
+
+  function updateStats(todayStats) {
+    const sec = document.getElementById('stats-section');
+    if (!todayStats || todayStats.status !== 'generated') { sec.style.display = 'none'; return; }
+    sec.style.display = 'block';
+    const total = todayStats.totalTopics || 1;
+    function set(id, barId, subId, val, label) {
+      document.getElementById(id).textContent = val;
+      document.getElementById(subId).textContent = label;
+      document.getElementById(barId).style.width = Math.round(val / total * 100) + '%';
+    }
+    set('stat-en-script', 'bar-en-script', 'stat-en-script-sub', todayStats.enScript ?? 0, 'of ' + total + ' stories');
+    set('stat-hi-script', 'bar-hi-script', 'stat-hi-script-sub', todayStats.hiScript ?? 0, 'of ' + total + ' stories');
+    set('stat-en-audio',  'bar-en-audio',  'stat-en-audio-sub',  todayStats.enAudio  ?? 0, 'of ' + (todayStats.enScript || total) + ' with script');
+    set('stat-hi-audio',  'bar-hi-audio',  'stat-hi-audio-sub',  todayStats.hiAudio  ?? 0, 'of ' + (todayStats.hiScript || total) + ' with script');
+  }
+
   async function loadStatus() {
     const list = document.getElementById('days-list');
-    list.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 0;">Checking…</div>';
+    if (!list.children.length) list.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 0;">Checking…</div>';
     try {
       const r = await fetch('/api/admin/status', { headers: { 'x-admin-key': AKEY } });
       const d = await r.json();
-      // Support both new { days:[] } and old { date, status, lastAvailable } shapes
-      let days = d.days;
-      if (!days) {
-        days = [{ date: d.date, status: d.status, sections: d.sections, totalTopics: d.totalTopics, generatedAt: d.generatedAt }];
-        if (d.lastAvailable) days.push({ ...d.lastAvailable, status: 'generated' });
-      }
-      renderDays(days || []);
+      const days = d.days ?? [];
+      renderDays(days);
+      updateRunningBanner(d.running, d.runningJob);
+      updateStats(d.todayStats);
     } catch {
       list.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 0;">Could not load status</div>';
     }
+  }
+
+  async function stopJob() {
+    try {
+      const r = await fetch('/api/admin/stop', { method: 'POST', headers: { 'x-admin-key': AKEY } });
+      const d = await r.json();
+      if (d.ok) {
+        document.getElementById('running-sub').textContent = 'Stop requested — finishing current section…';
+      }
+    } catch {}
   }
 
   async function downloadBriefing(date) {
@@ -667,6 +808,7 @@ function adminPage(supabaseUrl, supabaseKey) {
     btn.innerHTML = '<span class="spin">&#9696;</span> Generating…';
     logEl.innerHTML = '';
     logEl.classList.add('visible');
+    startPolling();
 
     try {
       const r = await fetch('/api/admin/generate', { method: 'POST', headers: { 'x-admin-key': AKEY } });
@@ -723,6 +865,7 @@ function adminPage(supabaseUrl, supabaseKey) {
     btn.innerHTML = '<span class="spin">&#9696;</span> Patching…';
     logEl.innerHTML = '';
     logEl.classList.add('visible');
+    startPolling();
 
     try {
       const r = await fetch('/api/admin/patch-missing', { method: 'POST', headers: { 'x-admin-key': AKEY } });
@@ -800,6 +943,7 @@ function adminPage(supabaseUrl, supabaseKey) {
     btn.innerHTML = '<span class="spin">&#9696;</span> Patching TTS…';
     logEl.innerHTML = '';
     logEl.classList.add('visible');
+    startPolling();
 
     try {
       const r = await fetch('/api/admin/patch-tts', { method: 'POST', headers: { 'x-admin-key': AKEY } });

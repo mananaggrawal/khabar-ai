@@ -6,6 +6,7 @@
 import { generateDailyBriefing, generateMissingSections, generateMissingTTS, getLatestBriefing as getTodayBriefing } from "@/lib/news/generator";
 import { googleTTS } from "@/lib/tts/google";
 import { loadBriefingFromStorage } from "@/lib/supabase-storage";
+import { requestAbort, resetAbort } from "@/lib/abort";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -15,13 +16,20 @@ function json(data: unknown, status = 200): Response {
 }
 
 let generating = false;
+let runningJob: string | null = null;
 
-// POST /api/admin/generate — streams SSE log events during generation
-export async function handleGenerate(request: Request): Promise<Response> {
+function authCheck(request: Request): Response | null {
   const adminKey = process.env.ADMIN_KEY;
   if (!adminKey) return json({ error: "ADMIN_KEY not configured" }, 500);
   if (request.headers.get("x-admin-key") !== adminKey)
     return json({ error: "Unauthorized" }, 401);
+  return null;
+}
+
+// POST /api/admin/generate — streams SSE log events during generation
+export async function handleGenerate(request: Request): Promise<Response> {
+  const err = authCheck(request);
+  if (err) return err;
 
   if (generating) return json({ error: "Already generating" }, 409);
 
@@ -34,6 +42,8 @@ export async function handleGenerate(request: Request): Promise<Response> {
   };
 
   generating = true;
+  runningJob = "generate";
+  resetAbort();
   // Fire-and-forget — don't await so we return the stream immediately
   (async () => {
     try {
@@ -49,6 +59,7 @@ export async function handleGenerate(request: Request): Promise<Response> {
       send({ type: "error", msg: err?.message ?? "Generation failed" });
     } finally {
       generating = false;
+      runningJob = null;
       try { writer.close(); } catch {}
     }
   })();
@@ -64,29 +75,29 @@ export async function handleGenerate(request: Request): Promise<Response> {
 
 // POST /api/admin/cron — fire-and-forget trigger for cron jobs (returns immediately)
 export async function handleCron(request: Request): Promise<Response> {
-  const adminKey = process.env.ADMIN_KEY;
-  if (!adminKey) return json({ error: "ADMIN_KEY not configured" }, 500);
-  if (request.headers.get("x-admin-key") !== adminKey)
-    return json({ error: "Unauthorized" }, 401);
+  const err = authCheck(request);
+  if (err) return err;
 
   if (generating) return json({ ok: false, message: "Already generating" });
 
   generating = true;
+  runningJob = "cron";
+  resetAbort();
   generateDailyBriefing()
     .catch((err) => console.error("[cron] generation failed:", err?.message ?? err))
-    .finally(() => { generating = false; });
+    .finally(() => { generating = false; runningJob = null; });
 
   return json({ ok: true, message: "Generation started" });
 }
 
-// GET /api/admin/status  — last 3 days' generation status
+// GET /api/admin/status  — last 3 days' generation status + running job info
 export async function handleStatus(request: Request): Promise<Response> {
-  const adminKey = process.env.ADMIN_KEY;
-  if (!adminKey) return json({ error: "ADMIN_KEY not configured" }, 500);
-  if (request.headers.get("x-admin-key") !== adminKey)
-    return json({ error: "Unauthorized" }, 401);
+  const err = authCheck(request);
+  if (err) return err;
 
   const days: object[] = [];
+  let todayStats: object | null = null;
+
   for (let i = 0; i < 3; i++) {
     const d = new Date();
     d.setDate(d.getDate() - i);
@@ -94,13 +105,26 @@ export async function handleStatus(request: Request): Promise<Response> {
     try {
       const briefing: any = await loadBriefingFromStorage(date);
       if (briefing) {
-        const b = briefing as any;
-        days.push({
+        const stories: any[] = briefing.stories ?? [];
+        const sections = new Set(stories.map((s: any) => s.section)).size;
+        const enScript = stories.filter((s: any) => s.scriptEn).length;
+        const hiScript = stories.filter((s: any) => s.scriptHi).length;
+        const enAudio  = stories.filter((s: any) => s.audioUrlEn).length;
+        const hiAudio  = stories.filter((s: any) => s.audioUrlHi).length;
+
+        const entry = {
           date,
           status: "generated",
-          stories: b.stories?.length ?? b.sections?.reduce((n: number, s: any) => n + (s.topics?.length ?? 0), 0) ?? 0,
-          generatedAt: b.generatedAt ?? null,
-        });
+          sections,
+          totalTopics: stories.length,
+          enScript,
+          hiScript,
+          enAudio,
+          hiAudio,
+          generatedAt: briefing.generatedAt ?? null,
+        };
+        days.push(entry);
+        if (i === 0) todayStats = entry;
       } else {
         days.push({ date, status: "missing" });
       }
@@ -109,15 +133,18 @@ export async function handleStatus(request: Request): Promise<Response> {
     }
   }
 
-  return json({ days });
+  return json({
+    days,
+    running: generating,
+    runningJob,
+    todayStats,
+  });
 }
 
 // GET /api/admin/download?date=YYYY-MM-DD — proxy briefing JSON as a file download
 export async function handleDownload(request: Request): Promise<Response> {
-  const adminKey = process.env.ADMIN_KEY;
-  if (!adminKey) return json({ error: "ADMIN_KEY not configured" }, 500);
-  if (request.headers.get("x-admin-key") !== adminKey)
-    return json({ error: "Unauthorized" }, 401);
+  const err = authCheck(request);
+  if (err) return err;
 
   const url = new URL(request.url);
   const date = url.searchParams.get("date") ?? "";
@@ -141,10 +168,8 @@ export async function handleDownload(request: Request): Promise<Response> {
 
 // POST /api/admin/patch-missing — generate only sections absent from today's briefing
 export async function handlePatchMissing(request: Request): Promise<Response> {
-  const adminKey = process.env.ADMIN_KEY;
-  if (!adminKey) return json({ error: "ADMIN_KEY not configured" }, 500);
-  if (request.headers.get("x-admin-key") !== adminKey)
-    return json({ error: "Unauthorized" }, 401);
+  const err = authCheck(request);
+  if (err) return err;
 
   if (generating) return json({ error: "Already generating" }, 409);
 
@@ -156,6 +181,8 @@ export async function handlePatchMissing(request: Request): Promise<Response> {
   };
 
   generating = true;
+  runningJob = "patch-missing";
+  resetAbort();
   (async () => {
     try {
       const { added, briefing } = await generateMissingSections((msg) => send({ type: "log", msg }));
@@ -168,6 +195,7 @@ export async function handlePatchMissing(request: Request): Promise<Response> {
       send({ type: "error", msg: err?.message ?? "Patch failed" });
     } finally {
       generating = false;
+      runningJob = null;
       try { writer.close(); } catch {}
     }
   })();
@@ -183,10 +211,8 @@ export async function handlePatchMissing(request: Request): Promise<Response> {
 
 // POST /api/admin/patch-tts — generate audio for stories that have scripts but no audio
 export async function handlePatchTTS(request: Request): Promise<Response> {
-  const adminKey = process.env.ADMIN_KEY;
-  if (!adminKey) return json({ error: "ADMIN_KEY not configured" }, 500);
-  if (request.headers.get("x-admin-key") !== adminKey)
-    return json({ error: "Unauthorized" }, 401);
+  const err = authCheck(request);
+  if (err) return err;
 
   if (generating) return json({ error: "Already generating" }, 409);
 
@@ -198,6 +224,8 @@ export async function handlePatchTTS(request: Request): Promise<Response> {
   };
 
   generating = true;
+  runningJob = "patch-tts";
+  resetAbort();
   (async () => {
     try {
       const { patched, briefing } = await generateMissingTTS((msg) => send({ type: "log", msg }));
@@ -206,6 +234,7 @@ export async function handlePatchTTS(request: Request): Promise<Response> {
       send({ type: "error", msg: err?.message ?? "TTS patch failed" });
     } finally {
       generating = false;
+      runningJob = null;
       try { writer.close(); } catch {}
     }
   })();
@@ -217,6 +246,16 @@ export async function handlePatchTTS(request: Request): Promise<Response> {
       "x-accel-buffering": "no",
     },
   });
+}
+
+// POST /api/admin/stop — request abort of running job
+export async function handleStop(request: Request): Promise<Response> {
+  const err = authCheck(request);
+  if (err) return err;
+
+  if (!generating) return json({ ok: false, message: "No job running" });
+  requestAbort();
+  return json({ ok: true, message: `Stop requested for: ${runningJob}` });
 }
 
 // POST /api/ask  { question: string }
