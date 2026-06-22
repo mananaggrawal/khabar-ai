@@ -55,10 +55,17 @@ export async function handleGenerate(request: Request): Promise<Response> {
     try {
       console.log(`[admin] generation triggered (provider: ${provider})`);
       const briefing = await generateDailyBriefing((msg) => send({ type: "log", msg }), undefined, provider);
+      const rs = briefing.runSummary;
       send({
         type: "done",
-        date: briefing.date,
-        stories: briefing.stories.length,
+        date:        briefing.date,
+        stories:     briefing.stories.length,
+        elapsedSec:  rs?.elapsedSec   ?? 0,
+        clubSec:     rs?.clubSec      ?? 0,
+        ttsSec:      rs?.ttsSec       ?? 0,
+        ttsChars:    rs?.tts.totalChars ?? 0,
+        ttsEstUsd:   rs?.tts.estimatedUsd ?? 0,
+        ttsProvider: rs?.tts.provider ?? provider,
       });
     } catch (err: any) {
       console.error("[admin] generation failed", err);

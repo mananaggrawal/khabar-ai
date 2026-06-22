@@ -738,7 +738,9 @@ function adminPage(supabaseUrl, supabaseKey) {
   }
 
   function jobLabel(job) {
-    return { generate: 'Generating full briefing', 'patch-missing': 'Patching missing sections', 'patch-tts': 'Patching missing TTS', cron: 'Running cron job' }[job] ?? 'Running…';
+    if (!job) return 'Running…';
+    if (job.startsWith('generate:')) return 'Generating full briefing (' + job.split(':')[1] + ')';
+    return { 'patch-missing': 'Patching missing sections', 'patch-tts': 'Patching missing TTS', cron: 'Running cron job' }[job] ?? 'Running…';
   }
 
   function updateRunningBanner(running, runningJob) {
@@ -863,7 +865,11 @@ function adminPage(supabaseUrl, supabaseKey) {
             if (ev.type === 'log') {
               appendLog('log', ev.msg);
             } else if (ev.type === 'done') {
-              appendLog('done', 'Done — ' + ev.stories + ' stories (' + ev.date + ')');
+              const mins = Math.floor((ev.elapsedSec || 0) / 60);
+              const secs = Math.round((ev.elapsedSec || 0) % 60);
+              const cost = ev.ttsEstUsd != null ? ' · est. $' + ev.ttsEstUsd.toFixed(2) + ' (' + (ev.ttsProvider || '') + ')' : '';
+              const timing = ev.elapsedSec ? ' · ' + mins + 'm ' + secs + 's (club ' + Math.round(ev.clubSec || 0) + 's, TTS ' + Math.round(ev.ttsSec || 0) + 's)' : '';
+              appendLog('done', '✓ ' + ev.stories + ' stories · ' + ev.date + timing + cost);
               loadStatus();
             } else if (ev.type === 'error') {
               appendLog('error', ev.msg);

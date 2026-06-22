@@ -510,15 +510,29 @@ function applyTimeGuard(stories: Story[], logger: Logger): Story[] {
 
 // ─── Step 5: TTS — one call per story per language (same structure for all providers) ──
 
+export type TtsCostInfo = {
+  provider: TtsProvider;
+  enChars: number;
+  hiChars: number;
+  totalChars: number;
+  /** Rough cost in USD (ElevenLabs: $0.50/1K chars; Google: $0.50/1M chars after free tier) */
+  estimatedUsd: number;
+  storiesAttempted: number;
+  storiesWithAudio: number;
+};
+
 async function generateAllTTS(
   stories: Story[],
   date: string,
   provider: TtsProvider,
   logger: Logger,
   onStoryDone?: (stories: Story[]) => Promise<void>,
-): Promise<Story[]> {
+): Promise<{ stories: Story[]; costInfo: TtsCostInfo }> {
   const updated = stories.map(s => ({ ...s }));
   const label   = provider === "google" ? "Google" : "ElevenLabs";
+  let enChars = 0;
+  let hiChars = 0;
+  let storiesWithAudio = 0;
 
   logger(`TTS (${label}): ${stories.length} stories × 2 languages = ${stories.length * 2} calls…`);
 
@@ -546,6 +560,7 @@ async function generateAllTTS(
       try {
         updated[i].audioUrlEn    = await synthesize(story.scriptEn, `${fileBase}-en`);
         updated[i].audioStartSec = 0;
+        enChars += story.scriptEn.length;
         gotEn = true;
       } catch (err: any) {
         logger(`  ✗ EN [${i + 1}/${stories.length}]: ${err.message?.slice(0, 80)}`);
@@ -560,6 +575,7 @@ async function generateAllTTS(
     if (story.scriptHi) {
       try {
         updated[i].audioUrlHi = await synthesize(story.scriptHi, `${fileBase}-hi`);
+        hiChars += story.scriptHi.length;
         gotHi = true;
       } catch (err: any) {
         logger(`  ✗ HI [${i + 1}/${stories.length}]: ${err.message?.slice(0, 80)}`);
@@ -567,6 +583,7 @@ async function generateAllTTS(
     }
 
     if (gotEn || gotHi) {
+      storiesWithAudio++;
       logger(`  ✓ [${i + 1}/${stories.length}] ${story.title.slice(0, 55)}`);
     } else {
       logger(`  ⚠ [${i + 1}/${stories.length}] no audio — ${story.title.slice(0, 45)}`);
@@ -574,7 +591,17 @@ async function generateAllTTS(
     if (onStoryDone) await onStoryDone([...updated]);
   }
 
-  return updated;
+  const totalChars = enChars + hiChars;
+  // ElevenLabs Flash v2.5: ~$0.50/1K chars (pay-per-use)
+  // Google TTS: $0.50/1M chars after free tier (effectively free at this scale)
+  const estimatedUsd = provider === "elevenlabs"
+    ? (totalChars / 1000) * 0.50
+    : (totalChars / 1_000_000) * 0.50;
+
+  const costInfo: TtsCostInfo = { provider, enChars, hiChars, totalChars, estimatedUsd, storiesAttempted: stories.length, storiesWithAudio };
+  logger(`TTS done: ${storiesWithAudio}/${stories.length} stories, ${(totalChars / 1000).toFixed(1)}K chars, est. $${estimatedUsd.toFixed(2)}`);
+
+  return { stories: updated, costInfo };
 }
 
 // ─── Storage helpers ──────────────────────────────────────────────────────────
@@ -657,21 +684,33 @@ export const getTodayBriefing = getLatestBriefing;
 
 // ─── Main generator ───────────────────────────────────────────────────────────
 
+export type RunSummary = {
+  elapsedSec: number;
+  fetchSec: number;
+  clubSec: number;
+  ttsSec: number;
+  stories: number;
+  tts: TtsCostInfo;
+};
+
 export async function generateDailyBriefing(
   logger: Logger = () => {},
   city = DEFAULT_CITY,
   ttsProvider: TtsProvider = "google",
-): Promise<DailyBriefing> {
+): Promise<DailyBriefing & { runSummary?: RunSummary }> {
+  const runStart = Date.now();
   const date = new Date().toISOString().slice(0, 10);
   const log  = (msg: string) => { console.log(`[generator] ${msg}`); logger(msg); };
 
-  log(`Starting briefing for ${date} (city: ${city})`);
+  log(`Starting briefing for ${date} (city: ${city}, TTS: ${ttsProvider})`);
 
   // Step 1: Fetch all feeds
+  const t0 = Date.now();
   log(`Fetching ${FEEDS.length} Google News feeds…`);
   const feedMap  = await fetchAllFeeds(city);
   const rawTotal = [...feedMap.values()].reduce((n, v) => n + v.length, 0);
-  log(`Fetched ${rawTotal} raw items from ${feedMap.size} feeds`);
+  const fetchSec = (Date.now() - t0) / 1000;
+  log(`Fetched ${rawTotal} raw items from ${feedMap.size} feeds (${fetchSec.toFixed(1)}s)`);
 
   // Step 2: Dedup
   const rawStories = buildStories(feedMap);
@@ -682,6 +721,7 @@ export async function generateDailyBriefing(
   }
 
   // Steps 2b + 3 in parallel: OG images and club+script are independent
+  const t1 = Date.now();
   log(`Fetching OG images and clubbing+scripting in parallel…`);
   const [withImages, clubbed] = await Promise.all([
     fetchAllOgImages(rawStories, log),
@@ -690,6 +730,8 @@ export async function generateDailyBriefing(
       log(`  💾 saved ${partial.length} clubbed stories so far`);
     }),
   ]);
+  const clubSec = (Date.now() - t1) / 1000;
+  log(`Clubbing done in ${clubSec.toFixed(1)}s → ${clubbed.length} stories`);
 
   // Merge images into clubbed stories by matching id
   const imageById = new Map(withImages.map(s => [s.id, s.imageUrl]));
@@ -706,19 +748,28 @@ export async function generateDailyBriefing(
   log(`Scripts done — ${guarded.length} stories, saving before TTS…`);
 
   // Step 5: TTS — per-story, same structure for all providers
+  const t2 = Date.now();
   log(`TTS provider: ${ttsProvider} (${guarded.length} stories × 2 langs = ${guarded.length * 2} calls)`);
-  const withAudio = await generateAllTTS(guarded, date, ttsProvider, log, async (partialStories) => {
+  const { stories: withAudio, costInfo } = await generateAllTTS(guarded, date, ttsProvider, log, async (partialStories) => {
     await saveBriefing({ date, generatedAt: new Date().toISOString(), stories: partialStories });
   });
+  const ttsSec = (Date.now() - t2) / 1000;
+  const elapsedSec = (Date.now() - runStart) / 1000;
 
-  const briefing: DailyBriefing = {
+  const runSummary: RunSummary = { elapsedSec, fetchSec, clubSec, ttsSec, stories: withAudio.length, tts: costInfo };
+
+  const mins = Math.floor(elapsedSec / 60);
+  const secs = Math.round(elapsedSec % 60);
+  log(`✅ Done in ${mins}m ${secs}s — ${withAudio.length} stories, TTS: ${(costInfo.totalChars / 1000).toFixed(1)}K chars, est. $${costInfo.estimatedUsd.toFixed(2)}`);
+
+  const briefing = {
     date,
     generatedAt: new Date().toISOString(),
     stories: withAudio,
+    runSummary,
   };
 
   await saveBriefing(briefing);
-  log(`Done — ${briefing.stories.length} stories`);
   return briefing;
 }
 
@@ -764,8 +815,8 @@ export async function generateMissingSections(
     imageUrl: s.imageUrl ?? imageById.get(s.id),
   }));
 
-  // TTS for new stories
-  const withAudio = await generateAllTTS(mergedNew, existing.date, log, async (partial) => {
+  // TTS for new stories (default to google for patch runs)
+  const { stories: withAudio } = await generateAllTTS(mergedNew, existing.date, "google", log, async (partial) => {
     await saveBriefing({
       ...existing,
       generatedAt: new Date().toISOString(),
