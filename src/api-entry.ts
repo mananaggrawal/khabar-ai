@@ -2,4 +2,4 @@
  * Standalone API entry — compiled by build-api.mjs into dist/server/api-entry.js
  * Imported by server.mjs to handle API routes before the SSR handler.
  */
-export { handleGenerate, handleAsk, handleStatus, handleDownload, handleCron, handlePatchMissing, handlePatchTTS } from "./lib/api/handlers";
+export { handleGenerate, handleAsk, handleStatus, handleDownload, handleCron, handlePatchMissing, handlePatchTTS, handleStop } from "./lib/api/handlers";
