@@ -67,9 +67,10 @@ const TARGET_WPM   = 150;  // average reading/speech rate
 const TARGET_MINS  = 30;   // soft cap — secondary sections trimmed only if well over this
 
 // Max clubbed groups (stories) per section.
-// At ~70 words/story, 150 WPM: primary (4×6) + secondary (6×4) ≈ 40 stories ≈ 18 min.
-const MAX_GROUPS_PRIMARY   = 6;  // headlines, india, world, business — never dropped
-const MAX_GROUPS_SECONDARY = 4;  // all other sections — trimmed only if well over budget
+// Primary: lenient cap — only truly duplicate stories merge; distinct ones stay separate.
+// Secondary: tighter cap; time guard trims overflow.
+const MAX_GROUPS_PRIMARY   = 10;  // headlines, india, world, business — never dropped
+const MAX_GROUPS_SECONDARY = 4;   // all other sections — trimmed only if well over budget
 
 // If a section has more raw stories than this, split into chunks before clubbing.
 const CLUB_CHUNK_SIZE = 25;
@@ -291,32 +292,35 @@ async function clubAndScriptBatch(
 
   const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
 
+  const isPrimarySection = PRIORITY_SECTIONS.includes(sectionId);
+
   const prompt = `You are Khabar AI — Indian news editor. Today's date is ${today}.
 
 Below are ${sectionStories.length} stories from the "${label}" section.
 
 YOUR JOB:
-1. Group stories that cover the same event, person, or topic. Different sources covering the same development → one group.
+1. GROUPING: Only merge stories that are genuinely the same event or development (same incident, same announcement, same person doing the same thing). Different topics, even if loosely related, stay in separate groups.${isPrimarySection ? `\n   This is a PRIMARY section — be conservative. When in doubt, keep stories separate.` : ""}
 2. Stories with no close match → their own group (size 1).
-3. Write one script per group that covers EVERY story in the group — if a group has 3 sources, all 3 must contribute distinct facts, angles, or developments to the script. Never summarise just one source and ignore the rest.
-4. IMPORTANT: Produce at most ${maxGroups} groups total. If there are more distinct topics than ${maxGroups}, fold minor or related stories into the nearest thematically relevant group — but the script for that group must then cover all folded stories.
+3. SCRIPT: Write one script per group covering EVERY story in it. Each source must contribute at least one distinct fact, angle, or development. Never summarise only the primary source and ignore the rest.
+4. Produce at most ${maxGroups} groups. If there are more distinct topics than ${maxGroups}, fold only the least significant ones into the nearest related group — and the script for that group must cover all folded stories.
 
 SCRIPT RULES:
-- 60-80 words, 3-4 sentences
+- No fixed word limit — write as many words as needed to fully cover all stories in the group
+- For a single-source group: ~60-80 words is usually enough
+- For multi-source groups: add enough words to give each source's key facts fair coverage
 - Warm Indian English — conversational, not a broadcaster. Sound like a smart friend explaining something interesting, not reading a headline
 - Use the description/context provided — go beyond the headline. Include the why, the who, the implication
 - Start directly with the substance. Never start with "In a...", "According to...", or a rephrased headline
 - Name specific people, companies, numbers, places — no vague pronouns or generalities
-- Add ONE line of context or implication: why does this matter? what happens next?
 - Never guess or hedge on the year — these are today's stories (${today})
 - scriptHi: same content in Hindi, keep English names/brands/numbers as-is, natural spoken Hindi not translated English
 
-CRITICAL: Every story (0 to ${sectionStories.length - 1}) must appear in exactly one group's sourceIndices.
+CRITICAL: Every story index (0 to ${sectionStories.length - 1}) must appear in exactly one group's sourceIndices. No index may be skipped.
 
 Return JSON array only, no markdown:
 [{"title":"...","titleHi":"...","scriptEn":"...","scriptHi":"...","sourceIndices":[0,1,3]}]
 
-titleHi: the story title translated into natural Hindi (keep proper nouns, brand names, numbers in their original form).
+titleHi: natural Hindi translation of the title (keep proper nouns, brand names, numbers as-is).
 
 Stories:
 ${sectionStories.map((s, i) => {
