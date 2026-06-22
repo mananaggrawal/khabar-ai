@@ -20,12 +20,33 @@ import type { DailyBriefing, Story } from "@/lib/news/generator";
 import { FEED_MAP, type SectionId } from "@/lib/news/sources";
 
 export type MonologueState = "idle" | "playing" | "paused" | "error";
+export type Language = "en" | "hi" | "ta" | "mr";
 
 const RESUME_KEY   = "khabar-resume-pos";
 const LANGUAGE_KEY = "khabar-language";
 
-function readLanguage(): "en" | "hi" {
-  try { return (localStorage.getItem(LANGUAGE_KEY) as "en" | "hi") || "en"; } catch { return "en"; }
+const SUPPORTED_LANGS: Language[] = ["en", "hi", "ta", "mr"];
+
+function readLanguage(): Language {
+  try {
+    const v = localStorage.getItem(LANGUAGE_KEY) as Language;
+    return SUPPORTED_LANGS.includes(v) ? v : "en";
+  } catch { return "en"; }
+}
+
+export function getAudioUrl(story: import("@/lib/news/generator").Story, lang: Language): string | undefined {
+  if (lang === "en") return story.audioUrlEn;
+  if (lang === "hi") return story.audioUrlHi;
+  if (lang === "ta") return story.audioUrlTa;
+  if (lang === "mr") return story.audioUrlMr;
+  return undefined;
+}
+
+export function getStoryTitle(story: import("@/lib/news/generator").Story, lang: Language): string {
+  if (lang === "hi") return story.titleHi || story.title;
+  if (lang === "ta") return (story as any).titleTa || story.title;
+  if (lang === "mr") return (story as any).titleMr || story.title;
+  return story.title;
 }
 
 export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
@@ -35,7 +56,7 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
   const [error, setError]               = useState<string | null>(null);
   const [currentStoryIdx, setCurrentStoryIdx] = useState(-1);
   const [queueMode, setQueueMode]       = useState<"all" | SectionId | null>(null);
-  const [language, setLanguage]         = useState<"en" | "hi">(readLanguage);
+  const [language, setLanguage]         = useState<Language>(readLanguage);
 
   const audioRef       = useRef<HTMLAudioElement | null>(null);
   const preloadRef     = useRef<HTMLAudioElement | null>(null);
@@ -52,7 +73,10 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
   // React to language changes from settings
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
-      if (e.key === LANGUAGE_KEY) setLanguage((e.newValue as "en" | "hi") || "en");
+      if (e.key === LANGUAGE_KEY) {
+        const v = e.newValue as Language;
+        setLanguage(SUPPORTED_LANGS.includes(v) ? v : "en");
+      }
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
@@ -84,10 +108,7 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
 
   /** All stories that have audio in the current language */
   const storiesWithAudio = useMemo(
-    () =>
-      (briefing?.stories ?? []).filter((s) =>
-        language === "hi" ? !!s.audioUrlHi : !!s.audioUrlEn,
-      ),
+    () => (briefing?.stories ?? []).filter((s) => !!getAudioUrl(s, language)),
     [briefing, language],
   );
 
@@ -138,7 +159,7 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
           const nextIdx = currentIdxRef.current + 1;
           const next = storiesWithAudio[nextIdx];
           if (next) {
-            const nextUrl = language === "hi" ? next.audioUrlHi! : next.audioUrlEn!;
+            const nextUrl = getAudioUrl(next, language)!;
             const nextFilename = nextUrl?.split('/').pop() ?? '';
             if (nextFilename && audio.src.endsWith(nextFilename) && next.audioStartSec !== undefined && ct >= next.audioStartSec) {
               setCurrentStoryIdx(nextIdx);
@@ -150,7 +171,7 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
             let preloadIdx = currentIdxRef.current + 1;
             while (preloadIdx < storiesWithAudio.length) {
               const s = storiesWithAudio[preloadIdx];
-              const sUrl = language === "hi" ? s.audioUrlHi! : s.audioUrlEn!;
+              const sUrl = getAudioUrl(s, language)!;
               const sFilename = sUrl?.split('/').pop() ?? '';
               if (sFilename && !audio.src.endsWith(sFilename)) {
                 const pre = new Audio(sUrl);
@@ -202,7 +223,7 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
       const story = storiesWithAudio[idx];
       if (!story) { setState("idle"); setCurrentStoryIdx(-1); return; }
 
-      const url = language === "hi" ? story.audioUrlHi! : story.audioUrlEn!;
+      const url = getAudioUrl(story, language)!;
       const seekTo = startAt > 0 ? startAt : (story.audioStartSec ?? 0);
 
       setError(null);
@@ -224,7 +245,7 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
             let next = currentIdxRef.current + 1;
             while (next < storiesWithAudio.length) {
               const s = storiesWithAudio[next];
-              const sUrl = language === "hi" ? s.audioUrlHi! : s.audioUrlEn!;
+              const sUrl = getAudioUrl(s, language)!;
               const sFilename = sUrl?.split('/').pop() ?? '';
               if (!sFilename || !url.endsWith(sFilename)) break;
               next++;
@@ -243,7 +264,7 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
           }
         : undefined;
 
-      const audio = attachAudio(url, seekTo, onEnded);
+      const audio = attachAudio(url!, seekTo, onEnded);
       audio.play().catch((e: any) => {
         if (e?.name === "AbortError") {
           setTimeout(() => {
@@ -346,7 +367,7 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
     } else if (currentStoryIdx >= 0) {
       const story = storiesWithAudio[currentStoryIdx];
       if (story) {
-        const url = language === "hi" ? story.audioUrlHi! : story.audioUrlEn!;
+        const url = getAudioUrl(story, language)!;
         const audio = attachAudio(url, pauseTimeRef.current);
         await audio.play().catch(() => {});
       }

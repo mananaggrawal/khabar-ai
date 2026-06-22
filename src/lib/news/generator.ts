@@ -41,6 +41,8 @@ export type Story = {
   id: string;
   title: string;
   titleHi?: string;        // Hindi title — shown in UI when language = "hi"
+  titleTa?: string;        // Tamil title
+  titleMr?: string;        // Marathi title
   source: string;
   link: string;
   publishedAt: string;
@@ -50,8 +52,12 @@ export type Story = {
   sources?: StorySource[]; // all raw articles that were merged into this story
   scriptEn: string;
   scriptHi: string;
+  scriptTa?: string;       // Tamil script
+  scriptMr?: string;       // Marathi script
   audioUrlEn?: string;
   audioUrlHi?: string;
+  audioUrlTa?: string;     // Tamil audio
+  audioUrlMr?: string;     // Marathi audio
   audioStartSec?: number; // always 0 — kept for compatibility with player
 };
 
@@ -59,6 +65,7 @@ export type DailyBriefing = {
   date: string;
   generatedAt: string;
   stories: Story[];
+  generatedLanguages?: string[];  // which languages TTS was generated for
 };
 
 export type Logger = (msg: string) => void;
@@ -279,11 +286,134 @@ async function fetchAllOgImages(stories: Story[], logger: Logger): Promise<Story
 // No group cap — Gemini decides what's truly the same story.
 // Target: 50-70 words per group, capturing key facts, numbers, and metrics.
 
+// ── Script language validation ────────────────────────────────────────────────
+// Checks that a text field is actually written in the expected unicode block.
+
+const SCRIPT_RE: Record<string, RegExp> = {
+  hi: /[ऀ-ॿ]/,  // Devanagari
+  mr: /[ऀ-ॿ]/,  // Devanagari (Marathi)
+  ta: /[஀-௿]/,  // Tamil
+};
+
+function hasExpectedScript(text: string | undefined, lang: string): boolean {
+  if (!text || text.trim().length < 3) return false;
+  const re = SCRIPT_RE[lang];
+  return re ? re.test(text) : true; // EN has no unicode block requirement
+}
+
+// Language metadata used for prompt construction and fix-up calls
+const LANG_META: Record<string, { name: string; scriptNote: string; example: string }> = {
+  hi: {
+    name:       "Hindi",
+    scriptNote: "MUST use Devanagari script. NEVER Roman/English letters for Hindi words.",
+    example:    "भारत में इस हफ्ते तकनीक क्षेत्र में बड़ा बदलाव आया।",
+  },
+  ta: {
+    name:       "Tamil",
+    scriptNote: "MUST use Tamil script. NEVER Roman/English letters for Tamil words.",
+    example:    "இந்தியாவில் இந்த வாரம் தொழில்நுட்பத்தில் பெரிய மாற்றம் ஏற்பட்டது.",
+  },
+  mr: {
+    name:       "Marathi",
+    scriptNote: "MUST use Devanagari script. NEVER Roman/English letters for Marathi words.",
+    example:    "भारतात या आठवड्यात तंत्रज्ञान क्षेत्रात मोठा बदल झाला.",
+  },
+};
+
+// ── Fix-up pass: re-translate any scripts that came back in the wrong language ──
+//
+// Called after Gemini returns. For any story where a non-EN script field is
+// empty or lacks the expected unicode block, we run one targeted Gemini call
+// per batch of broken stories to get the correct native-script translation.
+
+async function fixScriptLanguages(
+  stories: Story[],
+  nonEnLangs: string[],
+  logger: Logger,
+): Promise<Story[]> {
+  if (nonEnLangs.length === 0) return stories;
+
+  // Find stories that need any non-EN field fixed
+  const toFix = stories
+    .map((s, idx) => {
+      const missingLangs = nonEnLangs.filter(lang => {
+        const script = lang === "hi" ? s.scriptHi :
+                       lang === "ta" ? s.scriptTa :
+                       lang === "mr" ? s.scriptMr : undefined;
+        return !hasExpectedScript(script, lang);
+      });
+      return missingLangs.length > 0 ? { idx, story: s, missingLangs } : null;
+    })
+    .filter(Boolean) as Array<{ idx: number; story: Story; missingLangs: string[] }>;
+
+  if (toFix.length === 0) return stories;
+  logger(`  ⚙ Re-translating ${toFix.length} stories with missing/wrong-script fields…`);
+
+  const updated = stories.map(s => ({ ...s }));
+
+  // Batch all broken stories into one Gemini call
+  const batchLangs = [...new Set(toFix.flatMap(x => x.missingLangs))];
+  const langDescs = batchLangs.map(lang => {
+    const m = LANG_META[lang]!;
+    return `- ${lang.toUpperCase()} (${m.name}): ${m.scriptNote} Example: "${m.example}"`;
+  }).join("\n");
+
+  const storiesPayload = toFix.map((x, i) =>
+    `${i}. title: "${x.story.title}"\n   scriptEn: "${x.story.scriptEn}"\n   needs: ${x.missingLangs.join(", ")}`
+  ).join("\n");
+
+  const prompt = `Translate these news scripts into the specified Indian languages.
+Each translation MUST use the native script characters — never Roman transliteration.
+
+LANGUAGE RULES:
+${langDescs}
+
+Return a JSON array with one object per story (same order), containing only the fields needed:
+[${toFix.map(x => `{${x.missingLangs.flatMap(l => [`"script${l.charAt(0).toUpperCase() + l.slice(1)}":"..."`, `"title${l.charAt(0).toUpperCase() + l.slice(1)}":"..."`]).join(",")}}`).join(",")}]
+
+Stories:
+${storiesPayload}`;
+
+  try {
+    const results: any[] = await geminiJson(prompt);
+    if (!Array.isArray(results)) throw new Error("not an array");
+
+    for (let i = 0; i < toFix.length && i < results.length; i++) {
+      const { idx, missingLangs } = toFix[i];
+      const r = results[i] ?? {};
+      for (const lang of missingLangs) {
+        const sKey = `script${lang.charAt(0).toUpperCase() + lang.slice(1)}` as keyof Story;
+        const tKey = `title${lang.charAt(0).toUpperCase() + lang.slice(1)}`  as keyof Story;
+        const newScript = r[sKey as string];
+        const newTitle  = r[tKey as string];
+        if (hasExpectedScript(newScript, lang)) {
+          (updated[idx] as any)[sKey] = newScript;
+          logger(`    ✓ ${lang.toUpperCase()} fixed: ${updated[idx].title.slice(0, 45)}`);
+        } else {
+          logger(`    ✗ ${lang.toUpperCase()} still wrong-script — skipping audio for this story`);
+        }
+        if (newTitle && hasExpectedScript(newTitle, lang)) {
+          (updated[idx] as any)[tKey] = newTitle;
+        }
+      }
+    }
+  } catch (err: any) {
+    logger(`  ✗ Script fix-up Gemini call failed: ${err.message?.slice(0, 80)}`);
+    // Leave stories as-is — they'll have empty non-EN scripts, so no audio generated
+  }
+
+  return updated;
+}
+
 interface ScriptedGroup {
   title:         string;
   titleHi:       string;
+  titleTa?:      string;
+  titleMr?:      string;
   scriptEn:      string;
   scriptHi:      string;
+  scriptTa?:     string;
+  scriptMr?:     string;
   sourceIndices: number[];
 }
 
@@ -291,11 +421,30 @@ async function scriptBatch(
   sectionStories: Story[],
   sectionId: SectionId,
   logger: Logger = () => {},
+  languages: string[] = ["en", "hi"],
 ): Promise<Story[]> {
   if (sectionStories.length === 0) return [];
 
   const today = new Date().toISOString().slice(0, 10);
   const label = FEED_MAP.get(sectionId)?.label ?? sectionId;
+
+  const withTa = languages.includes("ta");
+  const withMr = languages.includes("mr");
+  const nonEnLangs = languages.filter(l => l !== "en");
+
+  // Build per-language script rules with explicit unicode mandate
+  const langScriptRules = [
+    `- scriptHi, titleHi: ${LANG_META.hi.scriptNote} Example script: "${LANG_META.hi.example}"`,
+    withTa ? `- scriptTa, titleTa: ${LANG_META.ta.scriptNote} Example script: "${LANG_META.ta.example}"` : "",
+    withMr ? `- scriptMr, titleMr: ${LANG_META.mr.scriptNote} Example script: "${LANG_META.mr.example}"` : "",
+  ].filter(Boolean).join("\n");
+
+  const extraLangFields = [
+    withTa ? `"titleTa":"...","scriptTa":"..."` : "",
+    withMr ? `"titleMr":"...","scriptMr":"..."` : "",
+  ].filter(Boolean).join(",");
+
+  const jsonExample = `[{"title":"...","titleHi":"..."${extraLangFields ? "," + extraLangFields : ""},"scriptEn":"...","scriptHi":"..."${withTa ? `,"scriptTa":"..."` : ""}${withMr ? `,"scriptMr":"..."` : ""},"sourceIndices":[0,2]}]`;
 
   const prompt = `You are Khabar AI — Indian news scriptwriter. Today: ${today}.
 Section: "${label}" (${sectionStories.length} stories).
@@ -305,18 +454,21 @@ YOUR JOB:
 2. SCRIPT: Write one 50-70 word spoken-audio script per group.
 
 SCRIPT RULES:
-- 50-70 words in natural spoken English — no bullet points, no headers
+- scriptEn: 50-70 words in natural spoken English — no bullet points, no headers
 - Lead with the most compelling fact. Never start with "In a...", "According to...", or a headline restatement
 - Include every number, figure, percentage, or named entity from the headline/description — these matter
 - Do NOT invent facts beyond what's in the headline or description
 - If description adds nothing, write from the headline alone — stay honest, don't pad
-- scriptHi: same content in natural spoken Hindi; keep English names, brands, numbers as-is
-- titleHi: natural Hindi translation of the title (keep proper nouns/brands/numbers unchanged)
+
+SCRIPT LANGUAGE REQUIREMENTS — STRICTLY ENFORCED:
+${langScriptRules}
+- Keep English names, brands, numbers (digits) in their original form across all languages.
+- titleHi/titleTa/titleMr: natural translation of the English title — MUST use the native script.
 
 CRITICAL: Every index 0–${sectionStories.length - 1} must appear in exactly one group's sourceIndices.
 
 Return JSON array only:
-[{"title":"...","titleHi":"...","scriptEn":"...","scriptHi":"...","sourceIndices":[0,2]}]
+${jsonExample}
 
 Stories:
 ${sectionStories.map((s, i) => {
@@ -345,20 +497,34 @@ ${sectionStories.map((s, i) => {
         link:   sectionStories[i].link,
       }));
 
+      // Validate each non-EN script: discard if it's not in the expected unicode block
+      const safeHi = hasExpectedScript(group.scriptHi, "hi")  ? group.scriptHi  : undefined;
+      const safeTa = hasExpectedScript(group.scriptTa, "ta")  ? group.scriptTa  : undefined;
+      const safeMr = hasExpectedScript(group.scriptMr, "mr")  ? group.scriptMr  : undefined;
+      const safeTitleHi = hasExpectedScript(group.titleHi, "hi") ? group.titleHi : undefined;
+      const safeTitleTa = hasExpectedScript(group.titleTa, "ta") ? group.titleTa : undefined;
+      const safeTitleMr = hasExpectedScript(group.titleMr, "mr") ? group.titleMr : undefined;
+
       output.push({
         ...primary,
         title:    group.title    || primary.title,
-        titleHi:  group.titleHi  || undefined,
+        titleHi:  safeTitleHi,
+        titleTa:  safeTitleTa,
+        titleMr:  safeTitleMr,
         sources,
         scriptEn: group.scriptEn || `${primary.title}.`,
-        scriptHi: group.scriptHi || `${primary.title}।`,
+        scriptHi: safeHi  ?? "",   // empty = no Hindi audio generated
+        scriptTa: safeTa  ?? undefined,
+        scriptMr: safeMr  ?? undefined,
         audioUrlEn:   undefined,
         audioUrlHi:   undefined,
+        audioUrlTa:   undefined,
+        audioUrlMr:   undefined,
         audioStartSec: 0,
       });
     }
 
-    // Any uncovered → stub
+    // Any uncovered → stub (EN only; non-EN left empty until fix-up pass)
     for (let i = 0; i < sectionStories.length; i++) {
       if (covered.has(i)) continue;
       const s = sectionStories[i];
@@ -367,19 +533,21 @@ ${sectionStories.map((s, i) => {
         ...s,
         sources:  [{ title: s.title, source: s.source, link: s.link }],
         scriptEn: `${s.title}.`,
-        scriptHi: `${s.title}।`,
+        scriptHi: "",
         audioStartSec: 0,
       });
     }
 
-    return output;
+    // Fix-up pass: stories where Gemini returned English in a non-English field
+    const fixed = await fixScriptLanguages(output, nonEnLangs, logger);
+    return fixed;
   } catch (err: any) {
-    logger(`  ✗ ${sectionId} Gemini script failed: ${err.message?.slice(0, 120)} — using title stubs`);
+    logger(`  ✗ ${sectionId} Gemini script failed: ${err.message?.slice(0, 120)} — using EN stubs`);
     return sectionStories.map(s => ({
       ...s,
       sources:  [{ title: s.title, source: s.source, link: s.link }],
       scriptEn: `${s.title}.`,
-      scriptHi: `${s.title}।`,
+      scriptHi: "",   // empty — no Hindi audio rather than English audio
       audioStartSec: 0,
     }));
   }
@@ -389,6 +557,7 @@ async function scriptAllStories(
   stories: Story[],
   logger: Logger,
   onSectionDone?: (scripted: Story[]) => Promise<void>,
+  languages: string[] = ["en", "hi"],
 ): Promise<Story[]> {
   if (stories.length === 0) return [];
 
@@ -405,7 +574,7 @@ async function scriptAllStories(
     ...[...bySection.keys()].filter(id => !PRIORITY_SECTIONS.includes(id)),
   ];
 
-  logger(`Scripting ${stories.length} stories across ${bySection.size} sections…`);
+  logger(`Scripting ${stories.length} stories across ${bySection.size} sections… (langs: ${languages.join(",")})`);
 
   const all: Story[] = [];
 
@@ -415,7 +584,7 @@ async function scriptAllStories(
     const emoji = FEED_MAP.get(sectionId)?.emoji ?? "📰";
     logger(`  ${emoji} ${sectionId}: ${sectionStories.length} raw stories…`);
 
-    const scripted = await scriptBatch(sectionStories, sectionId, logger);
+    const scripted = await scriptBatch(sectionStories, sectionId, logger, languages);
     all.push(...scripted);
     logger(`    → ${scripted.length} stories`);
 
@@ -480,20 +649,45 @@ export type TtsCostInfo = {
   storiesWithAudio: number;
 };
 
+// Map from lang code to Story audio URL field
+function getStoryScript(story: Story, lang: string): string | undefined {
+  if (lang === "en") return story.scriptEn;
+  if (lang === "hi") return story.scriptHi;
+  if (lang === "ta") return story.scriptTa;
+  if (lang === "mr") return story.scriptMr;
+  return undefined;
+}
+
+function setStoryAudioUrl(story: Story, lang: string, url: string): void {
+  if (lang === "en") { story.audioUrlEn = url; story.audioStartSec = 0; }
+  else if (lang === "hi") story.audioUrlHi = url;
+  else if (lang === "ta") story.audioUrlTa = url;
+  else if (lang === "mr") story.audioUrlMr = url;
+}
+
 async function generateAllTTS(
   stories: Story[],
   date: string,
   provider: TtsProvider,
   logger: Logger,
   onStoryDone?: (stories: Story[]) => Promise<void>,
+  languages: string[] = ["en", "hi"],
 ): Promise<{ stories: Story[]; costInfo: TtsCostInfo }> {
   const updated = stories.map(s => ({ ...s }));
-  const label   = provider === "google" ? "Google" : "ElevenLabs";
+  const label   = provider === "google" ? "Google" : provider === "elevenlabs" ? "ElevenLabs" : provider === "edge" ? "Edge" : "Kokoro";
   let enChars = 0;
   let hiChars = 0;
   let storiesWithAudio = 0;
 
-  logger(`TTS (${label}): ${stories.length} stories × 2 languages = ${stories.length * 2} calls…`);
+  logger(`TTS (${label}): ${stories.length} stories × ${languages.length} languages [${languages.join(",")}] = ${stories.length * languages.length} calls…`);
+
+  const synthesize = async (script: string, filename: string): Promise<string> => {
+    if (provider === "google")     { const { url } = await googleTTS(script, filename);     return url; }
+    if (provider === "elevenlabs") { const { url } = await elevenLabsTTS(script, filename);  return url; }
+    if (provider === "edge")       { const { url } = await edgeTTS(script, filename);        return url; }
+    if (provider === "kokoro")     { const { url } = await kokoroTTS(script, filename);      return url; }
+    throw new Error(`Unknown TTS provider: ${provider}`);
+  };
 
   for (let i = 0; i < stories.length; i++) {
     if (isAbortRequested()) { logger("⛔ Aborted by stop request"); break; }
@@ -502,45 +696,35 @@ async function generateAllTTS(
 
     const story    = stories[i];
     const fileBase = `${date}-${story.id}`;
-    let gotEn = false;
-    let gotHi = false;
+    let gotAny = false;
 
-    const synthesize = async (script: string, filename: string): Promise<string> => {
-      if (provider === "google")     { const { url } = await googleTTS(script, filename);     return url; }
-      if (provider === "elevenlabs") { const { url } = await elevenLabsTTS(script, filename);  return url; }
-      if (provider === "edge")       { const { url } = await edgeTTS(script, filename);        return url; }
-      if (provider === "kokoro")     { const { url } = await kokoroTTS(script, filename);      return url; }
-      throw new Error(`Unknown TTS provider: ${provider}`);
-    };
+    for (const lang of languages) {
+      if (isAbortRequested()) break;
+      if (provider === "google"     && isDailyQuotaExhausted()) break;
+      if (provider === "elevenlabs" && isQuotaExhausted())      break;
 
-    // EN
-    if (story.scriptEn) {
+      // Kokoro only supports EN
+      if (provider === "kokoro" && lang !== "en") continue;
+      // Google TTS only supports EN and HI in this pipeline
+      if (provider === "google" && lang !== "en" && lang !== "hi") continue;
+      // ElevenLabs only supports EN and HI
+      if (provider === "elevenlabs" && lang !== "en" && lang !== "hi") continue;
+
+      const script = getStoryScript(story, lang);
+      if (!script) continue;
+
       try {
-        updated[i].audioUrlEn    = await synthesize(story.scriptEn, `${fileBase}-en`);
-        updated[i].audioStartSec = 0;
-        enChars += story.scriptEn.length;
-        gotEn = true;
+        const url = await synthesize(script, `${fileBase}-${lang}`);
+        setStoryAudioUrl(updated[i], lang, url);
+        if (lang === "en") enChars += script.length;
+        else if (lang === "hi") hiChars += script.length;
+        gotAny = true;
       } catch (err: any) {
-        logger(`  ✗ EN [${i + 1}/${stories.length}]: ${err.message?.slice(0, 80)}`);
+        logger(`  ✗ ${lang.toUpperCase()} [${i + 1}/${stories.length}]: ${err.message?.slice(0, 80)}`);
       }
     }
 
-    if (isAbortRequested()) { logger("⛔ Aborted by stop request"); break; }
-    if (provider === "google"     && isDailyQuotaExhausted()) { logger("⛔ Google TTS daily quota exhausted"); break; }
-    if (provider === "elevenlabs" && isQuotaExhausted())      { logger("⛔ ElevenLabs quota exhausted — top up credits to continue."); break; }
-
-    // HI
-    if (story.scriptHi) {
-      try {
-        updated[i].audioUrlHi = await synthesize(story.scriptHi, `${fileBase}-hi`);
-        hiChars += story.scriptHi.length;
-        gotHi = true;
-      } catch (err: any) {
-        logger(`  ✗ HI [${i + 1}/${stories.length}]: ${err.message?.slice(0, 80)}`);
-      }
-    }
-
-    if (gotEn || gotHi) {
+    if (gotAny) {
       storiesWithAudio++;
       logger(`  ✓ [${i + 1}/${stories.length}] ${story.title.slice(0, 55)}`);
     } else {
@@ -660,12 +844,13 @@ export async function generateDailyBriefing(
   logger: Logger = () => {},
   city = DEFAULT_CITY,
   ttsProvider: TtsProvider = "google",
+  languages: string[] = ["en", "hi"],
 ): Promise<DailyBriefing & { runSummary?: RunSummary }> {
   const runStart = Date.now();
   const date = new Date().toISOString().slice(0, 10);
   const log  = (msg: string) => { console.log(`[generator] ${msg}`); logger(msg); };
 
-  log(`Starting briefing for ${date} (city: ${city}, TTS: ${ttsProvider})`);
+  log(`Starting briefing for ${date} (city: ${city}, TTS: ${ttsProvider}, langs: ${languages.join(",")})`);
 
   // Step 1: Fetch all feeds
   const t0 = Date.now();
@@ -689,9 +874,9 @@ export async function generateDailyBriefing(
   const [withImages, clubbed] = await Promise.all([
     fetchAllOgImages(rawStories, log),
     scriptAllStories(rawStories, log, async (partial) => {
-      await saveBriefing({ date, generatedAt: new Date().toISOString(), stories: partial });
+      await saveBriefing({ date, generatedAt: new Date().toISOString(), stories: partial, generatedLanguages: languages });
       log(`  💾 saved ${partial.length} stories so far`);
-    }),
+    }, languages),
   ]);
   const clubSec = (Date.now() - t1) / 1000;
   log(`Clubbing done in ${clubSec.toFixed(1)}s → ${clubbed.length} stories`);
@@ -712,10 +897,10 @@ export async function generateDailyBriefing(
 
   // Step 5: TTS — per-story, same structure for all providers
   const t2 = Date.now();
-  log(`TTS provider: ${ttsProvider} (${guarded.length} stories × 2 langs = ${guarded.length * 2} calls)`);
+  log(`TTS provider: ${ttsProvider} (${guarded.length} stories × ${languages.length} langs [${languages.join(",")}] = ${guarded.length * languages.length} calls)`);
   const { stories: withAudio, costInfo } = await generateAllTTS(guarded, date, ttsProvider, log, async (partialStories) => {
-    await saveBriefing({ date, generatedAt: new Date().toISOString(), stories: partialStories });
-  });
+    await saveBriefing({ date, generatedAt: new Date().toISOString(), stories: partialStories, generatedLanguages: languages });
+  }, languages);
   const ttsSec = (Date.now() - t2) / 1000;
   const elapsedSec = (Date.now() - runStart) / 1000;
 
@@ -729,6 +914,7 @@ export async function generateDailyBriefing(
     date,
     generatedAt: new Date().toISOString(),
     stories: withAudio,
+    generatedLanguages: languages,
     runSummary,
   };
 

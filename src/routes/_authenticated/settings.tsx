@@ -1,5 +1,5 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Check } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
@@ -7,9 +7,17 @@ import { CITY_KEY, DEFAULT_CITY, MAJOR_CITIES } from "@/lib/news/sources";
 import { BottomNav } from "@/components/BottomNav";
 
 const LANGUAGE_KEY = "khabar-language";
+const AVAILABLE_LANGS_KEY = "khabar-available-languages";
 
-function readLanguage(): "en" | "hi" {
-  try { return (localStorage.getItem(LANGUAGE_KEY) as "en" | "hi") || "en"; } catch { return "en"; }
+function readLanguage(): string {
+  try { return localStorage.getItem(LANGUAGE_KEY) || "en"; } catch { return "en"; }
+}
+
+function readAvailableLanguages(): string[] {
+  try {
+    const stored = localStorage.getItem(AVAILABLE_LANGS_KEY);
+    return stored ? JSON.parse(stored) : ["en", "hi"];
+  } catch { return ["en", "hi"]; }
 }
 
 export const Route = createFileRoute("/_authenticated/settings")({
@@ -24,7 +32,20 @@ function readCity(): string {
 function SettingsPage() {
   const router = useRouter();
   const [selectedLang, setSelectedLang] = useState<string>(readLanguage);
+  const [availableLangs, setAvailableLangs] = useState<string[]>(readAvailableLanguages);
   const [selectedCity, setSelectedCity] = useState<string>(readCity);
+
+  // Re-read available languages on mount (briefing may have been updated)
+  useEffect(() => {
+    setAvailableLangs(readAvailableLanguages());
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === AVAILABLE_LANGS_KEY) {
+        try { setAvailableLangs(JSON.parse(e.newValue ?? "[]")); } catch {}
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   function selectLanguage(code: string) {
     setSelectedLang(code);
@@ -71,35 +92,37 @@ function SettingsPage() {
           </p>
           <div className="mt-4 space-y-2">
             {[
-              { code: "en", label: "English",        available: true  },
-              { code: "hi", label: "हिंदी (Hindi)",  available: true  },
-              { code: "ta", label: "Tamil",           available: false },
-              { code: "mr", label: "Marathi",         available: false },
+              { code: "en", label: "English",             nativeName: "English"          },
+              { code: "hi", label: "हिंदी",               nativeName: "Hindi"            },
+              { code: "ta", label: "தமிழ்",               nativeName: "Tamil"            },
+              { code: "mr", label: "मराठी",               nativeName: "Marathi"          },
             ].map((lang) => {
-              const active = lang.available && selectedLang === lang.code;
+              const available = availableLangs.includes(lang.code);
+              const active = available && selectedLang === lang.code;
               return (
                 <button
                   key={lang.code}
-                  disabled={!lang.available}
-                  onClick={() => lang.available && selectLanguage(lang.code)}
+                  disabled={!available}
+                  onClick={() => available && selectLanguage(lang.code)}
                   className={cn(
                     "flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-colors",
                     active
                       ? "border-primary/40 bg-primary/10 text-foreground"
-                      : lang.available
+                      : available
                       ? "border-border text-foreground/70 hover:border-border/80 hover:bg-black/[0.02]"
                       : "border-border/40 text-muted-foreground/40 cursor-not-allowed",
                   )}
                 >
                   <span className="flex-1 text-sm font-medium">{lang.label}</span>
+                  <span className="text-xs text-muted-foreground/60">{lang.nativeName}</span>
                   {active ? (
                     <span className="flex size-5 items-center justify-center rounded-full border border-primary bg-primary">
                       <svg viewBox="0 0 20 20" fill="white" className="size-full p-0.5">
                         <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                       </svg>
                     </span>
-                  ) : !lang.available ? (
-                    <span className="text-[10px] uppercase tracking-widest text-muted-foreground/40">Soon</span>
+                  ) : !available ? (
+                    <span className="text-[10px] uppercase tracking-widest text-muted-foreground/40">Not generated</span>
                   ) : null}
                 </button>
               );

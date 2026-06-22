@@ -542,31 +542,8 @@ function adminPage(supabaseUrl, supabaseKey) {
 
       <!-- Today's script / audio stats -->
       <div id="stats-section" style="display:none;">
-        <div class="stats-grid">
-          <div class="stat-card">
-            <div class="stat-label">EN Scripts</div>
-            <div class="stat-value" id="stat-en-script">—</div>
-            <div class="stat-sub" id="stat-en-script-sub"></div>
-            <div class="stat-bar"><div class="stat-bar-fill" id="bar-en-script" style="width:0%"></div></div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">HI Scripts</div>
-            <div class="stat-value" id="stat-hi-script">—</div>
-            <div class="stat-sub" id="stat-hi-script-sub"></div>
-            <div class="stat-bar"><div class="stat-bar-fill" id="bar-hi-script" style="width:0%"></div></div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">EN Audio</div>
-            <div class="stat-value" id="stat-en-audio">—</div>
-            <div class="stat-sub" id="stat-en-audio-sub"></div>
-            <div class="stat-bar"><div class="stat-bar-fill" id="bar-en-audio" style="width:0%"></div></div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">HI Audio</div>
-            <div class="stat-value" id="stat-hi-audio">—</div>
-            <div class="stat-sub" id="stat-hi-audio-sub"></div>
-            <div class="stat-bar"><div class="stat-bar-fill" id="bar-hi-audio" style="width:0%"></div></div>
-          </div>
+        <div class="stats-grid" id="stats-grid">
+          <!-- Populated dynamically based on generated languages -->
         </div>
       </div>
 
@@ -576,7 +553,7 @@ function adminPage(supabaseUrl, supabaseKey) {
       <div style="height:16px;"></div>
       <div class="group">
         <div class="gen-sub">Regenerate today's briefing if missing or outdated.</div>
-        <div style="display:flex;align-items:center;gap:16px;margin-bottom:10px;font-size:13px;">
+        <div style="display:flex;align-items:center;gap:16px;margin-bottom:10px;font-size:13px;flex-wrap:wrap;">
           <span style="color:var(--muted);font-weight:600;letter-spacing:.04em;text-transform:uppercase;font-size:11px;">TTS</span>
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
             <input type="radio" name="tts-provider" value="edge" checked style="accent-color:#6366f1;">
@@ -593,6 +570,25 @@ function adminPage(supabaseUrl, supabaseKey) {
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
             <input type="radio" name="tts-provider" value="elevenlabs" style="accent-color:#6366f1;">
             <span>ElevenLabs</span>
+          </label>
+        </div>
+        <div style="display:flex;align-items:center;gap:16px;margin-bottom:14px;font-size:13px;flex-wrap:wrap;">
+          <span style="color:var(--muted);font-weight:600;letter-spacing:.04em;text-transform:uppercase;font-size:11px;">Languages</span>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="checkbox" name="gen-lang" value="en" checked style="accent-color:#6366f1;">
+            <span>English</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="checkbox" name="gen-lang" value="hi" checked style="accent-color:#6366f1;">
+            <span>हिंदी</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="checkbox" name="gen-lang" value="ta" style="accent-color:#6366f1;">
+            <span>தமிழ் <span style="color:var(--muted);font-size:11px;">(Edge only)</span></span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="checkbox" name="gen-lang" value="mr" style="accent-color:#6366f1;">
+            <span>मराठी <span style="color:var(--muted);font-size:11px;">(Edge only)</span></span>
           </label>
         </div>
         <button class="btn-primary" id="gen-btn" onclick="runGenerate()">Generate now</button>
@@ -719,7 +715,9 @@ function adminPage(supabaseUrl, supabaseKey) {
         left.appendChild(label);
         const meta = document.createElement('div');
         meta.className = 'status-meta';
+        const langBadges = day.generatedLanguages?.length ? ' · ' + day.generatedLanguages.map(l => l.toUpperCase()).join(' ') : '';
         meta.textContent = day.sections + ' sections · ' + day.totalTopics + ' topics'
+          + langBadges
           + (day.generatedAt ? ' · ' + new Date(day.generatedAt).toLocaleTimeString() : '');
         left.appendChild(meta);
 
@@ -791,15 +789,37 @@ function adminPage(supabaseUrl, supabaseKey) {
     if (!todayStats || todayStats.status !== 'generated') { sec.style.display = 'none'; return; }
     sec.style.display = 'block';
     const total = todayStats.totalTopics || 1;
-    function set(id, barId, subId, val, label) {
-      document.getElementById(id).textContent = val;
-      document.getElementById(subId).textContent = label;
-      document.getElementById(barId).style.width = Math.round(val / total * 100) + '%';
+    const grid = document.getElementById('stats-grid');
+    grid.innerHTML = '';
+
+    const langs = [
+      { code: 'en', label: 'EN', script: todayStats.enScript ?? 0, audio: todayStats.enAudio ?? 0 },
+      { code: 'hi', label: 'HI', script: todayStats.hiScript ?? 0, audio: todayStats.hiAudio ?? 0 },
+      { code: 'ta', label: 'TA', script: todayStats.taScript ?? 0, audio: todayStats.taAudio ?? 0 },
+      { code: 'mr', label: 'MR', script: todayStats.mrScript ?? 0, audio: todayStats.mrAudio ?? 0 },
+    ].filter(l => l.script > 0 || l.audio > 0);
+
+    for (const lang of langs) {
+      const card = document.createElement('div');
+      card.className = 'stat-card';
+      const scriptPct = Math.round(lang.script / total * 100);
+      const audioPct  = lang.script > 0 ? Math.round(lang.audio / lang.script * 100) : 0;
+      card.innerHTML =
+        '<div class="stat-label">' + lang.label + ' Scripts</div>' +
+        '<div class="stat-value">' + lang.script + '</div>' +
+        '<div class="stat-sub">of ' + total + ' stories</div>' +
+        '<div class="stat-bar"><div class="stat-bar-fill" style="width:' + scriptPct + '%"></div></div>';
+      grid.appendChild(card);
+
+      const aCard = document.createElement('div');
+      aCard.className = 'stat-card';
+      aCard.innerHTML =
+        '<div class="stat-label">' + lang.label + ' Audio</div>' +
+        '<div class="stat-value">' + lang.audio + '</div>' +
+        '<div class="stat-sub">of ' + lang.script + ' with script (' + audioPct + '%)</div>' +
+        '<div class="stat-bar"><div class="stat-bar-fill" style="width:' + audioPct + '%"></div></div>';
+      grid.appendChild(aCard);
     }
-    set('stat-en-script', 'bar-en-script', 'stat-en-script-sub', todayStats.enScript ?? 0, 'of ' + total + ' stories');
-    set('stat-hi-script', 'bar-hi-script', 'stat-hi-script-sub', todayStats.hiScript ?? 0, 'of ' + total + ' stories');
-    set('stat-en-audio',  'bar-en-audio',  'stat-en-audio-sub',  todayStats.enAudio  ?? 0, 'of ' + (todayStats.enScript || total) + ' with script');
-    set('stat-hi-audio',  'bar-hi-audio',  'stat-hi-audio-sub',  todayStats.hiAudio  ?? 0, 'of ' + (todayStats.hiScript || total) + ' with script');
   }
 
   async function loadStatus() {
@@ -862,8 +882,14 @@ function adminPage(supabaseUrl, supabaseKey) {
     startPolling();
 
     try {
-      const provider = document.querySelector('input[name="tts-provider"]:checked')?.value ?? 'google';
-      const r = await fetch('/api/admin/generate?provider=' + provider, { method: 'POST', headers: { 'x-admin-key': AKEY } });
+      const provider = document.querySelector('input[name="tts-provider"]:checked')?.value ?? 'edge';
+      const selectedLangs = [...document.querySelectorAll('input[name="gen-lang"]:checked')].map(el => el.value);
+      if (selectedLangs.length === 0) {
+        appendLog('error', 'Select at least one language before generating.');
+        btn.disabled = false; btn.textContent = 'Generate now';
+        return;
+      }
+      const r = await fetch('/api/admin/generate?provider=' + provider + '&languages=' + selectedLangs.join(','), { method: 'POST', headers: { 'x-admin-key': AKEY } });
       if (r.status === 409) {
         appendLog('log', 'Generation already in progress — check back in a few minutes.');
         btn.disabled = false; btn.textContent = 'Regenerate';

@@ -2,6 +2,7 @@ import { Play, Pause, Newspaper, Flag, Globe, TrendingUp, Laptop, Film, Trophy, 
 import { cn } from "@/lib/utils";
 import type { Story } from "@/lib/news/generator";
 import { FEED_MAP, type SectionId } from "@/lib/news/sources";
+import { getStoryTitle } from "@/hooks/useMonologue";
 
 // Per-section accent colors — used for left border + label
 export const SECTION_COLOR: Record<SectionId, string> = {
@@ -60,7 +61,7 @@ interface StoryCardProps {
   story: Story;
   isPlaying: boolean;
   hasAudio: boolean;
-  language?: "en" | "hi";
+  language?: import("@/hooks/useMonologue").Language;
   onPlay: () => void;
   onPause: () => void;
   onTap?: () => void;
@@ -69,7 +70,7 @@ interface StoryCardProps {
 export function StoryCard({ story, isPlaying, hasAudio, language = "en", onPlay, onPause, onTap }: StoryCardProps) {
   const feed = FEED_MAP.get(story.section);
   const accent = SECTION_COLOR[story.section] ?? "#7B5CF0";
-  const displayTitle = language === "hi" ? (story.titleHi || story.title) : story.title;
+  const displayTitle = getStoryTitle(story, language ?? "en");
   const sectionLabel = language === "hi" ? (feed?.labelHi ?? feed?.label ?? story.section) : (feed?.label ?? story.section);
 
   return (

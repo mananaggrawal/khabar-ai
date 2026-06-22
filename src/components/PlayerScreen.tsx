@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { VoiceOrb } from "./VoiceOrb";
 import type { useMonologue } from "@/hooks/useMonologue";
+import { getStoryTitle } from "@/hooks/useMonologue";
 import type { SectionId } from "@/lib/news/sources";
 
 type MonoHook = ReturnType<typeof useMonologue>;
@@ -166,9 +167,7 @@ export function PlayerScreen({ mono, visible, onClose, isSaved, onSave }: Player
               )}
             </div>
             <p className="font-serif text-xl leading-snug text-foreground line-clamp-3">
-              {(language === "hi"
-                ? currentStory?.titleHi || currentStory?.title
-                : currentStory?.title) ?? "—"}
+              {(currentStory ? getStoryTitle(currentStory, language) : null) ?? "—"}
             </p>
             <p className="mt-1.5 text-xs text-muted-foreground">
               Today's news, <em className="font-semibold italic">spoken.</em>

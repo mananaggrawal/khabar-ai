@@ -12,7 +12,7 @@ import { PlayerScreen }      from "@/components/PlayerScreen";
 import { StoryDetailSheet }  from "@/components/StoryDetailSheet";
 import { BottomNav }         from "@/components/BottomNav";
 import { fetchBriefing }     from "@/lib/news/briefing.functions";
-import { useMonologue }      from "@/hooks/useMonologue";
+import { useMonologue, getStoryTitle, getAudioUrl } from "@/hooks/useMonologue";
 import { useSavedStories }   from "@/hooks/useSavedStories";
 import { FEEDS, readCity, type SectionId } from "@/lib/news/sources";
 import type { Story } from "@/lib/news/generator";
@@ -76,9 +76,7 @@ function MiniPlayer({
                   {currentFeed ? (language === "hi" ? currentFeed.labelHi : currentFeed.label) : "Playing"}
                 </p>
                 <p className="truncate text-sm font-medium text-foreground leading-tight">
-                  {(language === "hi"
-                    ? currentStory?.titleHi || currentStory?.title
-                    : currentStory?.title) ?? "—"}
+                  {currentStory ? getStoryTitle(currentStory, language) : "—"}
                 </p>
               </div>
 
@@ -128,7 +126,7 @@ function SectionTabs({
   activeSection: SectionId;
   availableSections: Set<SectionId>;
   onSelect: (id: SectionId) => void;
-  language: "en" | "hi";
+  language: import("@/hooks/useMonologue").Language;
 }) {
   const tabsRef = useRef<HTMLDivElement>(null);
 
@@ -206,6 +204,22 @@ function HomePage() {
   const activeStories = (briefing?.stories ?? []).filter(
     (s) => s.section === activeSection,
   );
+
+  // Persist which languages are available in this briefing to localStorage
+  // so the settings page can show only generated language options
+  useEffect(() => {
+    if (!briefing?.stories?.length) return;
+    const langs = ["en", "hi", "ta", "mr"].filter(lang =>
+      briefing.stories.some(s => {
+        if (lang === "en") return !!s.audioUrlEn;
+        if (lang === "hi") return !!s.audioUrlHi;
+        if (lang === "ta") return !!(s as any).audioUrlTa;
+        if (lang === "mr") return !!(s as any).audioUrlMr;
+        return false;
+      })
+    );
+    try { localStorage.setItem("khabar-available-languages", JSON.stringify(langs)); } catch {}
+  }, [briefing]);
 
   // Close player when playback stops
   useEffect(() => {
@@ -300,9 +314,7 @@ function HomePage() {
                     {today} · {listenMins} min listen
                   </p>
                   <p className="font-serif text-[17px] leading-snug text-white mb-3 line-clamp-2">
-                    {(mono.language === "hi"
-                      ? displayStory?.titleHi || displayStory?.title
-                      : displayStory?.title) ?? "Today's Briefing"}
+                    {(displayStory ? getStoryTitle(displayStory, mono.language) : null) ?? "Today's Briefing"}
                   </p>
                   <button
                     onClick={() => isPlayingAll ? mono.pause() : mono.playSection(firstSection)}
@@ -339,7 +351,7 @@ function HomePage() {
               </p>
             ) : (
               activeStories.map((story) => {
-                const hasAudio = mono.language === "hi" ? !!story.audioUrlHi : !!story.audioUrlEn;
+                const hasAudio = !!getAudioUrl(story, mono.language);
                 const storyIdx = mono.storiesWithAudio.findIndex((s) => s.id === story.id);
                 const isActive = mono.currentStory?.id === story.id;
                 return (

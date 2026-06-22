@@ -44,6 +44,7 @@ export async function handleGenerate(request: Request): Promise<Response> {
 
   const reqUrl  = new URL(request.url, "http://localhost");
   const provider = (reqUrl.searchParams.get("provider") ?? "google") as TtsProvider;
+  const languages = (reqUrl.searchParams.get("languages") ?? "en,hi").split(",").map(l => l.trim()).filter(Boolean);
 
   generating = true;
   runningJob = `generate:${provider}`;
@@ -53,8 +54,8 @@ export async function handleGenerate(request: Request): Promise<Response> {
   // Fire-and-forget — don't await so we return the stream immediately
   (async () => {
     try {
-      console.log(`[admin] generation triggered (provider: ${provider})`);
-      const briefing = await generateDailyBriefing((msg) => send({ type: "log", msg }), undefined, provider);
+      console.log(`[admin] generation triggered (provider: ${provider}, langs: ${languages.join(",")})`);
+      const briefing = await generateDailyBriefing((msg) => send({ type: "log", msg }), undefined, provider, languages);
       const rs = briefing.runSummary;
       send({
         type: "done",
@@ -124,8 +125,12 @@ export async function handleStatus(request: Request): Promise<Response> {
         const sections = new Set(stories.map((s: any) => s.section)).size;
         const enScript = stories.filter((s: any) => s.scriptEn).length;
         const hiScript = stories.filter((s: any) => s.scriptHi).length;
+        const taScript = stories.filter((s: any) => s.scriptTa).length;
+        const mrScript = stories.filter((s: any) => s.scriptMr).length;
         const enAudio  = stories.filter((s: any) => s.audioUrlEn).length;
         const hiAudio  = stories.filter((s: any) => s.audioUrlHi).length;
+        const taAudio  = stories.filter((s: any) => s.audioUrlTa).length;
+        const mrAudio  = stories.filter((s: any) => s.audioUrlMr).length;
 
         const entry = {
           date,
@@ -134,8 +139,13 @@ export async function handleStatus(request: Request): Promise<Response> {
           totalTopics: stories.length,
           enScript,
           hiScript,
+          taScript,
+          mrScript,
           enAudio,
           hiAudio,
+          taAudio,
+          mrAudio,
+          generatedLanguages: briefing.generatedLanguages ?? null,
           generatedAt: briefing.generatedAt ?? null,
         };
         days.push(entry);

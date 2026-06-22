@@ -7,11 +7,12 @@ import { motion, AnimatePresence } from "motion/react";
 import { X, ExternalLink, ArrowUpRight, Bookmark, Newspaper } from "lucide-react";
 import type { Story } from "@/lib/news/generator";
 import { FEED_MAP } from "@/lib/news/sources";
+import { type Language, getStoryTitle } from "@/hooks/useMonologue";
 import { SECTION_COLOR } from "@/components/StoryCard";
 
 interface StoryDetailSheetProps {
   story: Story | null;
-  language: "en" | "hi";
+  language: Language;
   onClose: () => void;
   onPlay: () => void;
   isPlaying: boolean;
@@ -90,7 +91,10 @@ export function StoryDetailSheet({
   const feed = story ? FEED_MAP.get(story.section) : null;
   const accent = story ? (SECTION_COLOR[story.section] ?? "#7B5CF0") : "#7B5CF0";
   const script = story
-    ? (language === "hi" ? (story.scriptHi || story.scriptEn) : story.scriptEn) || null
+    ? (language === "hi" ? (story.scriptHi || story.scriptEn) :
+       language === "ta" ? ((story as any).scriptTa || story.scriptEn) :
+       language === "mr" ? ((story as any).scriptMr || story.scriptEn) :
+       story.scriptEn) || null
     : null;
 
   return createPortal(
@@ -131,7 +135,7 @@ export function StoryDetailSheet({
                   </p>
                 )}
                 <p className="font-serif text-lg leading-snug text-foreground">
-                  {language === "hi" ? (story.titleHi || story.title) : story.title}
+                  {getStoryTitle(story, language)}
                 </p>
                 {story.source && (
                   <p className="mt-1 text-xs text-muted-foreground">{story.source}</p>

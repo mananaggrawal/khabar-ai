@@ -14,8 +14,12 @@ import { uploadAudio } from "@/lib/supabase-storage";
 
 const LOCAL_MODE = process.env.LOCAL_MODE === "true";
 
-const VOICE_EN = "en-IN-PrabhatNeural";
-const VOICE_HI = "hi-IN-MadhurNeural";
+const VOICES: Record<string, string> = {
+  en: "en-IN-PrabhatNeural",
+  hi: "hi-IN-MadhurNeural",
+  ta: "ta-IN-ValluvarNeural",
+  mr: "mr-IN-AarohiNeural",
+};
 
 // Estimate duration from MP3 bitrate (96 kbps = 12 KB/s)
 function estimateMp3Duration(bytes: number): number {
@@ -61,8 +65,10 @@ export async function edgeTTS(
   script: string,
   filename: string,
 ): Promise<{ url: string; durationSec: number }> {
-  const lang  = filename.endsWith("-hi") ? "hi" : "en";
-  const voice = lang === "hi" ? VOICE_HI : VOICE_EN;
+  // Extract language code from filename suffix (e.g., "2026-06-22-abc123-ta" → "ta")
+  const match = filename.match(/-([a-z]{2})$/);
+  const lang  = match?.[1] ?? "en";
+  const voice = VOICES[lang] ?? VOICES.en;
   const mp3   = await synthesize(script, voice);
   return saveMp3(mp3, filename);
 }
