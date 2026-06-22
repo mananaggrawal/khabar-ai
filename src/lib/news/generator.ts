@@ -68,14 +68,6 @@ export type Logger = (msg: string) => void;
 const TARGET_WPM   = 150;  // average reading/speech rate
 const TARGET_MINS  = 30;   // soft cap — secondary sections trimmed only if well over this
 
-// Max clubbed groups (stories) per section.
-// Primary: lenient cap — only truly duplicate stories merge; distinct ones stay separate.
-// Secondary: tighter cap; time guard trims overflow.
-const MAX_GROUPS_PRIMARY   = 10;  // headlines, india, world, business — never dropped
-const MAX_GROUPS_SECONDARY = 4;   // all other sections — trimmed only if well over budget
-
-// If a section has more raw stories than this, split into chunks before clubbing.
-const CLUB_CHUNK_SIZE = 25;
 
 // Primary sections: all stories kept, never trimmed by time guard
 const PRIORITY_SECTIONS: SectionId[] = ["headlines", "india", "world", "business"];
@@ -280,13 +272,14 @@ async function fetchAllOgImages(stories: Story[], logger: Logger): Promise<Story
   return updated;
 }
 
-// ─── Step 3: Club + script per section ───────────────────────────────────────
+// ─── Step 3: Script stories — merge duplicates, keep distinct ones separate ───
 //
-// One Gemini call per section. Gemini groups related stories by topic,
-// writes one synthesised EN+HI script per group (60-80 words).
-// Every raw story must appear in exactly one group — no information dropped.
+// One Gemini call for all stories in a section.
+// Stories covering the same event are merged into one group; distinct ones stay separate.
+// No group cap — Gemini decides what's truly the same story.
+// Target: 50-70 words per group, capturing key facts, numbers, and metrics.
 
-interface ClubbedGroup {
+interface ScriptedGroup {
   title:         string;
   titleHi:       string;
   scriptEn:      string;
@@ -294,48 +287,36 @@ interface ClubbedGroup {
   sourceIndices: number[];
 }
 
-/** Club + script a single batch of stories (≤ CLUB_CHUNK_SIZE). */
-async function clubAndScriptBatch(
+async function scriptBatch(
   sectionStories: Story[],
   sectionId: SectionId,
-  maxGroups: number,
   logger: Logger = () => {},
 ): Promise<Story[]> {
   if (sectionStories.length === 0) return [];
 
+  const today = new Date().toISOString().slice(0, 10);
   const label = FEED_MAP.get(sectionId)?.label ?? sectionId;
 
-  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-
-  const isPrimarySection = PRIORITY_SECTIONS.includes(sectionId);
-
-  const prompt = `You are Khabar AI — Indian news editor. Today's date is ${today}.
-
-Below are ${sectionStories.length} stories from the "${label}" section.
+  const prompt = `You are Khabar AI — Indian news scriptwriter. Today: ${today}.
+Section: "${label}" (${sectionStories.length} stories).
 
 YOUR JOB:
-1. GROUPING: Only merge stories that are genuinely the same event or development (same incident, same announcement, same person doing the same thing). Different topics, even if loosely related, stay in separate groups.${isPrimarySection ? `\n   This is a PRIMARY section — be conservative. When in doubt, keep stories separate.` : ""}
-2. Stories with no close match → their own group (size 1).
-3. SCRIPT: Write one script per group covering EVERY story in it. Each source must contribute at least one distinct fact, angle, or development. Never summarise only the primary source and ignore the rest.
-4. Produce at most ${maxGroups} groups. If there are more distinct topics than ${maxGroups}, fold only the least significant ones into the nearest related group — and the script for that group must cover all folded stories.
+1. GROUPING: Merge stories only if they cover the exact same event or announcement. Different topics — even loosely related — stay in separate groups. When in doubt, keep separate.
+2. SCRIPT: Write one 50-70 word spoken-audio script per group.
 
 SCRIPT RULES:
-- No fixed word limit — write as many words as needed to fully cover all stories in the group
-- For a single-source group: ~60-80 words is usually enough
-- For multi-source groups: add enough words to give each source's key facts fair coverage
-- Warm Indian English — conversational, not a broadcaster. Sound like a smart friend explaining something interesting, not reading a headline
-- Use the description/context provided — go beyond the headline. Include the why, the who, the implication
-- Start directly with the substance. Never start with "In a...", "According to...", or a rephrased headline
-- Name specific people, companies, numbers, places — no vague pronouns or generalities
-- Never guess or hedge on the year — these are today's stories (${today})
-- scriptHi: same content in Hindi, keep English names/brands/numbers as-is, natural spoken Hindi not translated English
+- 50-70 words in natural spoken English — no bullet points, no headers
+- Lead with the most compelling fact. Never start with "In a...", "According to...", or a headline restatement
+- Include every number, figure, percentage, or named entity from the headline/description — these matter
+- Do NOT invent facts beyond what's in the headline or description
+- If description adds nothing, write from the headline alone — stay honest, don't pad
+- scriptHi: same content in natural spoken Hindi; keep English names, brands, numbers as-is
+- titleHi: natural Hindi translation of the title (keep proper nouns/brands/numbers unchanged)
 
-CRITICAL: Every story index (0 to ${sectionStories.length - 1}) must appear in exactly one group's sourceIndices. No index may be skipped.
+CRITICAL: Every index 0–${sectionStories.length - 1} must appear in exactly one group's sourceIndices.
 
-Return JSON array only, no markdown:
-[{"title":"...","titleHi":"...","scriptEn":"...","scriptHi":"...","sourceIndices":[0,1,3]}]
-
-titleHi: natural Hindi translation of the title (keep proper nouns, brand names, numbers as-is).
+Return JSON array only:
+[{"title":"...","titleHi":"...","scriptEn":"...","scriptHi":"...","sourceIndices":[0,2]}]
 
 Stories:
 ${sectionStories.map((s, i) => {
@@ -344,27 +325,20 @@ ${sectionStories.map((s, i) => {
   }).join("\n")}`;
 
   try {
-    const result: ClubbedGroup[] = await geminiJson(prompt);
+    const result: ScriptedGroup[] = await geminiJson(prompt);
     if (!Array.isArray(result) || result.length === 0) throw new Error("empty result");
 
-    // Track which source indices are covered
     const covered = new Set<number>();
     for (const g of result) (g.sourceIndices ?? []).forEach(i => covered.add(i));
 
-    // Build output stories
     const output: Story[] = [];
 
     for (const group of result) {
-      const indices = (group.sourceIndices ?? []).filter(
-        i => i >= 0 && i < sectionStories.length,
-      );
+      const indices = (group.sourceIndices ?? []).filter(i => i >= 0 && i < sectionStories.length);
       if (indices.length === 0) continue;
 
-      // Use story with an image as primary, otherwise first
       const primaryIdx = indices.find(i => sectionStories[i]?.imageUrl) ?? indices[0];
       const primary    = sectionStories[primaryIdx];
-
-      // Collect all merged source articles
       const sources: StorySource[] = indices.map(i => ({
         title:  sectionStories[i].title,
         source: sectionStories[i].source,
@@ -373,83 +347,52 @@ ${sectionStories.map((s, i) => {
 
       output.push({
         ...primary,
-        id:       primary.id,
-        title:    group.title   || primary.title,
-        titleHi:  group.titleHi || undefined,
+        title:    group.title    || primary.title,
+        titleHi:  group.titleHi  || undefined,
         sources,
-        scriptEn: group.scriptEn || `${primary.title}. Details are emerging.`,
-        scriptHi: group.scriptHi || `${primary.title}। विवरण आ रहे हैं।`,
+        scriptEn: group.scriptEn || `${primary.title}.`,
+        scriptHi: group.scriptHi || `${primary.title}।`,
         audioUrlEn:   undefined,
         audioUrlHi:   undefined,
         audioStartSec: 0,
       });
     }
 
-    // Any uncovered stories → simple fallback script
+    // Any uncovered → stub
     for (let i = 0; i < sectionStories.length; i++) {
       if (covered.has(i)) continue;
       const s = sectionStories[i];
-      logger(`    ⚠ ${sectionId}[${i}] not covered by Gemini grouping — adding standalone`);
+      logger(`    ⚠ ${sectionId}[${i}] not in any group — adding standalone`);
       output.push({
         ...s,
-        sources: [{ title: s.title, source: s.source, link: s.link }],
-        scriptEn: `${s.title}. More details are emerging on this story.`,
-        scriptHi: `${s.title}। इस खबर के बारे में अधिक जानकारी आ रही है।`,
+        sources:  [{ title: s.title, source: s.source, link: s.link }],
+        scriptEn: `${s.title}.`,
+        scriptHi: `${s.title}।`,
         audioStartSec: 0,
       });
     }
 
     return output;
   } catch (err: any) {
-    logger(`    ✗ ${sectionId} Gemini batch failed: ${err.message?.slice(0, 120)} — falling back to stubs`);
+    logger(`  ✗ ${sectionId} Gemini script failed: ${err.message?.slice(0, 120)} — using title stubs`);
     return sectionStories.map(s => ({
       ...s,
-      sources: [{ title: s.title, source: s.source, link: s.link }],
-      scriptEn: `${s.title}. More details are emerging.`,
-      scriptHi: `${s.title}। अधिक जानकारी आ रही है।`,
+      sources:  [{ title: s.title, source: s.source, link: s.link }],
+      scriptEn: `${s.title}.`,
+      scriptHi: `${s.title}।`,
       audioStartSec: 0,
     }));
   }
 }
 
-/**
- * Club + script a full section, chunking into batches of CLUB_CHUNK_SIZE
- * if the section is large. Each chunk gets a proportional MAX_GROUPS cap.
- */
-async function clubAndScriptSection(
-  sectionStories: Story[],
-  sectionId: SectionId,
-  maxGroups: number,
-  logger: Logger = () => {},
-): Promise<Story[]> {
-  if (sectionStories.length === 0) return [];
-
-  if (sectionStories.length <= CLUB_CHUNK_SIZE) {
-    return clubAndScriptBatch(sectionStories, sectionId, maxGroups, logger);
-  }
-
-  // Large section: split into chunks, distribute groups budget proportionally
-  const chunks: Story[][] = [];
-  for (let i = 0; i < sectionStories.length; i += CLUB_CHUNK_SIZE) {
-    chunks.push(sectionStories.slice(i, i + CLUB_CHUNK_SIZE));
-  }
-  const groupsPerChunk = Math.max(2, Math.ceil(maxGroups / chunks.length));
-
-  logger(`    ${sectionId}: ${sectionStories.length} stories → ${chunks.length} chunks × ~${groupsPerChunk} groups`);
-
-  const chunkResults = await Promise.all(
-    chunks.map(chunk => clubAndScriptBatch(chunk, sectionId, groupsPerChunk, logger)),
-  );
-
-  return chunkResults.flat();
-}
-
-async function clubAndScriptAllSections(
+async function scriptAllStories(
   stories: Story[],
   logger: Logger,
-  onSectionDone?: (clubbed: Story[]) => Promise<void>,
+  onSectionDone?: (scripted: Story[]) => Promise<void>,
 ): Promise<Story[]> {
-  // Group by section
+  if (stories.length === 0) return [];
+
+  // Group by section, process each with one Gemini call
   const bySection = new Map<SectionId, Story[]>();
   for (const story of stories) {
     const arr = bySection.get(story.section) ?? [];
@@ -457,38 +400,30 @@ async function clubAndScriptAllSections(
     bySection.set(story.section, arr);
   }
 
-  // Priority sections first, then the rest
   const sectionOrder: SectionId[] = [
     ...PRIORITY_SECTIONS.filter(id => bySection.has(id)),
     ...[...bySection.keys()].filter(id => !PRIORITY_SECTIONS.includes(id)),
   ];
 
-  logger(`Club + script: ${stories.length} raw stories across ${bySection.size} sections…`);
+  logger(`Scripting ${stories.length} stories across ${bySection.size} sections…`);
 
-  const allClubbedStories: Story[] = [];
+  const all: Story[] = [];
 
   for (const sectionId of sectionOrder) {
     if (isAbortRequested()) { logger("⛔ Aborted"); break; }
+    const sectionStories = bySection.get(sectionId)!;
+    const emoji = FEED_MAP.get(sectionId)?.emoji ?? "📰";
+    logger(`  ${emoji} ${sectionId}: ${sectionStories.length} raw stories…`);
 
-    const sectionStories = bySection.get(sectionId) ?? [];
-    const emoji          = FEED_MAP.get(sectionId)?.emoji ?? "📰";
-    const isPriority     = PRIORITY_SECTIONS.includes(sectionId);
-    const maxGroups = isPriority ? MAX_GROUPS_PRIMARY : MAX_GROUPS_SECONDARY;
-    const capLabel  = `max ${maxGroups}`;
-    logger(`  ${emoji} ${sectionId}: ${sectionStories.length} raw → ${capLabel} stories (${isPriority ? "primary" : "secondary"})…`);
+    const scripted = await scriptBatch(sectionStories, sectionId, logger);
+    all.push(...scripted);
+    logger(`    → ${scripted.length} stories`);
 
-    try {
-      const clubbed = await clubAndScriptSection(sectionStories, sectionId, maxGroups, logger);
-      allClubbedStories.push(...clubbed);
-      logger(`    → ${clubbed.length} stories after clubbing`);
-    } catch (err: any) {
-      logger(`    ✗ ${sectionId}: ${err.message?.slice(0, 100)}`);
-    }
-
-    if (onSectionDone) await onSectionDone([...allClubbedStories]);
+    if (onSectionDone) await onSectionDone([...all]);
   }
 
-  return allClubbedStories;
+  logger(`Scripting done — ${all.length} stories total`);
+  return all;
 }
 
 // ─── Step 4: Time guard ───────────────────────────────────────────────────────
@@ -750,12 +685,12 @@ export async function generateDailyBriefing(
 
   // Steps 2b + 3 in parallel: OG images and club+script are independent
   const t1 = Date.now();
-  log(`Fetching OG images and clubbing+scripting in parallel…`);
+  log(`Fetching OG images and scripting in parallel…`);
   const [withImages, clubbed] = await Promise.all([
     fetchAllOgImages(rawStories, log),
-    clubAndScriptAllSections(rawStories, log, async (partial) => {
+    scriptAllStories(rawStories, log, async (partial) => {
       await saveBriefing({ date, generatedAt: new Date().toISOString(), stories: partial });
-      log(`  💾 saved ${partial.length} clubbed stories so far`);
+      log(`  💾 saved ${partial.length} stories so far`);
     }),
   ]);
   const clubSec = (Date.now() - t1) / 1000;
@@ -834,7 +769,7 @@ export async function generateMissingSections(
   const newSections = new Set(newStories.map(s => s.section));
   const [withImages, clubbedNew] = await Promise.all([
     fetchAllOgImages(newStories, log),
-    clubAndScriptAllSections(newStories, log),
+    scriptAllStories(newStories, log),
   ]);
 
   const imageById = new Map(withImages.map(s => [s.id, s.imageUrl]));
