@@ -169,12 +169,10 @@ function SectionTabs({
 
 function HeroCard({
   briefing,
-  availableSections,
   mono,
   firstSection,
 }: {
   briefing: NonNullable<Awaited<ReturnType<typeof fetchBriefing>>>;
-  availableSections: Set<SectionId>;
   mono: ReturnType<typeof useMonologue>;
   firstSection: SectionId;
 }) {
@@ -189,13 +187,6 @@ function HeroCard({
 
   const isPlayingAll = mono.state === "playing";
 
-  // Section chips — show up to 5 emojis from available sections
-  const sectionEmojis = FEEDS
-    .filter(f => availableSections.has(f.id))
-    .slice(0, 6)
-    .map(f => f.emoji);
-  const extraCount = availableSections.size > 6 ? availableSections.size - 6 : 0;
-
   return (
     <div
       className="mx-4 mb-4 relative overflow-hidden rounded-3xl"
@@ -206,30 +197,30 @@ function HeroCard({
           backgroundSize: "cover",
           backgroundPosition: "center top",
         } : {
-          // Layered gradient: warm amber glow + violet pocket + deep dark base
-          // Echoes the VoiceOrb's amber/violet palette for visual coherence
+          // Deep space: large glowing purple orb in near-black cosmos
           background: [
-            "radial-gradient(ellipse at 22% 78%, rgba(255,185,65,0.20) 0%, transparent 48%)",
-            "radial-gradient(ellipse at 78% 22%, rgba(130,55,220,0.22) 0%, transparent 50%)",
-            "linear-gradient(150deg, #080613 0%, #120c28 45%, #0d0820 100%)",
+            "radial-gradient(ellipse 65% 80% at 72% 60%, rgba(148,55,255,0.92) 0%, rgba(100,35,210,0.70) 28%, rgba(55,15,140,0.35) 55%, transparent 75%)",
+            "radial-gradient(circle at 58% 38%, rgba(210,165,255,0.40) 0%, transparent 32%)",
+            "radial-gradient(ellipse at 20% 80%, rgba(18,10,70,0.75) 0%, transparent 55%)",
+            "linear-gradient(160deg, #03030d 0%, #060518 45%, #07051c 100%)",
           ].join(", "),
         }),
       }}
     >
-      {/* Overlay: subtle for images, near-transparent for gradient (it's already dark) */}
+      {/* Overlay */}
       <div
         className="absolute inset-0"
         style={{
           background: bgImage
             ? "linear-gradient(to bottom, rgba(0,0,0,0.08) 0%, rgba(0,0,0,0.45) 40%, rgba(0,0,0,0.85) 100%)"
-            : "linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.15) 60%, rgba(0,0,0,0.45) 100%)",
+            : "linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.10) 55%, rgba(0,0,0,0.55) 100%)",
         }}
       />
 
       {/* Content */}
       <div className="absolute inset-0 flex flex-col justify-between p-4 pt-3.5">
 
-        {/* Top row: date + story count */}
+        {/* Top row: date + duration */}
         <div className="flex items-center justify-between">
           <span className="text-[10px] font-bold uppercase tracking-[0.09em] text-white/50">
             {today}
@@ -241,30 +232,12 @@ function HeroCard({
 
         {/* Bottom section */}
         <div className="flex flex-col gap-2.5">
-          {/* Section chips */}
-          <div className="flex items-center gap-1">
-            {sectionEmojis.map((emoji, i) => (
-              <span
-                key={i}
-                className="flex items-center justify-center size-6 rounded-full text-[13px]"
-                style={{ background: "rgba(255,255,255,0.10)", backdropFilter: "blur(4px)" }}
-              >
-                {emoji}
-              </span>
-            ))}
-            {extraCount > 0 && (
-              <span className="text-[10px] font-medium text-white/40 ml-0.5">
-                +{extraCount}
-              </span>
-            )}
-          </div>
-
           {/* Story title */}
           <p className="font-serif text-[17px] leading-snug text-white line-clamp-2">
             {displayStory ? getStoryTitle(displayStory, mono.language) : "Today's Briefing"}
           </p>
 
-          {/* Play button + duration */}
+          {/* Play button + story count */}
           <div className="flex items-center gap-2.5">
             <button
               onClick={() => isPlayingAll ? mono.pause() : mono.playSection(firstSection)}
@@ -412,7 +385,6 @@ function HomePage() {
           {/* Hero card */}
           <HeroCard
             briefing={filteredBriefing}
-            availableSections={availableSections}
             mono={mono}
             firstSection={firstSection}
           />

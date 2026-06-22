@@ -174,7 +174,6 @@ function SettingsPage() {
                     isLast && "cursor-not-allowed",
                   )}
                 >
-                  <span className="text-base">{feed.emoji}</span>
                   <span className="flex-1 text-sm font-medium">{feed.label}</span>
                   {/* Toggle pill */}
                   <span
@@ -203,7 +202,6 @@ function SettingsPage() {
                   : "border-border/40 text-muted-foreground/50",
               )}
             >
-              <span className="text-base">📍</span>
               <span className="flex-1 text-sm font-medium">Local</span>
               <span
                 className={cn(
