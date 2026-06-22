@@ -45,13 +45,14 @@ function getKey(): string {
 
 // ── Core synthesis ────────────────────────────────────────────────────────────
 
-async function synthesizeRaw(script: string, style?: string): Promise<Buffer> {
+async function synthesizeRaw(script: string, style?: string, embedStyle = false): Promise<Buffer> {
   if (_dailyQuotaExhausted) {
     throw new Error("Gemini TTS daily quota exhausted — skipping API call");
   }
-  // Gemini TTS models don't support system_instruction — embed style in the user text.
-  const text = style ? `${style}\n\n${script}` : script;
-  const body = {
+  // Primary: pass style as system_instruction (better voice quality).
+  // Fallback (embedStyle=true): prepend style in user text when system_instruction causes 500.
+  const text = (embedStyle && style) ? `${style}\n\n${script}` : script;
+  const body: Record<string, unknown> = {
     contents: [{ parts: [{ text }], role: "user" }],
     generationConfig: {
       responseModalities: ["AUDIO"],
@@ -60,6 +61,7 @@ async function synthesizeRaw(script: string, style?: string): Promise<Buffer> {
       },
     },
   };
+  if (style && !embedStyle) body.system_instruction = { parts: [{ text: style }] };
   const res = await fetch(GEMINI_TTS_URL(getKey()), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -72,11 +74,12 @@ async function synthesizeRaw(script: string, style?: string): Promise<Buffer> {
   }
 
   const data = await res.json();
-  const part = data.candidates?.[0]?.content?.parts?.[0];
+  const part         = data.candidates?.[0]?.content?.parts?.[0];
+  const finishReason = data.candidates?.[0]?.finishReason as string | undefined;
   if (!part?.inlineData?.data) {
-    throw new Error(
-      `Gemini TTS: no audio in response. Finish reason: ${data.candidates?.[0]?.finishReason}`,
-    );
+    const err = new Error(`Gemini TTS: no audio in response. Finish reason: ${finishReason}`);
+    (err as any).finishReason = finishReason;
+    throw err;
   }
   return Buffer.from(part.inlineData.data, "base64");
 }
@@ -85,12 +88,13 @@ async function synthesizeWithRetry(
   prompt: string,
   tag: string,
   style?: string,
-  maxAttempts = 4,
+  maxAttempts = 3,
+  embedStyle = false,
 ): Promise<Buffer> {
   let lastErr: Error | null = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      return await synthesizeRaw(prompt, style);
+      return await synthesizeRaw(prompt, style, embedStyle);
     } catch (err: any) {
       lastErr = err;
       const msg: string = err.message ?? "";
@@ -98,13 +102,16 @@ async function synthesizeWithRetry(
       const isBilling = msg.includes("prepayment") || msg.includes("credits are depleted");
       const is429     = msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED");
       console.warn(`[tts/google] ${tag} attempt ${attempt}/${maxAttempts}: ${msg.slice(0, 120)}`);
+      const isOther   = err.finishReason === "OTHER" || msg.includes("Finish reason: OTHER");
       if (isDaily || isBilling) {
         _dailyQuotaExhausted = true;
         console.warn(`[tts/google] fatal quota/billing error — all further TTS calls skipped`);
         break;
       }
+      // Safety-filter hit: retrying won't help — break immediately so caller can try bare synthesis
+      if (isOther) break;
       if (attempt < maxAttempts) {
-        await new Promise(r => setTimeout(r, is429 ? 10_000 * attempt : 1_500 * attempt));
+        await new Promise(r => setTimeout(r, is429 ? 10_000 * attempt : 2_000 * attempt));
       }
     }
   }
@@ -156,16 +163,36 @@ export async function googleTTS(
   const lang  = filename.endsWith("-hi") ? "hi" : "en";
   const style = lang === "hi" ? STYLE_HI : STYLE_EN;
 
+  const isOtherErr = (e: any) =>
+    e?.finishReason === "OTHER" || (e?.message as string | undefined)?.includes("Finish reason: OTHER");
+  const is5xxErr   = (e: any) =>
+    (e?.message as string | undefined)?.includes("500") ||
+    (e?.message as string | undefined)?.includes("503");
+
+  // Attempt 1: system_instruction (best voice quality)
   try {
-    const pcm = await synthesizeWithRetry(script, filename, style, 3);
+    const pcm = await synthesizeWithRetry(script, filename, style, 3, false);
     return saveWav(pcmToWav(pcm), filename);
   } catch (err: any) {
-    // If styled attempt fails with 5xx, retry bare (no style prefix) — last resort
-    if (err.message?.includes("500") || err.message?.includes("503")) {
-      console.warn(`[tts/google] ${filename}: styled attempt failed, retrying bare…`);
-      const pcm = await synthesizeWithRetry(script, filename, undefined, 3);
-      return saveWav(pcmToWav(pcm), filename);
+    if (isOtherErr(err)) {
+      // Safety filter — skip straight to bare (no style makes content less likely to trigger)
+      console.warn(`[tts/google] ${filename}: safety filter (OTHER) on styled request, trying bare…`);
+    } else if (is5xxErr(err)) {
+      // Server error — try embedded style next
+      console.warn(`[tts/google] ${filename}: system_instruction failed (5xx), trying embedded style…`);
+      try {
+        const pcm = await synthesizeWithRetry(script, filename, style, 2, true);
+        return saveWav(pcmToWav(pcm), filename);
+      } catch (err2: any) {
+        if (!is5xxErr(err2) && !isOtherErr(err2)) throw err2;
+        console.warn(`[tts/google] ${filename}: embedded style failed, trying bare…`);
+      }
+    } else {
+      throw err;
     }
-    throw err;
   }
+
+  // Final attempt: bare (no style — lowest chance of safety filter / server errors)
+  const pcm = await synthesizeWithRetry(script, filename, undefined, 2, false);
+  return saveWav(pcmToWav(pcm), filename);
 }

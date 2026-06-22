@@ -76,7 +76,9 @@ function MiniPlayer({
                   {currentFeed ? (language === "hi" ? currentFeed.labelHi : currentFeed.label) : "Playing"}
                 </p>
                 <p className="truncate text-sm font-medium text-foreground leading-tight">
-                  {currentStory?.title ?? "—"}
+                  {(language === "hi"
+                    ? currentStory?.titleHi || currentStory?.title
+                    : currentStory?.title) ?? "—"}
                 </p>
               </div>
 
@@ -298,7 +300,9 @@ function HomePage() {
                     {today} · {listenMins} min listen
                   </p>
                   <p className="font-serif text-[17px] leading-snug text-white mb-3 line-clamp-2">
-                    {displayStory?.title ?? "Today's Briefing"}
+                    {(mono.language === "hi"
+                      ? displayStory?.titleHi || displayStory?.title
+                      : displayStory?.title) ?? "Today's Briefing"}
                   </p>
                   <button
                     onClick={() => isPlayingAll ? mono.pause() : mono.playSection(firstSection)}
@@ -342,6 +346,7 @@ function HomePage() {
                   <StoryCard
                     key={story.id}
                     story={story}
+                    language={mono.language}
                     isPlaying={isActive && mono.state === "playing"}
                     hasAudio={hasAudio}
                     onPlay={() => storyIdx >= 0 && mono.playFromInSection(storyIdx, activeSection)}

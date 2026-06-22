@@ -131,7 +131,7 @@ export function StoryDetailSheet({
                   </p>
                 )}
                 <p className="font-serif text-lg leading-snug text-foreground">
-                  {story.title}
+                  {language === "hi" ? (story.titleHi || story.title) : story.title}
                 </p>
                 {story.source && (
                   <p className="mt-1 text-xs text-muted-foreground">{story.source}</p>

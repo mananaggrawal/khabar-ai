@@ -60,14 +60,17 @@ interface StoryCardProps {
   story: Story;
   isPlaying: boolean;
   hasAudio: boolean;
+  language?: "en" | "hi";
   onPlay: () => void;
   onPause: () => void;
   onTap?: () => void;
 }
 
-export function StoryCard({ story, isPlaying, hasAudio, onPlay, onPause, onTap }: StoryCardProps) {
+export function StoryCard({ story, isPlaying, hasAudio, language = "en", onPlay, onPause, onTap }: StoryCardProps) {
   const feed = FEED_MAP.get(story.section);
   const accent = SECTION_COLOR[story.section] ?? "#7B5CF0";
+  const displayTitle = language === "hi" ? (story.titleHi || story.title) : story.title;
+  const sectionLabel = language === "hi" ? (feed?.labelHi ?? feed?.label ?? story.section) : (feed?.label ?? story.section);
 
   return (
     <div
@@ -120,10 +123,10 @@ export function StoryCard({ story, isPlaying, hasAudio, onPlay, onPause, onTap }
           className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]"
           style={{ color: accent }}
         >
-          {feed?.label ?? story.section}
+          {sectionLabel}
         </p>
         <p className="text-sm font-medium leading-snug text-foreground line-clamp-2">
-          {story.title}
+          {displayTitle}
         </p>
       </div>
 
