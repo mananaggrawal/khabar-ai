@@ -19,6 +19,7 @@ const LOCAL_MODE = process.env.LOCAL_MODE === "true";
 // ── Quota guard ────────────────────────────────────────────────────────────────
 let _quotaExhausted = false;
 export const isQuotaExhausted = () => _quotaExhausted;
+export const resetQuota       = () => { _quotaExhausted = false; };
 
 // ── Config ─────────────────────────────────────────────────────────────────────
 

@@ -576,6 +576,17 @@ function adminPage(supabaseUrl, supabaseKey) {
       <div style="height:16px;"></div>
       <div class="group">
         <div class="gen-sub">Regenerate today's briefing if missing or outdated.</div>
+        <div style="display:flex;align-items:center;gap:16px;margin-bottom:10px;font-size:13px;">
+          <span style="color:var(--muted);font-weight:600;letter-spacing:.04em;text-transform:uppercase;font-size:11px;">TTS</span>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="radio" name="tts-provider" value="google" checked style="accent-color:#6366f1;">
+            <span>Google</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="radio" name="tts-provider" value="elevenlabs" style="accent-color:#6366f1;">
+            <span>ElevenLabs</span>
+          </label>
+        </div>
         <button class="btn-primary" id="gen-btn" onclick="runGenerate()">Generate now</button>
         <div id="gen-log" class="log-terminal"></div>
       </div>
@@ -821,7 +832,8 @@ function adminPage(supabaseUrl, supabaseKey) {
     startPolling();
 
     try {
-      const r = await fetch('/api/admin/generate', { method: 'POST', headers: { 'x-admin-key': AKEY } });
+      const provider = document.querySelector('input[name="tts-provider"]:checked')?.value ?? 'google';
+      const r = await fetch('/api/admin/generate?provider=' + provider, { method: 'POST', headers: { 'x-admin-key': AKEY } });
       if (r.status === 409) {
         appendLog('log', 'Generation already in progress — check back in a few minutes.');
         btn.disabled = false; btn.textContent = 'Regenerate';

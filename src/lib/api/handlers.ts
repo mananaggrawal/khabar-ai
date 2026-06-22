@@ -3,8 +3,9 @@
  * Mounted as request middleware in src/start.ts so they work without
  * needing routeTree.gen.ts to be updated.
  */
-import { generateDailyBriefing, generateMissingSections, generateMissingTTS, getLatestBriefing as getTodayBriefing } from "@/lib/news/generator";
-import { elevenLabsTTS, isQuotaExhausted } from "@/lib/tts/elevenlabs";
+import { generateDailyBriefing, generateMissingSections, generateMissingTTS, getLatestBriefing as getTodayBriefing, type TtsProvider } from "@/lib/news/generator";
+import { elevenLabsTTS, isQuotaExhausted, resetQuota } from "@/lib/tts/elevenlabs";
+import { resetDailyQuota } from "@/lib/tts/google";
 import { loadBriefingFromStorage } from "@/lib/supabase-storage";
 import { requestAbort, resetAbort } from "@/lib/abort";
 
@@ -41,14 +42,19 @@ export async function handleGenerate(request: Request): Promise<Response> {
     try { writer.write(enc.encode(`data: ${JSON.stringify(data)}\n\n`)); } catch {}
   };
 
+  const reqUrl  = new URL(request.url, "http://localhost");
+  const provider = (reqUrl.searchParams.get("provider") ?? "google") as TtsProvider;
+
   generating = true;
-  runningJob = "generate";
+  runningJob = `generate:${provider}`;
   resetAbort();
+  resetQuota();
+  resetDailyQuota();
   // Fire-and-forget — don't await so we return the stream immediately
   (async () => {
     try {
-      console.log("[admin] generation triggered");
-      const briefing = await generateDailyBriefing((msg) => send({ type: "log", msg }));
+      console.log(`[admin] generation triggered (provider: ${provider})`);
+      const briefing = await generateDailyBriefing((msg) => send({ type: "log", msg }), undefined, provider);
       send({
         type: "done",
         date: briefing.date,
@@ -83,6 +89,8 @@ export async function handleCron(request: Request): Promise<Response> {
   generating = true;
   runningJob = "cron";
   resetAbort();
+  resetQuota();
+  resetDailyQuota();
   generateDailyBriefing()
     .catch((err) => console.error("[cron] generation failed:", err?.message ?? err))
     .finally(() => { generating = false; runningJob = null; });
@@ -184,6 +192,7 @@ export async function handlePatchMissing(request: Request): Promise<Response> {
   generating = true;
   runningJob = "patch-missing";
   resetAbort();
+  resetQuota();
   (async () => {
     try {
       const { added, briefing } = await generateMissingSections((msg) => send({ type: "log", msg }));
@@ -227,6 +236,7 @@ export async function handlePatchTTS(request: Request): Promise<Response> {
   generating = true;
   runningJob = "patch-tts";
   resetAbort();
+  resetQuota();
   (async () => {
     try {
       const { patched, briefing } = await generateMissingTTS((msg) => send({ type: "log", msg }));

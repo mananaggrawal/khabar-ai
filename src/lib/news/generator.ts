@@ -19,8 +19,11 @@ import { join } from "node:path";
 import { fetchRss, type RssItem } from "./rss";
 import { FEEDS, FEED_MAP, DEFAULT_CITY, type SectionId } from "./sources";
 import { elevenLabsTTS, isQuotaExhausted } from "@/lib/tts/elevenlabs";
+import { googleTTS, isDailyQuotaExhausted } from "@/lib/tts/google";
 import { saveBriefingToStorage, loadBriefingFromStorage } from "@/lib/supabase-storage";
 import { isAbortRequested } from "@/lib/abort";
+
+export type TtsProvider = "google" | "elevenlabs";
 
 const LOCAL_MODE = process.env.LOCAL_MODE === "true";
 
@@ -60,19 +63,18 @@ export type Logger = (msg: string) => void;
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const TARGET_WPM   = 150;  // average reading/speech rate
-const TARGET_MINS  = 45;   // safety valve — all sections should survive under this
+const TARGET_MINS  = 30;   // soft cap — secondary sections trimmed only if well over this
 
-// Max clubbed groups per section — Gemini must merge down to this many stories.
-// Prevents science/local etc. from returning 70+ individual stories.
-// 20 is aggressive enough to fix unclubbed sections while letting well-merging
-// sections (business, technology) keep more diverse coverage.
-const MAX_GROUPS_PER_SECTION = 20;
+// Max clubbed groups (stories) per section.
+// At ~70 words/story, 150 WPM: primary (4×5) + secondary (6×3) ≈ 38 stories ≈ 17.7 min.
+const MAX_GROUPS_PRIMARY   = 6;  // headlines, india, world, business — never dropped
+const MAX_GROUPS_SECONDARY = 4;  // all other sections — trimmed only if well over budget
 
 // If a section has more raw stories than this, split into chunks before clubbing.
 const CLUB_CHUNK_SIZE = 25;
 
-// Sections that are never trimmed by the time guard
-const PRIORITY_SECTIONS: SectionId[] = ["headlines", "business", "world"];
+// Primary sections: all stories kept, never trimmed by time guard
+const PRIORITY_SECTIONS: SectionId[] = ["headlines", "india", "world", "business"];
 
 // ─── Story ID ─────────────────────────────────────────────────────────────────
 
@@ -393,24 +395,20 @@ ${sectionStories.map((s, i) => {
 async function clubAndScriptSection(
   sectionStories: Story[],
   sectionId: SectionId,
+  maxGroups: number,
 ): Promise<Story[]> {
   if (sectionStories.length === 0) return [];
 
   if (sectionStories.length <= CLUB_CHUNK_SIZE) {
-    return clubAndScriptBatch(sectionStories, sectionId, MAX_GROUPS_PER_SECTION);
+    return clubAndScriptBatch(sectionStories, sectionId, maxGroups);
   }
 
-  // Large section: split into chunks
+  // Large section: split into chunks, distribute groups budget proportionally
   const chunks: Story[][] = [];
   for (let i = 0; i < sectionStories.length; i += CLUB_CHUNK_SIZE) {
     chunks.push(sectionStories.slice(i, i + CLUB_CHUNK_SIZE));
   }
-
-  // Groups budget per chunk — distribute MAX_GROUPS_PER_SECTION proportionally
-  const groupsPerChunk = Math.max(
-    3,
-    Math.ceil(MAX_GROUPS_PER_SECTION / chunks.length),
-  );
+  const groupsPerChunk = Math.max(2, Math.ceil(maxGroups / chunks.length));
 
   console.log(
     `[generator] ${sectionId}: ${sectionStories.length} stories → ${chunks.length} chunks × ~${groupsPerChunk} groups each`,
@@ -451,10 +449,12 @@ async function clubAndScriptAllSections(
 
     const sectionStories = bySection.get(sectionId) ?? [];
     const emoji          = FEED_MAP.get(sectionId)?.emoji ?? "📰";
-    logger(`  ${emoji} ${sectionId}: ${sectionStories.length} raw stories → clubbing…`);
+    const isPriority     = PRIORITY_SECTIONS.includes(sectionId);
+    const maxGroups      = isPriority ? MAX_GROUPS_PRIMARY : MAX_GROUPS_SECONDARY;
+    logger(`  ${emoji} ${sectionId}: ${sectionStories.length} raw → max ${maxGroups} stories (${isPriority ? "primary" : "secondary"})…`);
 
     try {
-      const clubbed = await clubAndScriptSection(sectionStories, sectionId);
+      const clubbed = await clubAndScriptSection(sectionStories, sectionId, maxGroups);
       allClubbedStories.push(...clubbed);
       logger(`    → ${clubbed.length} stories after clubbing`);
     } catch (err: any) {
@@ -472,8 +472,9 @@ async function clubAndScriptAllSections(
 // Estimates listen time from word count. If over TARGET_MINS, trims stories
 // from the tail of non-priority sections (lowest priority first).
 
+// Secondary sections only — priority sections (headlines, india, world, business) never trimmed
 const TRIM_ORDER: SectionId[] = [
-  "local", "health", "science", "entertainment", "sports", "technology", "india",
+  "local", "health", "science", "entertainment", "sports", "technology",
 ];
 
 function estimateMins(stories: Story[]): number {
@@ -507,32 +508,43 @@ function applyTimeGuard(stories: Story[], logger: Logger): Story[] {
   return trimmed;
 }
 
-// ─── Step 5: TTS — one call per story per language ───────────────────────────
+// ─── Step 5: TTS — one call per story per language (same structure for all providers) ──
 
 async function generateAllTTS(
   stories: Story[],
   date: string,
+  provider: TtsProvider,
   logger: Logger,
   onStoryDone?: (stories: Story[]) => Promise<void>,
 ): Promise<Story[]> {
   const updated = stories.map(s => ({ ...s }));
+  const label   = provider === "google" ? "Google" : "ElevenLabs";
 
-  logger(`TTS: ${stories.length} stories × 2 languages = ${stories.length * 2} calls…`);
+  logger(`TTS (${label}): ${stories.length} stories × 2 languages = ${stories.length * 2} calls…`);
 
   for (let i = 0; i < stories.length; i++) {
-    if (isAbortRequested()) { logger("⛔ Aborted by stop request"); break; }
-    if (isQuotaExhausted()) { logger("⛔ Daily TTS quota exhausted — stopping. Add credits or retry tomorrow."); break; }
+    if (isAbortRequested())    { logger("⛔ Aborted by stop request"); break; }
+    if (isDailyQuotaExhausted()) { logger("⛔ Google TTS daily quota exhausted"); break; }
+    if (isQuotaExhausted())    { logger("⛔ ElevenLabs quota exhausted — top up credits to continue."); break; }
 
     const story    = stories[i];
     const fileBase = `${date}-${story.id}`;
     let gotEn = false;
     let gotHi = false;
 
+    const synthesize = async (script: string, filename: string): Promise<string> => {
+      if (provider === "google") {
+        const { url } = await googleTTS(script, filename);
+        return url;
+      }
+      const { url } = await elevenLabsTTS(script, filename);
+      return url;
+    };
+
     // EN
     if (story.scriptEn) {
       try {
-        const { url } = await elevenLabsTTS(story.scriptEn, `${fileBase}-en`);
-        updated[i].audioUrlEn    = url;
+        updated[i].audioUrlEn    = await synthesize(story.scriptEn, `${fileBase}-en`);
         updated[i].audioStartSec = 0;
         gotEn = true;
       } catch (err: any) {
@@ -540,14 +552,14 @@ async function generateAllTTS(
       }
     }
 
-    if (isAbortRequested()) { logger("⛔ Aborted by stop request"); break; }
-    if (isQuotaExhausted()) { logger("⛔ Daily TTS quota exhausted — stopping. Add credits or retry tomorrow."); break; }
+    if (isAbortRequested())    { logger("⛔ Aborted by stop request"); break; }
+    if (isDailyQuotaExhausted()) { logger("⛔ Google TTS daily quota exhausted"); break; }
+    if (isQuotaExhausted())    { logger("⛔ ElevenLabs quota exhausted — top up credits to continue."); break; }
 
     // HI
     if (story.scriptHi) {
       try {
-        const { url } = await elevenLabsTTS(story.scriptHi, `${fileBase}-hi`);
-        updated[i].audioUrlHi = url;
+        updated[i].audioUrlHi = await synthesize(story.scriptHi, `${fileBase}-hi`);
         gotHi = true;
       } catch (err: any) {
         logger(`  ✗ HI [${i + 1}/${stories.length}]: ${err.message?.slice(0, 80)}`);
@@ -557,7 +569,7 @@ async function generateAllTTS(
     if (gotEn || gotHi) {
       logger(`  ✓ [${i + 1}/${stories.length}] ${story.title.slice(0, 55)}`);
     } else {
-      logger(`  ⚠ [${i + 1}/${stories.length}] no audio saved — ${story.title.slice(0, 45)}`);
+      logger(`  ⚠ [${i + 1}/${stories.length}] no audio — ${story.title.slice(0, 45)}`);
     }
     if (onStoryDone) await onStoryDone([...updated]);
   }
@@ -648,6 +660,7 @@ export const getTodayBriefing = getLatestBriefing;
 export async function generateDailyBriefing(
   logger: Logger = () => {},
   city = DEFAULT_CITY,
+  ttsProvider: TtsProvider = "google",
 ): Promise<DailyBriefing> {
   const date = new Date().toISOString().slice(0, 10);
   const log  = (msg: string) => { console.log(`[generator] ${msg}`); logger(msg); };
@@ -692,8 +705,9 @@ export async function generateDailyBriefing(
   await saveBriefing({ date, generatedAt: new Date().toISOString(), stories: guarded });
   log(`Scripts done — ${guarded.length} stories, saving before TTS…`);
 
-  // Step 5: Per-story TTS
-  const withAudio = await generateAllTTS(guarded, date, log, async (partialStories) => {
+  // Step 5: TTS — per-story, same structure for all providers
+  log(`TTS provider: ${ttsProvider} (${guarded.length} stories × 2 langs = ${guarded.length * 2} calls)`);
+  const withAudio = await generateAllTTS(guarded, date, ttsProvider, log, async (partialStories) => {
     await saveBriefing({ date, generatedAt: new Date().toISOString(), stories: partialStories });
   });
 
