@@ -249,41 +249,54 @@ function extractOgImage(html: string): string | undefined {
   return undefined;
 }
 
+// Real Chrome UA — Googlebot gets blocked or served bot-challenge pages on most Indian news sites
+const FETCH_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1";
+
 async function fetchOgImage(url: string): Promise<string | undefined> {
+  const ctrl  = new AbortController();
+  // Single timer covers the ENTIRE request (connect + headers + body read)
+  const timer = setTimeout(() => ctrl.abort(), 8000);
   try {
-    const ctrl  = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 5000);
-    const res   = await fetch(url, {
+    const res = await fetch(url, {
       signal: ctrl.signal,
       headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
-        "Accept":     "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+        "User-Agent":      FETCH_UA,
+        "Accept":          "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-IN,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
       },
       redirect: "follow",
     });
-    clearTimeout(timer);
     if (!res.ok) return undefined;
     const reader = res.body?.getReader();
     if (!reader) return undefined;
     const chunks: Uint8Array[] = [];
     let total = 0;
-    while (total < 20_000) {
+    // Read up to 40KB — enough to clear verbose <head> sections on Indian news sites
+    while (total < 40_000) {
       const { done, value } = await reader.read();
       if (done || !value) break;
       chunks.push(value);
       total += value.byteLength;
     }
-    reader.cancel().catch(() => {});
+    // Abort to cleanly close the connection (better than reader.cancel())
+    ctrl.abort();
     const html = new TextDecoder().decode(
       chunks.reduce((acc, c) => { const a = new Uint8Array(acc.length + c.length); a.set(acc); a.set(c, acc.length); return a; }, new Uint8Array(0))
     );
     return extractOgImage(html);
   } catch {
     return undefined;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
-async function fetchAllOgImages(stories: Story[], logger: Logger): Promise<Story[]> {
+async function fetchAllOgImages(
+  stories: Story[],
+  logger: Logger,
+  liveMap?: Map<string, string>,  // optional shared map populated as images arrive
+): Promise<Story[]> {
   logger(`Fetching OG images for ${stories.length} stories (10 concurrent)…`);
   const updated     = stories.map((s) => ({ ...s }));
   const CONCURRENCY = 10;
@@ -292,9 +305,16 @@ async function fetchAllOgImages(stories: Story[], logger: Logger): Promise<Story
     const slice = stories.slice(i, i + CONCURRENCY);
     await Promise.allSettled(
       slice.map(async (story, j) => {
-        if (updated[i + j].imageUrl) return;
+        const idx = i + j;
+        if (updated[idx].imageUrl) {
+          liveMap?.set(story.id, updated[idx].imageUrl!);
+          return;
+        }
         const img = await fetchOgImage(story.link);
-        if (img) updated[i + j] = { ...updated[i + j], imageUrl: img };
+        if (img) {
+          updated[idx] = { ...updated[idx], imageUrl: img };
+          liveMap?.set(story.id, img);   // make available to concurrent scripting saves
+        }
       }),
     );
   }
@@ -916,14 +936,26 @@ export async function generateDailyBriefing(
     if (n > 0) log(`  ${feed.emoji} ${feed.label}: ${n}`);
   }
 
-  // Steps 2b + 3 in parallel: OG images and club+script are independent
+  // Steps 2b + 3 in parallel: OG images and club+script are independent.
+  // Images are collected into a shared map as they arrive so partial saves
+  // during scripting can include already-fetched images.
   const t1 = Date.now();
   log(`Fetching OG images and scripting in parallel…`);
+  const liveImageById = new Map<string, string>(); // populated as OG fetches complete
+
   const [withImages, clubbed] = await Promise.all([
-    fetchAllOgImages(rawStories, log),
+    // Image fetcher: fill liveImageById as each batch completes
+    (async () => {
+      const result = await fetchAllOgImages(rawStories, log, liveImageById);
+      return result;
+    })(),
     scriptAllStories(rawStories, log, async (partial) => {
-      await saveBriefing({ date, generatedAt: new Date().toISOString(), stories: partial, generatedLanguages: languages });
-      log(`  💾 saved ${partial.length} stories so far`);
+      // Merge whatever images have arrived so far into the partial save
+      const withLiveImages = partial.map(s =>
+        s.imageUrl ? s : { ...s, imageUrl: liveImageById.get(s.id) }
+      );
+      await saveBriefing({ date, generatedAt: new Date().toISOString(), stories: withLiveImages, generatedLanguages: languages });
+      log(`  💾 saved ${partial.length} stories (${withLiveImages.filter(s => s.imageUrl).length} with images)`);
     }, languages),
   ]);
   const clubSec = (Date.now() - t1) / 1000;
