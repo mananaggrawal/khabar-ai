@@ -240,13 +240,17 @@ export async function handlePatchTTS(request: Request): Promise<Response> {
     try { writer.write(enc.encode(`data: ${JSON.stringify(data)}\n\n`)); } catch {}
   };
 
+  const patchReqUrl = new URL(request.url, "http://localhost");
+  const patchProvider = (patchReqUrl.searchParams.get("provider") ?? "google") as TtsProvider;
+
   generating = true;
-  runningJob = "patch-tts";
+  runningJob = `patch-tts:${patchProvider}`;
   resetAbort();
   resetQuota();
+  resetDailyQuota();
   (async () => {
     try {
-      const { patched, briefing } = await generateMissingTTS((msg) => send({ type: "log", msg }));
+      const { patched, briefing } = await generateMissingTTS((msg) => send({ type: "log", msg }), patchProvider);
       send({ type: "done", patched, stories: briefing.stories.length });
     } catch (err: any) {
       send({ type: "error", msg: err?.message ?? "TTS patch failed" });

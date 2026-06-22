@@ -599,6 +599,17 @@ function adminPage(supabaseUrl, supabaseKey) {
       <div style="height:12px;"></div>
       <div class="group">
         <div class="gen-sub">Generate audio for stories that already have scripts but no audio (e.g. after a quota reset).</div>
+        <div style="display:flex;align-items:center;gap:16px;margin-bottom:10px;font-size:13px;">
+          <span style="color:var(--muted);font-weight:600;letter-spacing:.04em;text-transform:uppercase;font-size:11px;">TTS</span>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="radio" name="tts-patch-provider" value="google" checked style="accent-color:#6366f1;">
+            <span>Google</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="radio" name="tts-patch-provider" value="elevenlabs" style="accent-color:#6366f1;">
+            <span>ElevenLabs</span>
+          </label>
+        </div>
         <button class="btn-primary" id="tts-btn" onclick="runPatchTTS()">Patch missing TTS</button>
         <div id="tts-log" class="log-terminal"></div>
       </div>
@@ -739,7 +750,8 @@ function adminPage(supabaseUrl, supabaseKey) {
 
   function jobLabel(job) {
     if (!job) return 'Running…';
-    if (job.startsWith('generate:')) return 'Generating full briefing (' + job.split(':')[1] + ')';
+    if (job.startsWith('generate:'))  return 'Generating full briefing (' + job.split(':')[1] + ')';
+    if (job.startsWith('patch-tts:')) return 'Patching missing TTS (' + job.split(':')[1] + ')';
     return { 'patch-missing': 'Patching missing sections', 'patch-tts': 'Patching missing TTS', cron: 'Running cron job' }[job] ?? 'Running…';
   }
 
@@ -974,7 +986,8 @@ function adminPage(supabaseUrl, supabaseKey) {
     startPolling();
 
     try {
-      const r = await fetch('/api/admin/patch-tts', { method: 'POST', headers: { 'x-admin-key': AKEY } });
+      const patchProvider = document.querySelector('input[name="tts-patch-provider"]:checked')?.value ?? 'google';
+      const r = await fetch('/api/admin/patch-tts?provider=' + patchProvider, { method: 'POST', headers: { 'x-admin-key': AKEY } });
       if (r.status === 409) {
         appendTTSLog('log', 'Generation already in progress — check back shortly.');
         btn.disabled = false; btn.textContent = 'Patch missing TTS';

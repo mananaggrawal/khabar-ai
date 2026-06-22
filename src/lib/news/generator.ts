@@ -840,6 +840,7 @@ export async function generateMissingSections(
 
 export async function generateMissingTTS(
   logger: Logger = () => {},
+  provider: TtsProvider = "google",
 ): Promise<{ patched: number; briefing: DailyBriefing }> {
   const log = (msg: string) => { console.log(`[generator] ${msg}`); logger(msg); };
 
@@ -855,14 +856,24 @@ export async function generateMissingTTS(
     return { patched: 0, briefing: existing };
   }
 
-  log(`TTS patch: ${missing.length} stories missing audio…`);
+  const synthesize = async (script: string, filename: string): Promise<string> => {
+    if (provider === "google") {
+      const { url } = await googleTTS(script, filename);
+      return url;
+    }
+    const { url } = await elevenLabsTTS(script, filename);
+    return url;
+  };
+
+  log(`TTS patch (${provider}): ${missing.length} stories missing audio…`);
 
   const updated = existing.stories.map(s => ({ ...s }));
   let patched   = 0;
 
   for (const story of missing) {
-    if (isAbortRequested()) { log("⛔ Aborted by stop request"); break; }
-    if (isQuotaExhausted()) { log("⛔ Daily TTS quota exhausted — stopping. Add credits or retry tomorrow."); break; }
+    if (isAbortRequested())      { log("⛔ Aborted by stop request"); break; }
+    if (isQuotaExhausted())      { log("⛔ ElevenLabs quota exhausted — stopping."); break; }
+    if (isDailyQuotaExhausted()) { log("⛔ Google TTS daily quota exhausted — stopping."); break; }
 
     const idx      = updated.findIndex(s => s.id === story.id);
     if (idx < 0) continue;
@@ -871,8 +882,7 @@ export async function generateMissingTTS(
 
     if (story.scriptEn && !story.audioUrlEn) {
       try {
-        const { url } = await elevenLabsTTS(story.scriptEn, `${fileBase}-en`);
-        updated[idx].audioUrlEn    = url;
+        updated[idx].audioUrlEn    = await synthesize(story.scriptEn, `${fileBase}-en`);
         updated[idx].audioStartSec = 0;
         patched++;
         gotAny = true;
@@ -881,13 +891,13 @@ export async function generateMissingTTS(
       }
     }
 
-    if (isAbortRequested()) { log("⛔ Aborted by stop request"); break; }
-    if (isQuotaExhausted()) { log("⛔ Daily TTS quota exhausted — stopping. Add credits or retry tomorrow."); break; }
+    if (isAbortRequested())      { log("⛔ Aborted by stop request"); break; }
+    if (isQuotaExhausted())      { log("⛔ ElevenLabs quota exhausted — stopping."); break; }
+    if (isDailyQuotaExhausted()) { log("⛔ Google TTS daily quota exhausted — stopping."); break; }
 
     if (story.scriptHi && !story.audioUrlHi) {
       try {
-        const { url } = await elevenLabsTTS(story.scriptHi, `${fileBase}-hi`);
-        updated[idx].audioUrlHi = url;
+        updated[idx].audioUrlHi = await synthesize(story.scriptHi, `${fileBase}-hi`);
         patched++;
         gotAny = true;
       } catch (err: any) {
