@@ -40,6 +40,7 @@ export type Story = {
   publishedAt: string;
   section: SectionId;
   imageUrl?: string;
+  description?: string;   // RSS snippet — used by Gemini to write richer scripts
   sources?: StorySource[]; // all raw articles that were merged into this story
   scriptEn: string;
   scriptHi: string;
@@ -177,8 +178,9 @@ function buildStories(feedMap: Map<SectionId, RssItem[]>): Story[] {
         publishedAt: item.pubDate
           ? new Date(item.pubDate).toISOString()
           : new Date().toISOString(),
-        section:  sectionId,
-        imageUrl: item.imageUrl,
+        section:     sectionId,
+        imageUrl:    item.imageUrl,
+        description: item.description,
         scriptEn: "",
         scriptHi: "",
       });
@@ -296,12 +298,14 @@ YOUR JOB:
 4. IMPORTANT: Produce at most ${maxGroups} groups total. If there are more distinct topics than ${maxGroups}, prioritise the most significant/impactful stories and fold minor duplicates into the nearest related group.
 
 SCRIPT RULES:
-- 60-80 words, 3-4 punchy sentences
-- Warm Indian English, conversational — not a broadcaster
-- Start directly with the news. No greeting, no "In other news", no sign-off
-- Name specific people, companies, countries — no vague pronouns
+- 60-80 words, 3-4 sentences
+- Warm Indian English — conversational, not a broadcaster. Sound like a smart friend explaining something interesting, not reading a headline
+- Use the description/context provided — go beyond the headline. Include the why, the who, the implication
+- Start directly with the substance. Never start with "In a...", "According to...", or a rephrased headline
+- Name specific people, companies, numbers, places — no vague pronouns or generalities
+- Add ONE line of context or implication: why does this matter? what happens next?
 - Never guess or hedge on the year — these are today's stories (${today})
-- scriptHi: same content in Hindi, keep English names/brands/numbers as-is
+- scriptHi: same content in Hindi, keep English names/brands/numbers as-is, natural spoken Hindi not translated English
 
 CRITICAL: Every story (0 to ${sectionStories.length - 1}) must appear in exactly one group's sourceIndices.
 
@@ -309,7 +313,10 @@ Return JSON array only, no markdown:
 [{"title":"...","scriptEn":"...","scriptHi":"...","sourceIndices":[0,1,3]}]
 
 Stories:
-${sectionStories.map((s, i) => `${i}. [${s.source}] ${s.title}`).join("\n")}`;
+${sectionStories.map((s, i) => {
+    const desc = s.description?.replace(/\s+/g, " ").trim().slice(0, 300);
+    return `${i}. [${s.source}] ${s.title}${desc ? `\n   → ${desc}` : ""}`;
+  }).join("\n")}`;
 
   try {
     const result: ClubbedGroup[] = await geminiJson(prompt);
