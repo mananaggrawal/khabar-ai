@@ -590,9 +590,9 @@ async function generateAllTTS(
       }
     }
 
-    if (isAbortRequested())    { logger("⛔ Aborted by stop request"); break; }
-    if (isDailyQuotaExhausted()) { logger("⛔ Google TTS daily quota exhausted"); break; }
-    if (isQuotaExhausted())    { logger("⛔ ElevenLabs quota exhausted — top up credits to continue."); break; }
+    if (isAbortRequested()) { logger("⛔ Aborted by stop request"); break; }
+    if (provider === "google"     && isDailyQuotaExhausted()) { logger("⛔ Google TTS daily quota exhausted"); break; }
+    if (provider === "elevenlabs" && isQuotaExhausted())      { logger("⛔ ElevenLabs quota exhausted — top up credits to continue."); break; }
 
     // HI
     if (story.scriptHi) {
@@ -612,6 +612,11 @@ async function generateAllTTS(
       logger(`  ⚠ [${i + 1}/${stories.length}] no audio — ${story.title.slice(0, 45)}`);
     }
     if (onStoryDone) await onStoryDone([...updated]);
+
+    // Proactive inter-call delay for Google to stay under RPM limit (~10 RPM on preview model)
+    if (provider === "google" && i < stories.length - 1) {
+      await new Promise(r => setTimeout(r, 6_000));
+    }
   }
 
   const totalChars = enChars + hiChars;
@@ -880,12 +885,11 @@ export async function generateMissingTTS(
   }
 
   const synthesize = async (script: string, filename: string): Promise<string> => {
-    if (provider === "google") {
-      const { url } = await googleTTS(script, filename);
-      return url;
-    }
-    const { url } = await elevenLabsTTS(script, filename);
-    return url;
+    if (provider === "google")     { const { url } = await googleTTS(script, filename);     return url; }
+    if (provider === "elevenlabs") { const { url } = await elevenLabsTTS(script, filename);  return url; }
+    if (provider === "edge")       { const { url } = await edgeTTS(script, filename);        return url; }
+    if (provider === "kokoro")     { const { url } = await kokoroTTS(script, filename);      return url; }
+    throw new Error(`Unknown TTS provider: ${provider}`);
   };
 
   log(`TTS patch (${provider}): ${missing.length} stories missing audio…`);
@@ -894,9 +898,9 @@ export async function generateMissingTTS(
   let patched   = 0;
 
   for (const story of missing) {
-    if (isAbortRequested())      { log("⛔ Aborted by stop request"); break; }
-    if (isQuotaExhausted())      { log("⛔ ElevenLabs quota exhausted — stopping."); break; }
-    if (isDailyQuotaExhausted()) { log("⛔ Google TTS daily quota exhausted — stopping."); break; }
+    if (isAbortRequested())                                    { log("⛔ Aborted by stop request"); break; }
+    if (provider === "elevenlabs" && isQuotaExhausted())       { log("⛔ ElevenLabs quota exhausted — stopping."); break; }
+    if (provider === "google"     && isDailyQuotaExhausted())  { log("⛔ Google TTS daily quota exhausted — stopping."); break; }
 
     const idx      = updated.findIndex(s => s.id === story.id);
     if (idx < 0) continue;
@@ -914,9 +918,9 @@ export async function generateMissingTTS(
       }
     }
 
-    if (isAbortRequested())      { log("⛔ Aborted by stop request"); break; }
-    if (isQuotaExhausted())      { log("⛔ ElevenLabs quota exhausted — stopping."); break; }
-    if (isDailyQuotaExhausted()) { log("⛔ Google TTS daily quota exhausted — stopping."); break; }
+    if (isAbortRequested())                                    { log("⛔ Aborted by stop request"); break; }
+    if (provider === "elevenlabs" && isQuotaExhausted())       { log("⛔ ElevenLabs quota exhausted — stopping."); break; }
+    if (provider === "google"     && isDailyQuotaExhausted())  { log("⛔ Google TTS daily quota exhausted — stopping."); break; }
 
     if (story.scriptHi && !story.audioUrlHi) {
       try {

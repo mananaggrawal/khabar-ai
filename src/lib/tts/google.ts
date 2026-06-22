@@ -14,14 +14,44 @@ import { uploadAudio } from "@/lib/supabase-storage";
 
 const LOCAL_MODE = process.env.LOCAL_MODE === "true";
 
+// ── Model rotation — three models, 250 RPD total (enough for one full run) ──
+// All available Gemini TTS models — rotated through when one hits its daily RPD limit.
+// Combined RPD: 100 + 100 + 50 = 250/day (enough for a full run of ~100 stories × 2 langs).
+// If a model string is wrong you'll see a 404 — check AI Studio for the exact name.
+const MODELS = [
+  "gemini-2.5-flash-preview-tts",  // 100 RPD
+  "gemini-3.1-flash-tts-preview",  // 100 RPD (note: tts before preview)
+  "gemini-2.5-pro-preview-tts",    //  50 RPD — last resort
+] as const;
+
+const _modelExhausted: Record<string, boolean> = {};
+let _activeModelIdx = 0;
+
+function getActiveModel(): string {
+  // Find first non-exhausted model
+  for (let i = 0; i < MODELS.length; i++) {
+    const idx = (_activeModelIdx + i) % MODELS.length;
+    if (!_modelExhausted[MODELS[idx]]) return MODELS[idx];
+  }
+  return MODELS[0]; // all exhausted — return primary so caller gets the right error
+}
+
+function markModelExhausted(model: string) {
+  _modelExhausted[model] = true;
+  console.warn(`[tts/google] ${model} daily quota hit — rotating to next model`);
+  // Advance active index past exhausted model
+  _activeModelIdx = (_activeModelIdx + 1) % MODELS.length;
+}
+
 // ── Daily quota guard ─────────────────────────────────────────────────────────
-let _dailyQuotaExhausted = false;
-export const isDailyQuotaExhausted = () => _dailyQuotaExhausted;
-export const resetDailyQuota       = () => { _dailyQuotaExhausted = false; };
+export const isDailyQuotaExhausted = () => MODELS.every(m => _modelExhausted[m]);
+export const resetDailyQuota = () => {
+  MODELS.forEach(m => { _modelExhausted[m] = false; });
+  _activeModelIdx = 0;
+};
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const MODEL       = "gemini-2.5-flash-preview-tts";
 const VOICE       = "Algieba";
 const SAMPLE_RATE = 24_000; // Hz — Gemini TTS always outputs 24 kHz PCM
 
@@ -34,8 +64,8 @@ const STYLE_HI =
   "Indian Hindi male voice. Warm, clear delivery. Conversational, not formal. " +
   "Natural pauses between stories. Keep English names and brands in original pronunciation.";
 
-const GEMINI_TTS_URL = (key: string) =>
-  `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${key}`;
+const GEMINI_TTS_URL = (model: string, key: string) =>
+  `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
 
 function getKey(): string {
   const k = process.env.GEMINI_API_KEY;
@@ -46,9 +76,10 @@ function getKey(): string {
 // ── Core synthesis ────────────────────────────────────────────────────────────
 
 async function synthesizeRaw(script: string, style?: string, embedStyle = false): Promise<Buffer> {
-  if (_dailyQuotaExhausted) {
+  if (isDailyQuotaExhausted()) {
     throw new Error("Gemini TTS daily quota exhausted — skipping API call");
   }
+  const model = getActiveModel();
   // Primary: pass style as system_instruction (better voice quality).
   // Fallback (embedStyle=true): prepend style in user text when system_instruction causes 500.
   const text = (embedStyle && style) ? `${style}\n\n${script}` : script;
@@ -62,7 +93,7 @@ async function synthesizeRaw(script: string, style?: string, embedStyle = false)
     },
   };
   if (style && !embedStyle) body.system_instruction = { parts: [{ text: style }] };
-  const res = await fetch(GEMINI_TTS_URL(getKey()), {
+  const res = await fetch(GEMINI_TTS_URL(model, getKey()), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -103,15 +134,30 @@ async function synthesizeWithRetry(
       const is429     = msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED");
       console.warn(`[tts/google] ${tag} attempt ${attempt}/${maxAttempts}: ${msg.slice(0, 120)}`);
       const isOther   = err.finishReason === "OTHER" || msg.includes("Finish reason: OTHER");
-      if (isDaily || isBilling) {
-        _dailyQuotaExhausted = true;
-        console.warn(`[tts/google] fatal quota/billing error — all further TTS calls skipped`);
+      if (isBilling) {
+        // Billing failure — nothing we can do, stop everything
+        MODELS.forEach(m => { _modelExhausted[m] = true; });
+        console.warn(`[tts/google] billing error — all TTS skipped`);
         break;
+      }
+      if (isDaily) {
+        // This model hit its daily RPD limit — rotate to next and retry immediately
+        markModelExhausted(getActiveModel());
+        if (isDailyQuotaExhausted()) {
+          console.warn(`[tts/google] all models daily quota exhausted`);
+          break;
+        }
+        // Don't count this as an attempt — retry with new model right away
+        attempt--;
+        continue;
       }
       // Safety-filter hit: retrying won't help — break immediately so caller can try bare synthesis
       if (isOther) break;
       if (attempt < maxAttempts) {
-        await new Promise(r => setTimeout(r, is429 ? 10_000 * attempt : 2_000 * attempt));
+        // 429 = RPM limit hit — wait 65s to clear the 1-minute window, then retry
+        const delay = is429 ? 65_000 : 2_000 * attempt;
+        if (is429) console.warn(`[tts/google] ${tag} rate-limited — waiting 65s for window to reset…`);
+        await new Promise(r => setTimeout(r, delay));
       }
     }
   }
