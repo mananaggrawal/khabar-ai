@@ -304,6 +304,27 @@ async function fetchAllOgImages(stories: Story[], logger: Logger): Promise<Story
   return updated;
 }
 
+// Build the best possible fallback script from raw RSS fields (no Gemini)
+function fallbackScript(s: Story): string {
+  const desc = s.description
+    ?.replace(/<[^>]+>/g, "")   // strip HTML
+    .replace(/\s+/g, " ")
+    .trim();
+  if (desc && desc.length > 40) {
+    // Combine title + description into a readable sentence
+    const titleClean = s.title.replace(/\s*[-–|].*$/, "").trim(); // strip source suffix
+    const descTrimmed = desc.slice(0, 220).trim();
+    // Avoid repeating the title verbatim in the description
+    const descStart = descTrimmed.toLowerCase().startsWith(titleClean.toLowerCase().slice(0, 20))
+      ? descTrimmed
+      : `${titleClean}. ${descTrimmed}`;
+    return descStart.endsWith(".") || descStart.endsWith("?") || descStart.endsWith("!")
+      ? descStart
+      : `${descStart}.`;
+  }
+  return `${s.title}.`;
+}
+
 // ─── Step 3: Script stories — merge duplicates, keep distinct ones separate ───
 //
 // One Gemini call for all stories in a section.
@@ -471,19 +492,21 @@ async function scriptBatch(
 
   const jsonExample = `[{"title":"...","titleHi":"..."${extraLangFields ? "," + extraLangFields : ""},"scriptEn":"...","scriptHi":"..."${withTa ? `,"scriptTa":"..."` : ""}${withMr ? `,"scriptMr":"..."` : ""},"sourceIndices":[0,2]}]`;
 
-  const prompt = `You are Khabar AI — Indian news scriptwriter. Today: ${today}.
+  const prompt = `You are Khabar AI — India's sharpest spoken-audio news editor. Today: ${today}.
 Section: "${label}" (${sectionStories.length} stories).
 
 YOUR JOB:
 1. GROUPING: Merge stories only if they cover the exact same event or announcement. Different topics — even loosely related — stay in separate groups. When in doubt, keep separate.
-2. SCRIPT: Write one 50-70 word spoken-audio script per group.
+2. SCRIPT: Write one crisp, engaging 70-100 word spoken-audio script per group.
 
-SCRIPT RULES:
-- scriptEn: 50-70 words in natural spoken English — no bullet points, no headers
-- Lead with the most compelling fact. Never start with "In a...", "According to...", or a headline restatement
-- Include every number, figure, percentage, or named entity from the headline/description — these matter
-- Do NOT invent facts beyond what's in the headline or description
-- If description adds nothing, write from the headline alone — stay honest, don't pad
+SCRIPT RULES (scriptEn):
+- 70-100 words. Conversational but authoritative — like a sharp friend who just read everything so you don't have to.
+- Open with the most gripping fact or the "why this matters" angle. Never start with "In a...", "According to...", "Today,", or a restatement of the headline.
+- Weave in every number, figure, percentage, and named person or place — these make the story real.
+- Vary sentence length: mix short punchy sentences with longer ones for natural spoken rhythm.
+- Close with one sentence of context — what this means, what to watch next, or what's at stake.
+- Never hedge with "details are unclear", "reportedly", or "it is said". State what is known as fact; omit what isn't.
+- Do NOT invent facts. If information is thin, make the known facts vivid — don't pad with filler phrases.
 
 SCRIPT LANGUAGE REQUIREMENTS — STRICTLY ENFORCED:
 ${langScriptRules}
@@ -557,7 +580,7 @@ ${sectionStories.map((s, i) => {
       output.push({
         ...s,
         sources:  [{ title: s.title, source: s.source, link: s.link }],
-        scriptEn: `${s.title}.`,
+        scriptEn: fallbackScript(s),
         scriptHi: "",
         audioStartSec: 0,
       });
@@ -567,11 +590,11 @@ ${sectionStories.map((s, i) => {
     const fixed = await fixScriptLanguages(output, nonEnLangs, logger);
     return fixed;
   } catch (err: any) {
-    logger(`  ✗ ${sectionId} Gemini script failed: ${err.message?.slice(0, 120)} — using EN stubs`);
+    logger(`  ✗ ${sectionId} Gemini script failed: ${err.message?.slice(0, 120)} — using fallback stubs`);
     return sectionStories.map(s => ({
       ...s,
       sources:  [{ title: s.title, source: s.source, link: s.link }],
-      scriptEn: `${s.title}.`,
+      scriptEn: fallbackScript(s),
       scriptHi: "",   // empty — no Hindi audio rather than English audio
       audioStartSec: 0,
     }));

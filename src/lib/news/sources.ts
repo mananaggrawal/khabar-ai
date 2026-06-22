@@ -68,6 +68,7 @@ export const FEEDS: FeedConfig[] = [
     labelHi: "विश्व",
     emoji: "🌍",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.world}?${LOCALE}`,
+    fallbackUrl: `${GN_BASE}/search?q=world+international+news&${LOCALE}`,
   },
   {
     id: "business",
@@ -75,6 +76,7 @@ export const FEEDS: FeedConfig[] = [
     labelHi: "व्यापार",
     emoji: "💼",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.business}?${LOCALE}`,
+    fallbackUrl: `${GN_BASE}/search?q=india+business+economy+markets&${LOCALE}`,
   },
   {
     id: "technology",
@@ -82,6 +84,7 @@ export const FEEDS: FeedConfig[] = [
     labelHi: "तकनीक",
     emoji: "💻",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.technology}?${LOCALE}`,
+    fallbackUrl: `${GN_BASE}/search?q=technology+ai+tech+news+india&${LOCALE}`,
   },
   {
     id: "entertainment",
@@ -89,6 +92,7 @@ export const FEEDS: FeedConfig[] = [
     labelHi: "मनोरंजन",
     emoji: "🎬",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.entertainment}?${LOCALE}`,
+    fallbackUrl: `${GN_BASE}/search?q=bollywood+entertainment+movies+india&${LOCALE}`,
   },
   {
     id: "sports",
@@ -96,6 +100,7 @@ export const FEEDS: FeedConfig[] = [
     labelHi: "खेल",
     emoji: "⚽",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.sports}?${LOCALE}`,
+    fallbackUrl: `${GN_BASE}/search?q=cricket+sports+news+india&${LOCALE}`,
   },
   {
     id: "science",
@@ -103,6 +108,7 @@ export const FEEDS: FeedConfig[] = [
     labelHi: "विज्ञान",
     emoji: "🔬",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.science}?${LOCALE}`,
+    fallbackUrl: `${GN_BASE}/search?q=science+space+research+news&${LOCALE}`,
   },
   {
     id: "health",
@@ -110,6 +116,7 @@ export const FEEDS: FeedConfig[] = [
     labelHi: "स्वास्थ्य",
     emoji: "🏥",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.health}?${LOCALE}`,
+    fallbackUrl: `${GN_BASE}/search?q=health+medicine+wellness+news+india&${LOCALE}`,
   },
   {
     id: "local",
