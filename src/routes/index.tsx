@@ -192,24 +192,20 @@ function HeroCard({
       className="mx-4 mb-4 relative overflow-hidden rounded-3xl"
       style={{
         height: 220,
-        ...(bgImage ? {
-          backgroundImage: `url(${bgImage})`,
-          backgroundSize: "cover",
-          backgroundPosition: "center top",
-        } : {
-          backgroundImage: "url(/hero-bg.jpg)",
-          backgroundSize: "cover",
-          backgroundPosition: "center center",
-        }),
+        // Stack story image over hero-bg.jpg — if story image hotlink-blocks or 404s,
+        // hero-bg.jpg shows through automatically (CSS background-image fallback)
+        backgroundImage: bgImage
+          ? `url(${bgImage}), url(/hero-bg.jpg)`
+          : "url(/hero-bg.jpg)",
+        backgroundSize: "cover",
+        backgroundPosition: bgImage ? "center top, center center" : "center center",
       }}
     >
       {/* Overlay */}
       <div
         className="absolute inset-0"
         style={{
-          background: bgImage
-            ? "linear-gradient(to bottom, rgba(0,0,0,0.08) 0%, rgba(0,0,0,0.45) 40%, rgba(0,0,0,0.85) 100%)"
-            : "linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.20) 55%, rgba(0,0,0,0.72) 100%)",
+          background: "linear-gradient(to bottom, rgba(0,0,0,0.05) 0%, rgba(0,0,0,0.35) 45%, rgba(0,0,0,0.80) 100%)",
         }}
       />
 
