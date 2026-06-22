@@ -116,26 +116,51 @@ function parseGeminiJson(raw: string): any {
   throw new Error(`Failed to parse Gemini JSON: ${text.slice(0, 200)}`);
 }
 
+// Retryable status codes: 429 (rate limit), 500, 502, 503, 504 (transient server errors)
+const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
+const GEMINI_MAX_RETRIES = 4;
+const GEMINI_BASE_DELAY_MS = 5_000; // 5s → 10s → 20s → 40s
+
 async function geminiJson(prompt: string): Promise<any> {
-  const res = await fetch(GEMINI_URL(getKey()), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: {
-        responseMimeType: "application/json",
-        maxOutputTokens: 16384,  // Prevent truncation on large section batches
-      },
-    }),
-  });
-  if (!res.ok) throw new Error(`Gemini ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  const json = await res.json();
-  const finishReason = json.candidates?.[0]?.finishReason;
-  if (finishReason && finishReason !== "STOP") {
-    console.warn(`[gemini] finishReason=${finishReason}`);
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt <= GEMINI_MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      const delayMs = GEMINI_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+      console.log(`[gemini] retry ${attempt}/${GEMINI_MAX_RETRIES} after ${delayMs / 1000}s (${lastError?.message?.slice(0, 60)})`);
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+
+    const res = await fetch(GEMINI_URL(getKey()), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: {
+          responseMimeType: "application/json",
+          maxOutputTokens: 16384,  // Prevent truncation on large section batches
+        },
+      }),
+    });
+
+    if (!res.ok) {
+      const body = (await res.text()).slice(0, 300);
+      lastError = new Error(`Gemini ${res.status}: ${body}`);
+      if (RETRYABLE_STATUSES.has(res.status)) continue; // retry
+      throw lastError; // non-retryable (e.g. 400, 401)
+    }
+
+    const json = await res.json();
+    const finishReason = json.candidates?.[0]?.finishReason;
+    if (finishReason && finishReason !== "STOP") {
+      console.warn(`[gemini] finishReason=${finishReason}`);
+    }
+    const text = json.candidates?.[0]?.content?.parts?.[0]?.text ?? "[]";
+    return parseGeminiJson(text);
   }
-  const text = json.candidates?.[0]?.content?.parts?.[0]?.text ?? "[]";
-  return parseGeminiJson(text);
+
+  // All retries exhausted
+  throw lastError ?? new Error("Gemini request failed after retries");
 }
 
 // ─── Step 1: Fetch all feeds ──────────────────────────────────────────────────
