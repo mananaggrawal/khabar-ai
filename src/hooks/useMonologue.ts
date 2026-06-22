@@ -58,6 +58,28 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
     return () => window.removeEventListener("storage", onStorage);
   }, []);
 
+  // Global keyboard shortcuts: Space = play/pause, ←/→ = seek ±10s
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.key === " " || e.code === "Space") {
+        e.preventDefault();
+        const audio = audioRef.current;
+        if (!audio) return;
+        audio.paused ? audio.play().catch(() => {}) : audio.pause();
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        if (audioRef.current) audioRef.current.currentTime = Math.max(audioRef.current.currentTime - 10, 0);
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        if (audioRef.current) audioRef.current.currentTime = Math.min(audioRef.current.currentTime + 10, audioRef.current.duration || 0);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // ── Derived lists ─────────────────────────────────────────────────────────
 
   /** All stories that have audio in the current language */
