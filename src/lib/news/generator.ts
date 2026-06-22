@@ -917,7 +917,7 @@ export async function generateDailyBriefing(
   const guarded = applyTimeGuard(merged, log);
 
   // Save after scripting (before TTS so scripts survive TTS quota failures)
-  await saveBriefing({ date, generatedAt: new Date().toISOString(), stories: guarded });
+  await saveBriefing({ date, generatedAt: new Date().toISOString(), stories: guarded, generatedLanguages: languages });
   log(`Scripts done — ${guarded.length} stories, saving before TTS…`);
 
   // Step 5: TTS — per-story, same structure for all providers
@@ -1021,8 +1021,13 @@ export async function generateMissingTTS(
   const existing = await getLatestBriefing();
   if (!existing) throw new Error("No existing briefing — run full generation first");
 
-  const missing = existing.stories.filter(
-    s => (s.scriptEn && !s.audioUrlEn) || (s.scriptHi && !s.audioUrlHi),
+  // All 4 languages — a story is "missing" if it has a script but no audio for any lang
+  const PATCH_LANGS = ["en", "hi", "ta", "mr"] as const;
+  const scriptKey = (lang: string) => `script${lang.charAt(0).toUpperCase() + lang.slice(1)}` as keyof Story;
+  const audioKey  = (lang: string) => `audioUrl${lang.charAt(0).toUpperCase() + lang.slice(1)}` as keyof Story;
+
+  const missing = existing.stories.filter(s =>
+    PATCH_LANGS.some(lang => (s as any)[scriptKey(lang)] && !(s as any)[audioKey(lang)])
   );
 
   if (missing.length === 0) {
@@ -1038,7 +1043,7 @@ export async function generateMissingTTS(
     throw new Error(`Unknown TTS provider: ${provider}`);
   };
 
-  log(`TTS patch (${provider}): ${missing.length} stories missing audio…`);
+  log(`TTS patch (${provider}): ${missing.length} stories with missing audio…`);
 
   const updated = existing.stories.map(s => ({ ...s }));
   let patched   = 0;
@@ -1048,33 +1053,35 @@ export async function generateMissingTTS(
     if (provider === "elevenlabs" && isQuotaExhausted())       { log("⛔ ElevenLabs quota exhausted — stopping."); break; }
     if (provider === "google"     && isDailyQuotaExhausted())  { log("⛔ Google TTS daily quota exhausted — stopping."); break; }
 
-    const idx      = updated.findIndex(s => s.id === story.id);
+    const idx = updated.findIndex(s => s.id === story.id);
     if (idx < 0) continue;
     const fileBase = `${existing.date}-${story.id}`;
     let gotAny = false;
 
-    if (story.scriptEn && !story.audioUrlEn) {
+    for (const lang of PATCH_LANGS) {
+      if (isAbortRequested()) break;
+      if (provider === "elevenlabs" && isQuotaExhausted()) break;
+      if (provider === "google"     && isDailyQuotaExhausted()) break;
+
+      // Provider language restrictions
+      if (provider === "kokoro"     && lang !== "en")              continue;
+      if (provider === "google"     && lang !== "en" && lang !== "hi") continue;
+      if (provider === "elevenlabs" && lang !== "en" && lang !== "hi") continue;
+
+      const sk = scriptKey(lang);
+      const ak = audioKey(lang);
+      const script   = (story as any)[sk] as string | undefined;
+      const hasAudio = (story as any)[ak] as string | undefined;
+
+      if (!script || hasAudio) continue;
+
       try {
-        updated[idx].audioUrlEn    = await synthesize(story.scriptEn, `${fileBase}-en`);
-        updated[idx].audioStartSec = 0;
+        (updated[idx] as any)[ak] = await synthesize(script, `${fileBase}-${lang}`);
+        if (lang === "en") updated[idx].audioStartSec = 0;
         patched++;
         gotAny = true;
       } catch (err: any) {
-        log(`  ✗ EN ${story.id}: ${err.message?.slice(0, 80)}`);
-      }
-    }
-
-    if (isAbortRequested())                                    { log("⛔ Aborted by stop request"); break; }
-    if (provider === "elevenlabs" && isQuotaExhausted())       { log("⛔ ElevenLabs quota exhausted — stopping."); break; }
-    if (provider === "google"     && isDailyQuotaExhausted())  { log("⛔ Google TTS daily quota exhausted — stopping."); break; }
-
-    if (story.scriptHi && !story.audioUrlHi) {
-      try {
-        updated[idx].audioUrlHi = await synthesize(story.scriptHi, `${fileBase}-hi`);
-        patched++;
-        gotAny = true;
-      } catch (err: any) {
-        log(`  ✗ HI ${story.id}: ${err.message?.slice(0, 80)}`);
+        log(`  ✗ ${lang.toUpperCase()} ${story.id.slice(0, 8)}: ${err.message?.slice(0, 80)}`);
       }
     }
 

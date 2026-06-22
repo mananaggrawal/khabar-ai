@@ -2,9 +2,16 @@
  * Edge TTS — Microsoft's neural voices via the msedge-tts package.
  *
  * Completely free, no API key required.
- * EN voice: en-IN-PrabhatNeural (Indian English male)
- * HI voice: hi-IN-MadhurNeural  (Hindi male)
- * Output: MP3 @ 24 kHz (stored as .mp3)
+ * Two voices per language for A/B quality testing — split deterministically
+ * by story ID so results are consistent across re-runs.
+ *
+ * Voice roster (A = index 0, B = index 1):
+ *   EN: en-IN-PrabhatNeural (male)   | en-IN-NeerjaExpressiveNeural (female, expressive)
+ *   HI: hi-IN-MadhurNeural (male)    | hi-IN-SwaraNeural (female)
+ *   TA: ta-IN-ValluvarNeural (male)   | ta-IN-PallaviNeural (female)
+ *   MR: mr-IN-ManoharNeural (male)   | mr-IN-AarohiNeural (female)
+ *
+ * Output: MP3 @ 24 kHz 96 kbps mono
  */
 
 import { MsEdgeTTS, OUTPUT_FORMAT } from "msedge-tts";
@@ -14,12 +21,25 @@ import { uploadAudio } from "@/lib/supabase-storage";
 
 const LOCAL_MODE = process.env.LOCAL_MODE === "true";
 
-const VOICES: Record<string, string> = {
-  en: "en-IN-PrabhatNeural",
-  hi: "hi-IN-MadhurNeural",
-  ta: "ta-IN-ValluvarNeural",
-  mr: "mr-IN-AarohiNeural",
+// Two voices per language: [A, B]. A/B chosen by story-ID hash (50/50 split).
+const VOICES: Record<string, [string, string]> = {
+  en: ["en-IN-PrabhatNeural",   "en-IN-NeerjaExpressiveNeural"],
+  hi: ["hi-IN-MadhurNeural",    "hi-IN-SwaraNeural"],
+  ta: ["ta-IN-ValluvarNeural",  "ta-IN-PallaviNeural"],
+  mr: ["mr-IN-ManoharNeural",   "mr-IN-AarohiNeural"],
 };
+
+/**
+ * Deterministically pick voice A or B for a given story.
+ * Uses the first hex digit of the story ID — 0-7 → A, 8-f → B.
+ * Same story always gets the same voice across re-runs.
+ */
+function pickVoice(lang: string, storyId: string): string {
+  const pair = VOICES[lang] ?? VOICES.en;
+  const firstHex = parseInt(storyId[0] ?? "0", 16); // 0–15
+  const variant  = firstHex < 8 ? 0 : 1;            // 50/50 split
+  return pair[variant];
+}
 
 // Estimate duration from MP3 bitrate (96 kbps = 12 KB/s)
 function estimateMp3Duration(bytes: number): number {
@@ -44,6 +64,7 @@ async function synthesize(script: string, voice: string): Promise<Buffer> {
 async function saveMp3(
   mp3: Buffer,
   filename: string,
+  voice: string,
 ): Promise<{ url: string; durationSec: number }> {
   const durationSec = estimateMp3Duration(mp3.length);
   const kb = (mp3.length / 1024).toFixed(0);
@@ -52,12 +73,12 @@ async function saveMp3(
     const dir = join(process.cwd(), "public", "audio");
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, `${filename}.mp3`), mp3);
-    console.log(`[tts/edge] saved ${filename}.mp3 — ${kb}KB ~${durationSec.toFixed(1)}s`);
+    console.log(`[tts/edge] ✓ ${filename}.mp3 — voice: ${voice}, ${kb}KB, ~${durationSec.toFixed(1)}s`);
     return { url: `/audio/${filename}.mp3`, durationSec };
   }
 
   const url = await uploadAudio(`${filename}.mp3`, mp3, "audio/mpeg");
-  console.log(`[tts/edge] uploaded ${filename}.mp3 — ${kb}KB ~${durationSec.toFixed(1)}s`);
+  console.log(`[tts/edge] ✓ ${filename}.mp3 — voice: ${voice}, ${kb}KB, ~${durationSec.toFixed(1)}s`);
   return { url, durationSec };
 }
 
@@ -65,10 +86,14 @@ export async function edgeTTS(
   script: string,
   filename: string,
 ): Promise<{ url: string; durationSec: number }> {
-  // Extract language code from filename suffix (e.g., "2026-06-22-abc123-ta" → "ta")
-  const match = filename.match(/-([a-z]{2})$/);
-  const lang  = match?.[1] ?? "en";
-  const voice = VOICES[lang] ?? VOICES.en;
-  const mp3   = await synthesize(script, voice);
-  return saveMp3(mp3, filename);
+  // Filename format: "YYYY-MM-DD-<storyId16>-<lang>"
+  // e.g. "2026-06-22-3a9f1b2c4d5e6f7a-hi"
+  const parts = filename.split("-");
+  const lang    = parts[parts.length - 1] ?? "en";         // last segment
+  const storyId = parts[parts.length - 2] ?? "";           // second-to-last = 16-char hex ID
+  const voice   = pickVoice(lang, storyId);
+
+  console.log(`[tts/edge] ${lang.toUpperCase()} → ${voice} (story: ${storyId.slice(0, 8)}…)`);
+  const mp3 = await synthesize(script, voice);
+  return saveMp3(mp3, filename, voice);
 }
