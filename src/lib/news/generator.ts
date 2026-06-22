@@ -38,6 +38,7 @@ export type StorySource = {
 export type Story = {
   id: string;
   title: string;
+  titleHi?: string;        // Hindi title — shown in UI when language = "hi"
   source: string;
   link: string;
   publishedAt: string;
@@ -66,7 +67,7 @@ const TARGET_WPM   = 150;  // average reading/speech rate
 const TARGET_MINS  = 30;   // soft cap — secondary sections trimmed only if well over this
 
 // Max clubbed groups (stories) per section.
-// At ~70 words/story, 150 WPM: primary (4×5) + secondary (6×3) ≈ 38 stories ≈ 17.7 min.
+// At ~70 words/story, 150 WPM: primary (4×6) + secondary (6×4) ≈ 40 stories ≈ 18 min.
 const MAX_GROUPS_PRIMARY   = 6;  // headlines, india, world, business — never dropped
 const MAX_GROUPS_SECONDARY = 4;  // all other sections — trimmed only if well over budget
 
@@ -272,6 +273,7 @@ async function fetchAllOgImages(stories: Story[], logger: Logger): Promise<Story
 
 interface ClubbedGroup {
   title:         string;
+  titleHi:       string;
   scriptEn:      string;
   scriptHi:      string;
   sourceIndices: number[];
@@ -296,8 +298,8 @@ Below are ${sectionStories.length} stories from the "${label}" section.
 YOUR JOB:
 1. Group stories that cover the same event, person, or topic. Different sources covering the same development → one group.
 2. Stories with no close match → their own group (size 1).
-3. Write one script per group that synthesises ALL its sources. No source's key information may be omitted.
-4. IMPORTANT: Produce at most ${maxGroups} groups total. If there are more distinct topics than ${maxGroups}, prioritise the most significant/impactful stories and fold minor duplicates into the nearest related group.
+3. Write one script per group that covers EVERY story in the group — if a group has 3 sources, all 3 must contribute distinct facts, angles, or developments to the script. Never summarise just one source and ignore the rest.
+4. IMPORTANT: Produce at most ${maxGroups} groups total. If there are more distinct topics than ${maxGroups}, fold minor or related stories into the nearest thematically relevant group — but the script for that group must then cover all folded stories.
 
 SCRIPT RULES:
 - 60-80 words, 3-4 sentences
@@ -312,7 +314,9 @@ SCRIPT RULES:
 CRITICAL: Every story (0 to ${sectionStories.length - 1}) must appear in exactly one group's sourceIndices.
 
 Return JSON array only, no markdown:
-[{"title":"...","scriptEn":"...","scriptHi":"...","sourceIndices":[0,1,3]}]
+[{"title":"...","titleHi":"...","scriptEn":"...","scriptHi":"...","sourceIndices":[0,1,3]}]
+
+titleHi: the story title translated into natural Hindi (keep proper nouns, brand names, numbers in their original form).
 
 Stories:
 ${sectionStories.map((s, i) => {
@@ -352,6 +356,7 @@ ${sectionStories.map((s, i) => {
         ...primary,
         id:       primary.id,
         title:    group.title   || primary.title,
+        titleHi:  group.titleHi || undefined,
         sources,
         scriptEn: group.scriptEn || `${primary.title}. Details are emerging.`,
         scriptHi: group.scriptHi || `${primary.title}। विवरण आ रहे हैं।`,
@@ -450,8 +455,9 @@ async function clubAndScriptAllSections(
     const sectionStories = bySection.get(sectionId) ?? [];
     const emoji          = FEED_MAP.get(sectionId)?.emoji ?? "📰";
     const isPriority     = PRIORITY_SECTIONS.includes(sectionId);
-    const maxGroups      = isPriority ? MAX_GROUPS_PRIMARY : MAX_GROUPS_SECONDARY;
-    logger(`  ${emoji} ${sectionId}: ${sectionStories.length} raw → max ${maxGroups} stories (${isPriority ? "primary" : "secondary"})…`);
+    const maxGroups = isPriority ? MAX_GROUPS_PRIMARY : MAX_GROUPS_SECONDARY;
+    const capLabel  = `max ${maxGroups}`;
+    logger(`  ${emoji} ${sectionId}: ${sectionStories.length} raw → ${capLabel} stories (${isPriority ? "primary" : "secondary"})…`);
 
     try {
       const clubbed = await clubAndScriptSection(sectionStories, sectionId, maxGroups);
