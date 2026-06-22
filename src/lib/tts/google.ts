@@ -45,12 +45,14 @@ function getKey(): string {
 
 // ── Core synthesis ────────────────────────────────────────────────────────────
 
-async function synthesizeRaw(prompt: string, style?: string): Promise<Buffer> {
+async function synthesizeRaw(script: string, style?: string): Promise<Buffer> {
   if (_dailyQuotaExhausted) {
     throw new Error("Gemini TTS daily quota exhausted — skipping API call");
   }
-  const body: Record<string, unknown> = {
-    contents: [{ parts: [{ text: prompt }], role: "user" }],
+  // Gemini TTS models don't support system_instruction — embed style in the user text.
+  const text = style ? `${style}\n\n${script}` : script;
+  const body = {
+    contents: [{ parts: [{ text }], role: "user" }],
     generationConfig: {
       responseModalities: ["AUDIO"],
       speechConfig: {
@@ -58,7 +60,6 @@ async function synthesizeRaw(prompt: string, style?: string): Promise<Buffer> {
       },
     },
   };
-  if (style) body.system_instruction = { parts: [{ text: style }] };
   const res = await fetch(GEMINI_TTS_URL(getKey()), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -154,6 +155,17 @@ export async function googleTTS(
 ): Promise<{ url: string; durationSec: number }> {
   const lang  = filename.endsWith("-hi") ? "hi" : "en";
   const style = lang === "hi" ? STYLE_HI : STYLE_EN;
-  const pcm   = await synthesizeWithRetry(script, filename, style);
-  return saveWav(pcmToWav(pcm), filename);
+
+  try {
+    const pcm = await synthesizeWithRetry(script, filename, style, 3);
+    return saveWav(pcmToWav(pcm), filename);
+  } catch (err: any) {
+    // If styled attempt fails with 5xx, retry bare (no style prefix) — last resort
+    if (err.message?.includes("500") || err.message?.includes("503")) {
+      console.warn(`[tts/google] ${filename}: styled attempt failed, retrying bare…`);
+      const pcm = await synthesizeWithRetry(script, filename, undefined, 3);
+      return saveWav(pcmToWav(pcm), filename);
+    }
+    throw err;
+  }
 }
