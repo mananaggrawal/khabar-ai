@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { Check } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
-import { CITY_KEY, DEFAULT_CITY, MAJOR_CITIES } from "@/lib/news/sources";
+import { CITY_KEY, DEFAULT_CITY, MAJOR_CITIES, FEEDS, SECTIONS_KEY, readPreferredSections, type SectionId } from "@/lib/news/sources";
 import { BottomNav } from "@/components/BottomNav";
 
 const LANGUAGE_KEY = "khabar-language";
@@ -31,11 +31,14 @@ function readCity(): string {
 
 function SettingsPage() {
   const router = useRouter();
-  const [selectedLang, setSelectedLang] = useState<string>(readLanguage);
-  const [availableLangs, setAvailableLangs] = useState<string[]>(readAvailableLanguages);
-  const [selectedCity, setSelectedCity] = useState<string>(readCity);
+  const [selectedLang, setSelectedLang]       = useState<string>(readLanguage);
+  const [availableLangs, setAvailableLangs]   = useState<string[]>(readAvailableLanguages);
+  const [selectedCity, setSelectedCity]       = useState<string>(readCity);
+  const [preferredSections, setPreferredSections] = useState<Set<SectionId>>(
+    () => typeof window !== "undefined" ? readPreferredSections() : new Set(FEEDS.map(f => f.id))
+  );
 
-  // Re-read available languages on mount (briefing may have been updated)
+  // Re-read available languages on mount
   useEffect(() => {
     setAvailableLangs(readAvailableLanguages());
     const onStorage = (e: StorageEvent) => {
@@ -58,6 +61,24 @@ function SettingsPage() {
   function selectCity(city: string) {
     setSelectedCity(city);
     try { localStorage.setItem(CITY_KEY, city); } catch {}
+  }
+
+  function toggleSection(id: SectionId) {
+    setPreferredSections(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        if (next.size <= 1) return prev; // must keep at least one
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      try {
+        const arr = [...next];
+        localStorage.setItem(SECTIONS_KEY, JSON.stringify(arr));
+        window.dispatchEvent(new StorageEvent("storage", { key: SECTIONS_KEY, newValue: JSON.stringify(arr) }));
+      } catch {}
+      return next;
+    });
   }
 
   async function signOut() {
@@ -92,10 +113,10 @@ function SettingsPage() {
           </p>
           <div className="mt-4 space-y-2">
             {[
-              { code: "en", label: "English",             nativeName: "English"          },
-              { code: "hi", label: "हिंदी",               nativeName: "Hindi"            },
-              { code: "ta", label: "தமிழ்",               nativeName: "Tamil"            },
-              { code: "mr", label: "मराठी",               nativeName: "Marathi"          },
+              { code: "en", label: "English", nativeName: "English" },
+              { code: "hi", label: "हिंदी",   nativeName: "Hindi"   },
+              { code: "ta", label: "தமிழ்",   nativeName: "Tamil"   },
+              { code: "mr", label: "मराठी",   nativeName: "Marathi" },
             ].map((lang) => {
               const available = availableLangs.includes(lang.code);
               const active = available && selectedLang === lang.code;
@@ -127,6 +148,77 @@ function SettingsPage() {
                 </button>
               );
             })}
+          </div>
+        </section>
+
+        {/* Sections */}
+        <section>
+          <h2 className="font-serif text-lg">Sections</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Choose which news sections appear in your briefing.
+          </p>
+          <div className="mt-4 space-y-2">
+            {FEEDS.filter(f => f.id !== "local").map((feed) => {
+              const on = preferredSections.has(feed.id);
+              const isLast = preferredSections.size === 1 && on;
+              return (
+                <button
+                  key={feed.id}
+                  onClick={() => toggleSection(feed.id)}
+                  disabled={isLast}
+                  className={cn(
+                    "flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-colors",
+                    on
+                      ? "border-border bg-background text-foreground"
+                      : "border-border/40 text-muted-foreground/50",
+                    isLast && "cursor-not-allowed",
+                  )}
+                >
+                  <span className="text-base">{feed.emoji}</span>
+                  <span className="flex-1 text-sm font-medium">{feed.label}</span>
+                  {/* Toggle pill */}
+                  <span
+                    className={cn(
+                      "relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 transition-colors",
+                      on ? "border-primary bg-primary" : "border-border bg-border/40",
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "pointer-events-none absolute top-0.5 size-3.5 rounded-full bg-white shadow transition-transform",
+                        on ? "translate-x-[14px]" : "translate-x-0.5",
+                      )}
+                    />
+                  </span>
+                </button>
+              );
+            })}
+            {/* Local is always shown if city is set */}
+            <button
+              onClick={() => toggleSection("local")}
+              className={cn(
+                "flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-colors",
+                preferredSections.has("local")
+                  ? "border-border bg-background text-foreground"
+                  : "border-border/40 text-muted-foreground/50",
+              )}
+            >
+              <span className="text-base">📍</span>
+              <span className="flex-1 text-sm font-medium">Local</span>
+              <span
+                className={cn(
+                  "relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 transition-colors",
+                  preferredSections.has("local") ? "border-primary bg-primary" : "border-border bg-border/40",
+                )}
+              >
+                <span
+                  className={cn(
+                    "pointer-events-none absolute top-0.5 size-3.5 rounded-full bg-white shadow transition-transform",
+                    preferredSections.has("local") ? "translate-x-[14px]" : "translate-x-0.5",
+                  )}
+                />
+              </span>
+            </button>
           </div>
         </section>
 
@@ -168,7 +260,6 @@ function SettingsPage() {
             Sign out
           </button>
         </section>
-
 
       </main>
 

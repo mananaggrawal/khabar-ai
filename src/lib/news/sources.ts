@@ -151,3 +151,18 @@ export const MAJOR_CITIES = [
 export function readCity(): string {
   try { return localStorage.getItem(CITY_KEY) || DEFAULT_CITY; } catch { return DEFAULT_CITY; }
 }
+
+// ── Section preferences (localStorage, client-side only) ──────────────────────
+
+export const SECTIONS_KEY = "khabar-preferred-sections";
+
+export function readPreferredSections(): Set<SectionId> {
+  try {
+    const stored = localStorage.getItem(SECTIONS_KEY);
+    if (stored) {
+      const arr = JSON.parse(stored) as SectionId[];
+      if (Array.isArray(arr) && arr.length > 0) return new Set(arr);
+    }
+  } catch {}
+  return new Set(FEEDS.map((f) => f.id)); // default: all sections
+}

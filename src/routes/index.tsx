@@ -14,7 +14,7 @@ import { BottomNav }         from "@/components/BottomNav";
 import { fetchBriefing }     from "@/lib/news/briefing.functions";
 import { useMonologue, getStoryTitle, getAudioUrl } from "@/hooks/useMonologue";
 import { useSavedStories }   from "@/hooks/useSavedStories";
-import { FEEDS, readCity, type SectionId } from "@/lib/news/sources";
+import { FEEDS, FEED_MAP, readCity, readPreferredSections, SECTIONS_KEY, type SectionId } from "@/lib/news/sources";
 import type { Story } from "@/lib/news/generator";
 
 // ── Route ─────────────────────────────────────────────────────────────────────
@@ -144,25 +144,148 @@ function SectionTabs({
     >
       {FEEDS.map((feed) => {
         const hasContent = availableSections.has(feed.id);
+        if (!hasContent) return null; // hidden sections don't show tabs at all
         const active = activeSection === feed.id;
         return (
           <button
             key={feed.id}
             data-section={feed.id}
-            onClick={() => hasContent && onSelect(feed.id)}
-            disabled={!hasContent}
+            onClick={() => onSelect(feed.id)}
             className={`shrink-0 rounded-full px-3.5 py-1.5 text-sm font-medium transition-all whitespace-nowrap border ${
               active
                 ? "border-primary/40 bg-primary/10 text-foreground"
-                : hasContent
-                ? "border-border text-foreground/70 hover:border-border/80 hover:bg-black/[0.02]"
-                : "border-border/30 text-muted-foreground/30 cursor-not-allowed"
+                : "border-border text-foreground/70 hover:border-border/80 hover:bg-black/[0.02]"
             }`}
           >
             {language === "hi" ? feed.labelHi : feed.label}
           </button>
         );
       })}
+    </div>
+  );
+}
+
+// ── Hero Card ─────────────────────────────────────────────────────────────────
+
+function HeroCard({
+  briefing,
+  availableSections,
+  mono,
+  firstSection,
+}: {
+  briefing: NonNullable<Awaited<ReturnType<typeof fetchBriefing>>>;
+  availableSections: Set<SectionId>;
+  mono: ReturnType<typeof useMonologue>;
+  firstSection: SectionId;
+}) {
+  const displayStory = mono.currentStory ?? briefing.stories[0];
+  const bgImage = displayStory?.imageUrl ?? briefing.stories[0]?.imageUrl;
+
+  const withAudio = briefing.stories.filter((s) => !!getAudioUrl(s, mono.language));
+  const listenMins = Math.max(1, Math.round(withAudio.length * 1.5));
+  const today = new Date().toLocaleDateString("en-IN", {
+    weekday: "short", day: "numeric", month: "long",
+  });
+
+  const isPlayingAll = mono.state === "playing";
+
+  // Section chips — show up to 5 emojis from available sections
+  const sectionEmojis = FEEDS
+    .filter(f => availableSections.has(f.id))
+    .slice(0, 6)
+    .map(f => f.emoji);
+  const extraCount = availableSections.size > 6 ? availableSections.size - 6 : 0;
+
+  return (
+    <div
+      className="mx-4 mb-4 relative overflow-hidden rounded-3xl"
+      style={{
+        height: 220,
+        ...(bgImage ? {
+          backgroundImage: `url(${bgImage})`,
+          backgroundSize: "cover",
+          backgroundPosition: "center top",
+        } : {
+          // Layered gradient: warm amber glow + violet pocket + deep dark base
+          // Echoes the VoiceOrb's amber/violet palette for visual coherence
+          background: [
+            "radial-gradient(ellipse at 22% 78%, rgba(255,185,65,0.20) 0%, transparent 48%)",
+            "radial-gradient(ellipse at 78% 22%, rgba(130,55,220,0.22) 0%, transparent 50%)",
+            "linear-gradient(150deg, #080613 0%, #120c28 45%, #0d0820 100%)",
+          ].join(", "),
+        }),
+      }}
+    >
+      {/* Overlay: subtle for images, near-transparent for gradient (it's already dark) */}
+      <div
+        className="absolute inset-0"
+        style={{
+          background: bgImage
+            ? "linear-gradient(to bottom, rgba(0,0,0,0.08) 0%, rgba(0,0,0,0.45) 40%, rgba(0,0,0,0.85) 100%)"
+            : "linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.15) 60%, rgba(0,0,0,0.45) 100%)",
+        }}
+      />
+
+      {/* Content */}
+      <div className="absolute inset-0 flex flex-col justify-between p-4 pt-3.5">
+
+        {/* Top row: date + story count */}
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-bold uppercase tracking-[0.09em] text-white/50">
+            {today}
+          </span>
+          <span className="text-[10px] font-medium text-white/40">
+            {listenMins} min
+          </span>
+        </div>
+
+        {/* Bottom section */}
+        <div className="flex flex-col gap-2.5">
+          {/* Section chips */}
+          <div className="flex items-center gap-1">
+            {sectionEmojis.map((emoji, i) => (
+              <span
+                key={i}
+                className="flex items-center justify-center size-6 rounded-full text-[13px]"
+                style={{ background: "rgba(255,255,255,0.10)", backdropFilter: "blur(4px)" }}
+              >
+                {emoji}
+              </span>
+            ))}
+            {extraCount > 0 && (
+              <span className="text-[10px] font-medium text-white/40 ml-0.5">
+                +{extraCount}
+              </span>
+            )}
+          </div>
+
+          {/* Story title */}
+          <p className="font-serif text-[17px] leading-snug text-white line-clamp-2">
+            {displayStory ? getStoryTitle(displayStory, mono.language) : "Today's Briefing"}
+          </p>
+
+          {/* Play button + duration */}
+          <div className="flex items-center gap-2.5">
+            <button
+              onClick={() => isPlayingAll ? mono.pause() : mono.playSection(firstSection)}
+              className="flex items-center gap-1.5 rounded-full px-4 py-2 text-[12px] font-semibold text-foreground transition-transform active:scale-95"
+              style={{
+                background: "rgba(255,255,255,0.92)",
+                boxShadow: "0 2px 12px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.1)",
+              }}
+            >
+              {isPlayingAll ? (
+                <><Pause className="size-3 fill-current" />Pause</>
+              ) : (
+                <><Play className="size-3 fill-current ml-0.5" />Play briefing</>
+              )}
+            </button>
+            <span className="text-[11px] text-white/45 font-medium">
+              {briefing.stories.length} stories
+            </span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -178,19 +301,34 @@ function HomePage() {
   });
 
   const briefing = briefingQuery.data ?? null;
-  const mono = useMonologue({ briefing });
+
+  // Section preferences — re-read whenever settings changes them
+  const [preferredSections, setPreferredSections] = useState<Set<SectionId>>(
+    () => typeof window !== "undefined" ? readPreferredSections() : new Set(FEEDS.map(f => f.id))
+  );
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === SECTIONS_KEY) setPreferredSections(readPreferredSections());
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  // Filter briefing stories to only preferred sections
+  const filteredBriefing = briefing
+    ? { ...briefing, stories: briefing.stories.filter(s => preferredSections.has(s.section)) }
+    : null;
+
+  const mono = useMonologue({ briefing: filteredBriefing });
   const savedStories = useSavedStories();
 
   const [activeSection, setActiveSection] = useState<SectionId>("headlines");
   const [playerOpen, setPlayerOpen] = useState(false);
   const [detailStory, setDetailStory] = useState<Story | null>(null);
 
-  // City for local section label
-  const city = typeof window !== "undefined" ? readCity() : "Mumbai";
-
-  // Which sections actually have stories
+  // Which sections actually have stories (after preference filter)
   const availableSections = new Set(
-    (briefing?.stories ?? []).map((s) => s.section),
+    (filteredBriefing?.stories ?? []).map((s) => s.section),
   );
 
   // Auto-select first available section
@@ -198,15 +336,14 @@ function HomePage() {
     if (availableSections.size > 0 && !availableSections.has(activeSection)) {
       setActiveSection([...availableSections][0]);
     }
-  }, [briefing]);
+  }, [briefing, preferredSections]);
 
   // Stories for the active tab
-  const activeStories = (briefing?.stories ?? []).filter(
+  const activeStories = (filteredBriefing?.stories ?? []).filter(
     (s) => s.section === activeSection,
   );
 
   // Persist which languages are available in this briefing to localStorage
-  // so the settings page can show only generated language options
   useEffect(() => {
     if (!briefing?.stories?.length) return;
     const langs = ["en", "hi", "ta", "mr"].filter(lang =>
@@ -226,9 +363,13 @@ function HomePage() {
     if (mono.state === "idle") setPlayerOpen(false);
   }, [mono.state]);
 
+  const firstSection: SectionId = availableSections.has("headlines")
+    ? "headlines"
+    : ([...availableSections][0] as SectionId ?? "headlines");
+
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
-      {/* Header — sticky so it stays visible while scrolling */}
+      {/* Header */}
       <header
         className="sticky top-0 z-20 flex items-center justify-between px-5 pb-3 bg-background/95 backdrop-blur-sm"
         style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 1rem)" }}
@@ -241,7 +382,7 @@ function HomePage() {
         </span>
       </header>
 
-      {/* Loading state — fixed overlay so orb is perfectly centred on screen */}
+      {/* Loading state */}
       {briefingQuery.isLoading && (
         <div className="fixed inset-0 z-10 flex flex-col items-center justify-center gap-5 bg-background">
           <VoiceOrb state="idle" size={160} />
@@ -266,68 +407,15 @@ function HomePage() {
         </div>
       )}
 
-
-      {briefing && (
+      {filteredBriefing && (
         <>
-          {/* ── Hero card ── */}
-          {(() => {
-            const topStory = briefing.stories[0];
-            const displayStory = mono.currentStory ?? topStory;
-            const withAudio = briefing.stories.filter((s) =>
-              mono.language === "hi" ? !!s.audioUrlHi : !!s.audioUrlEn,
-            );
-            const listenMins = Math.max(1, Math.round(withAudio.length * 1.5));
-            const today = new Date().toLocaleDateString("en-IN", {
-              weekday: "short", day: "numeric", month: "long",
-            });
-            const firstSection: SectionId = availableSections.has("headlines")
-              ? "headlines"
-              : ([...availableSections][0] as SectionId);
-            const isPlayingAll = mono.state === "playing";
-            const bgImage = displayStory?.imageUrl ?? topStory?.imageUrl;
-
-            return (
-              <div
-                className="mx-4 mb-4 relative overflow-hidden rounded-3xl"
-                style={{
-                  height: 190,
-                  background: bgImage
-                    ? undefined
-                    : "linear-gradient(135deg, oklch(0.18 0.05 295) 0%, oklch(0.28 0.14 300) 50%, oklch(0.20 0.10 310) 100%)",
-                  ...(bgImage ? {
-                    backgroundImage: `url(${bgImage})`,
-                    backgroundSize: "cover",
-                    backgroundPosition: "center",
-                  } : {}),
-                }}
-              >
-                {/* Dark gradient overlay */}
-                <div
-                  className="absolute inset-0"
-                  style={{
-                    background: "linear-gradient(to bottom, rgba(0,0,0,0.05) 0%, rgba(0,0,0,0.55) 50%, rgba(0,0,0,0.88) 100%)",
-                  }}
-                />
-                {/* Content */}
-                <div className="absolute inset-0 flex flex-col justify-end p-4">
-                  <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-white/60 mb-1.5">
-                    {today} · {listenMins} min listen
-                  </p>
-                  <p className="font-serif text-[17px] leading-snug text-white mb-3 line-clamp-2">
-                    {(displayStory ? getStoryTitle(displayStory, mono.language) : null) ?? "Today's Briefing"}
-                  </p>
-                  <button
-                    onClick={() => isPlayingAll ? mono.pause() : mono.playSection(firstSection)}
-                    className="self-start flex items-center gap-1.5 rounded-full bg-white px-4 py-2 text-[12px] font-semibold text-foreground transition-transform active:scale-95 shadow-lg"
-                  >
-                    {isPlayingAll
-                      ? <><Pause className="size-3 fill-current" />Pause</>
-                      : <><Play className="size-3 fill-current ml-0.5" />Play briefing</>}
-                  </button>
-                </div>
-              </div>
-            );
-          })()}
+          {/* Hero card */}
+          <HeroCard
+            briefing={filteredBriefing}
+            availableSections={availableSections}
+            mono={mono}
+            firstSection={firstSection}
+          />
 
           {/* Section tabs */}
           <div className="bg-background">
@@ -344,7 +432,6 @@ function HomePage() {
             className="flex-1 overflow-y-auto px-4 py-4 space-y-2"
             style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 148px)" }}
           >
-
             {activeStories.length === 0 ? (
               <p className="py-10 text-center text-sm text-muted-foreground">
                 No stories in this section yet.
