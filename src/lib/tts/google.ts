@@ -20,7 +20,6 @@ const LOCAL_MODE = process.env.LOCAL_MODE === "true";
 // If a model string is wrong you'll see a 404 — check AI Studio for the exact name.
 const MODELS = [
   "gemini-2.5-flash-preview-tts",  // 100 RPD
-  "gemini-3.1-flash-tts-preview",  // 100 RPD (note: tts before preview)
   "gemini-2.5-pro-preview-tts",    //  50 RPD — last resort
 ] as const;
 

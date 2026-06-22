@@ -145,7 +145,10 @@ function SavedPage() {
                 </p>
                 <div className="flex flex-col gap-1.5">
                   {stories.map((story) => {
-                    const hasAudio = mono.language === "hi" ? !!story.audioUrlHi : !!story.audioUrlEn;
+                    const hasAudio = mono.language === "hi" ? !!story.audioUrlHi
+                      : mono.language === "ta" ? !!story.audioUrlTa
+                      : mono.language === "mr" ? !!story.audioUrlMr
+                      : !!story.audioUrlEn;
                     const storyIdx = mono.storiesWithAudio.findIndex((s) => s.id === story.id);
                     const isActive = mono.currentStory?.id === story.id;
                     return (
