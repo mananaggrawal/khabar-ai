@@ -158,7 +158,7 @@ function SettingsPage() {
             Choose which news sections appear in your briefing.
           </p>
           <div className="mt-4 space-y-2">
-            {FEEDS.filter(f => f.id !== "local").map((feed) => {
+            {[...FEEDS.filter(f => f.id !== "local"), FEEDS.find(f => f.id === "local")!].map((feed) => {
               const on = preferredSections.has(feed.id);
               const isLast = preferredSections.size === 1 && on;
               return (
@@ -169,9 +169,9 @@ function SettingsPage() {
                   className={cn(
                     "flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-colors",
                     on
-                      ? "border-border bg-background text-foreground"
-                      : "border-border/40 text-muted-foreground/50",
-                    isLast && "cursor-not-allowed",
+                      ? "border-primary/40 bg-primary/10 text-foreground"
+                      : "border-border text-foreground/60 hover:border-border/80",
+                    isLast && "cursor-not-allowed opacity-60",
                   )}
                 >
                   <span className="flex-1 text-sm font-medium">{feed.label}</span>
@@ -192,31 +192,6 @@ function SettingsPage() {
                 </button>
               );
             })}
-            {/* Local is always shown if city is set */}
-            <button
-              onClick={() => toggleSection("local")}
-              className={cn(
-                "flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-colors",
-                preferredSections.has("local")
-                  ? "border-border bg-background text-foreground"
-                  : "border-border/40 text-muted-foreground/50",
-              )}
-            >
-              <span className="flex-1 text-sm font-medium">Local</span>
-              <span
-                className={cn(
-                  "relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 transition-colors",
-                  preferredSections.has("local") ? "border-primary bg-primary" : "border-border bg-border/40",
-                )}
-              >
-                <span
-                  className={cn(
-                    "pointer-events-none absolute top-0.5 size-3.5 rounded-full bg-white shadow transition-transform",
-                    preferredSections.has("local") ? "translate-x-[14px]" : "translate-x-0.5",
-                  )}
-                />
-              </span>
-            </button>
           </div>
         </section>
 
