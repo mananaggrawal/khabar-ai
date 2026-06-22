@@ -18,8 +18,11 @@ function decodeEntities(s: string): string {
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/gi, " ")   // Google News RSS uses &nbsp;&nbsp; as separator between title and source
+    .replace(/&#160;/g, " ")    // numeric form of &nbsp;
     .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)))
     .replace(/<[^>]+>/g, "")
+    .replace(/  +/g, " ")       // collapse double-spaces left behind by &nbsp; sequences
     .trim();
 }
 

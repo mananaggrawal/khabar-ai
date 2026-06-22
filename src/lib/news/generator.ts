@@ -327,10 +327,18 @@ async function fetchAllOgImages(
 // Build the best possible fallback script from raw RSS fields (no Gemini)
 function fallbackScript(s: Story): string {
   const desc = s.description
-    ?.replace(/<[^>]+>/g, "")   // strip HTML
+    ?.replace(/<[^>]+>/g, "")   // strip HTML tags
+    .replace(/&nbsp;/gi, " ")   // decode &nbsp; in case description came from an older briefing
+    .replace(/&#160;/g, " ")
+    .replace(/  +/g, " ")       // collapse double-spaces
     .replace(/\s+/g, " ")
     .trim();
-  if (desc && desc.length > 40) {
+  // Google News descriptions are a list of article titles — not useful as a summary.
+  // Detect by: very few periods but many distinct source-name-like segments.
+  const isArticleList = desc
+    ? (desc.match(/\s{1,}[A-Z][a-z]+ [A-Z][a-z]+\s/g) ?? []).length > 2 && !desc.includes(".")
+    : false;
+  if (desc && desc.length > 40 && !isArticleList) {
     // Combine title + description into a readable sentence
     const titleClean = s.title.replace(/\s*[-–|].*$/, "").trim(); // strip source suffix
     const descTrimmed = desc.slice(0, 220).trim();
@@ -1063,6 +1071,94 @@ export async function generateMissingSections(
   const addedLabels = [...newSections].map(s => FEED_MAP.get(s)?.label ?? s);
   log(`Added ${withAudio.length} stories across: ${addedLabels.join(", ")}`);
   return { added: addedLabels, briefing: merged };
+}
+
+// ─── Script patch ────────────────────────────────────────────────────────────
+// Re-script stories where scriptEn is garbled (leftover &nbsp; from older RSS parser,
+// or title-only fallbacks that never got a real Gemini script)
+
+function isGarbledScript(s: Story): boolean {
+  const script = s.scriptEn;
+  if (!script || script.length < 30) return true;
+  if (script.includes("&nbsp;") || script.includes("&#160;")) return true;
+  // Google News description fallback: long text with no sentence-ending punctuation
+  const periods = (script.match(/[.!?]/g) ?? []).length;
+  const words   = script.trim().split(/\s+/).length;
+  if (words > 15 && periods === 0) return true;
+  return false;
+}
+
+export async function patchScripts(
+  logger: Logger = () => {},
+): Promise<{ patched: number; briefing: DailyBriefing }> {
+  const log = (msg: string) => { console.log(`[generator] ${msg}`); logger(msg); };
+
+  const existing = await getLatestBriefing();
+  if (!existing) throw new Error("No existing briefing — run full generation first");
+
+  const badStories = existing.stories.filter(isGarbledScript);
+
+  if (badStories.length === 0) {
+    log("All scripts look clean — nothing to patch");
+    return { patched: 0, briefing: existing };
+  }
+
+  log(`Found ${badStories.length} stories with garbled/missing scripts — re-scripting…`);
+
+  const languages = existing.generatedLanguages ?? ["en", "hi"];
+  log(`Re-scripting for languages: ${languages.join(",")}`);
+
+  // Group bad stories by section
+  const bySection = new Map<SectionId, Story[]>();
+  for (const s of badStories) {
+    const arr = bySection.get(s.section) ?? [];
+    arr.push(s);
+    bySection.set(s.section, arr);
+  }
+
+  const updated = existing.stories.map(s => ({ ...s }));
+  let patched = 0;
+
+  for (const [sectionId, sectionStories] of bySection) {
+    if (isAbortRequested()) { log("⛔ Aborted"); break; }
+    const emoji = FEED_MAP.get(sectionId)?.emoji ?? "📰";
+    log(`  ${emoji} Re-scripting ${sectionId}: ${sectionStories.length} stories…`);
+
+    try {
+      const rescripted = await scriptBatch(sectionStories, sectionId, log, languages);
+
+      for (const rs of rescripted) {
+        const idx = updated.findIndex(s => s.id === rs.id);
+        if (idx < 0) continue;
+        // Keep existing audio URLs; update scripts + titles only
+        updated[idx] = {
+          ...updated[idx],
+          scriptEn: rs.scriptEn || updated[idx].scriptEn,
+          scriptHi: rs.scriptHi || updated[idx].scriptHi,
+          ...(rs.scriptTa !== undefined ? { scriptTa: rs.scriptTa } : {}),
+          ...(rs.scriptMr !== undefined ? { scriptMr: rs.scriptMr } : {}),
+          ...(rs.titleHi  !== undefined ? { titleHi:  rs.titleHi  } : {}),
+          ...(rs.titleTa  !== undefined ? { titleTa:  rs.titleTa  } : {}),
+          ...(rs.titleMr  !== undefined ? { titleMr:  rs.titleMr  } : {}),
+        };
+        patched++;
+      }
+    } catch (err: any) {
+      log(`  ✗ ${sectionId}: ${err.message?.slice(0, 80)}`);
+    }
+
+    // Save after each section so progress survives a partial run
+    await saveBriefing({ ...existing, generatedAt: new Date().toISOString(), stories: updated });
+  }
+
+  const briefing: DailyBriefing = {
+    ...existing,
+    generatedAt: new Date().toISOString(),
+    stories: updated,
+  };
+  await saveBriefing(briefing);
+  log(`✅ Patched ${patched} scripts`);
+  return { patched, briefing };
 }
 
 // ─── TTS-only patch ───────────────────────────────────────────────────────────

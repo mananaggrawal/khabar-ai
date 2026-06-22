@@ -41,7 +41,7 @@ if (!existsSync(SERVER_BUNDLE)) {
 }
 
 const { default: ssrHandler } = await import(SERVER_BUNDLE);
-const { handleGenerate, handleAsk, handleStatus, handleDownload, handleCron, handlePatchMissing, handlePatchTTS, handleStop } = await import(API_BUNDLE);
+const { handleGenerate, handleAsk, handleStatus, handleDownload, handleCron, handlePatchMissing, handlePatchTTS, handlePatchScripts, handleStop } = await import(API_BUNDLE);
 
 // Convert Node.js IncomingMessage to a Web Fetch Request
 async function toRequest(req) {
@@ -224,6 +224,15 @@ self.addEventListener('fetch', e => {
       res.end(JSON.stringify({ error: String(err?.message ?? err) }));
     }
     return;
+  }
+
+  if (pathname === "/api/admin/patch-scripts" && req.method === "POST") {
+    try {
+      const response = await handlePatchScripts(request);
+      return response;
+    } catch (err) {
+      console.error("[khabar] /api/admin/patch-scripts error:", err);
+    }
   }
 
   if (pathname === "/api/admin/patch-tts" && req.method === "POST") {
@@ -602,6 +611,12 @@ function adminPage(supabaseUrl, supabaseKey) {
       </div>
       <div style="height:12px;"></div>
       <div class="group">
+        <div class="gen-sub">Re-generate scripts for stories with garbled text (e.g. &amp;nbsp; entities from older RSS fetches).</div>
+        <button class="btn-primary" id="patch-scripts-btn" onclick="runPatchScripts()">Patch garbled scripts</button>
+        <div id="patch-scripts-log" class="log-terminal"></div>
+      </div>
+      <div style="height:12px;"></div>
+      <div class="group">
         <div class="gen-sub">Generate audio for stories that already have scripts but no audio (e.g. after a quota reset).</div>
         <div style="display:flex;align-items:center;gap:16px;margin-bottom:10px;font-size:13px;">
           <span style="color:var(--muted);font-weight:600;letter-spacing:.04em;text-transform:uppercase;font-size:11px;">TTS</span>
@@ -766,7 +781,7 @@ function adminPage(supabaseUrl, supabaseKey) {
     if (!job) return 'Running…';
     if (job.startsWith('generate:'))  return 'Generating full briefing (' + job.split(':')[1] + ')';
     if (job.startsWith('patch-tts:')) return 'Patching missing TTS (' + job.split(':')[1] + ')';
-    return { 'patch-missing': 'Patching missing sections', 'patch-tts': 'Patching missing TTS', cron: 'Running cron job' }[job] ?? 'Running…';
+    return { 'patch-missing': 'Patching missing sections', 'patch-scripts': 'Re-scripting garbled stories', 'patch-tts': 'Patching missing TTS', cron: 'Running cron job' }[job] ?? 'Running…';
   }
 
   function updateRunningBanner(running, runningJob) {
@@ -1009,6 +1024,73 @@ function adminPage(supabaseUrl, supabaseKey) {
 
   function appendTTSLog(type, msg) {
     const el = document.getElementById('tts-log');
+    const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const line = document.createElement('div');
+    line.className = 'log-line' + (type !== 'log' ? ' log-' + type : '');
+    line.textContent = ts + '  ' + msg;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  async function runPatchScripts() {
+    const btn = document.getElementById('patch-scripts-btn');
+    const logEl = document.getElementById('patch-scripts-log');
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin">&#9696;</span> Patching scripts…';
+    logEl.innerHTML = '';
+    logEl.classList.add('visible');
+    startPolling();
+
+    try {
+      const r = await fetch('/api/admin/patch-scripts', { method: 'POST', headers: { 'x-admin-key': AKEY } });
+      if (r.status === 409) {
+        appendScriptsLog('log', 'Generation already in progress — check back shortly.');
+        btn.disabled = false; btn.textContent = 'Patch garbled scripts';
+        return;
+      }
+      if (!r.ok || !r.body) {
+        appendScriptsLog('error', 'Request failed: HTTP ' + r.status);
+        btn.disabled = false; btn.textContent = 'Retry';
+        return;
+      }
+
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split('\\n\\n');
+        buffer = parts.pop() || '';
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const ev = JSON.parse(line.slice(6));
+            if (ev.type === 'log') {
+              appendScriptsLog('log', ev.msg);
+            } else if (ev.type === 'done') {
+              appendScriptsLog('done', 'Done — patched ' + ev.patched + ' scripts · ' + ev.stories + ' stories total');
+              loadStatus();
+            } else if (ev.type === 'error') {
+              appendScriptsLog('error', ev.msg);
+            }
+          } catch {}
+        }
+      }
+    } catch (err) {
+      appendScriptsLog('error', 'Network error: ' + (err.message || err));
+    }
+
+    btn.disabled = false;
+    btn.textContent = 'Patch garbled scripts';
+  }
+
+  function appendScriptsLog(type, msg) {
+    const el = document.getElementById('patch-scripts-log');
     const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     const line = document.createElement('div');
     line.className = 'log-line' + (type !== 'log' ? ' log-' + type : '');
