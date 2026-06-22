@@ -197,13 +197,9 @@ function HeroCard({
           backgroundSize: "cover",
           backgroundPosition: "center top",
         } : {
-          // Deep space: large glowing purple orb in near-black cosmos
-          background: [
-            "radial-gradient(ellipse 65% 80% at 72% 60%, rgba(148,55,255,0.92) 0%, rgba(100,35,210,0.70) 28%, rgba(55,15,140,0.35) 55%, transparent 75%)",
-            "radial-gradient(circle at 58% 38%, rgba(210,165,255,0.40) 0%, transparent 32%)",
-            "radial-gradient(ellipse at 20% 80%, rgba(18,10,70,0.75) 0%, transparent 55%)",
-            "linear-gradient(160deg, #03030d 0%, #060518 45%, #07051c 100%)",
-          ].join(", "),
+          backgroundImage: "url(/hero-bg.jpg)",
+          backgroundSize: "cover",
+          backgroundPosition: "center center",
         }),
       }}
     >
@@ -213,7 +209,7 @@ function HeroCard({
         style={{
           background: bgImage
             ? "linear-gradient(to bottom, rgba(0,0,0,0.08) 0%, rgba(0,0,0,0.45) 40%, rgba(0,0,0,0.85) 100%)"
-            : "linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.10) 55%, rgba(0,0,0,0.55) 100%)",
+            : "linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.20) 55%, rgba(0,0,0,0.72) 100%)",
         }}
       />
 

@@ -178,14 +178,14 @@ function SettingsPage() {
                   {/* Toggle pill */}
                   <span
                     className={cn(
-                      "relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 transition-colors",
+                      "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border-2 transition-colors",
                       on ? "border-primary bg-primary" : "border-border bg-border/40",
                     )}
                   >
                     <span
                       className={cn(
-                        "pointer-events-none absolute top-0.5 size-3.5 rounded-full bg-white shadow transition-transform",
-                        on ? "translate-x-[14px]" : "translate-x-0.5",
+                        "pointer-events-none block size-4 rounded-full bg-white shadow transition-transform",
+                        on ? "translate-x-[22px]" : "translate-x-[2px]",
                       )}
                     />
                   </span>

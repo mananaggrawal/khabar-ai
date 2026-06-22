@@ -120,6 +120,7 @@ function parseGeminiJson(raw: string): any {
 const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
 const GEMINI_MAX_RETRIES = 4;
 const GEMINI_BASE_DELAY_MS = 5_000; // 5s → 10s → 20s → 40s
+const GEMINI_TIMEOUT_MS   = 120_000; // 2 min hard timeout per attempt — prevents silent hangs
 
 async function geminiJson(prompt: string): Promise<any> {
   let lastError: Error | null = null;
@@ -131,32 +132,47 @@ async function geminiJson(prompt: string): Promise<any> {
       await new Promise(r => setTimeout(r, delayMs));
     }
 
-    const res = await fetch(GEMINI_URL(getKey()), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: {
-          responseMimeType: "application/json",
-          maxOutputTokens: 16384,  // Prevent truncation on large section batches
-        },
-      }),
-    });
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), GEMINI_TIMEOUT_MS);
 
-    if (!res.ok) {
-      const body = (await res.text()).slice(0, 300);
-      lastError = new Error(`Gemini ${res.status}: ${body}`);
-      if (RETRYABLE_STATUSES.has(res.status)) continue; // retry
-      throw lastError; // non-retryable (e.g. 400, 401)
-    }
+    try {
+      const res = await fetch(GEMINI_URL(getKey()), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: ctrl.signal,
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig: {
+            responseMimeType: "application/json",
+            maxOutputTokens: 16384,  // Prevent truncation on large section batches
+          },
+        }),
+      });
 
-    const json = await res.json();
-    const finishReason = json.candidates?.[0]?.finishReason;
-    if (finishReason && finishReason !== "STOP") {
-      console.warn(`[gemini] finishReason=${finishReason}`);
+      if (!res.ok) {
+        const body = (await res.text()).slice(0, 300);
+        lastError = new Error(`Gemini ${res.status}: ${body}`);
+        if (RETRYABLE_STATUSES.has(res.status)) continue; // retry
+        throw lastError; // non-retryable (e.g. 400, 401)
+      }
+
+      const json = await res.json();
+      const finishReason = json.candidates?.[0]?.finishReason;
+      if (finishReason && finishReason !== "STOP") {
+        console.warn(`[gemini] finishReason=${finishReason}`);
+      }
+      const text = json.candidates?.[0]?.content?.parts?.[0]?.text ?? "[]";
+      return parseGeminiJson(text);
+    } catch (err: any) {
+      if (err.name === "AbortError") {
+        lastError = new Error(`Gemini timed out after ${GEMINI_TIMEOUT_MS / 1000}s`);
+        console.warn(`[gemini] attempt ${attempt} timed out — retrying`);
+        continue; // treat timeout as retryable
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
     }
-    const text = json.candidates?.[0]?.content?.parts?.[0]?.text ?? "[]";
-    return parseGeminiJson(text);
   }
 
   // All retries exhausted
