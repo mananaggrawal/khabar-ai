@@ -579,7 +579,15 @@ function adminPage(supabaseUrl, supabaseKey) {
         <div style="display:flex;align-items:center;gap:16px;margin-bottom:10px;font-size:13px;">
           <span style="color:var(--muted);font-weight:600;letter-spacing:.04em;text-transform:uppercase;font-size:11px;">TTS</span>
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-            <input type="radio" name="tts-provider" value="google" checked style="accent-color:#6366f1;">
+            <input type="radio" name="tts-provider" value="edge" checked style="accent-color:#6366f1;">
+            <span>Edge <span style="color:var(--muted);font-size:11px;">(free)</span></span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="radio" name="tts-provider" value="kokoro" style="accent-color:#6366f1;">
+            <span>Kokoro <span style="color:var(--muted);font-size:11px;">(free, EN only)</span></span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="radio" name="tts-provider" value="google" style="accent-color:#6366f1;">
             <span>Google</span>
           </label>
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
@@ -602,7 +610,15 @@ function adminPage(supabaseUrl, supabaseKey) {
         <div style="display:flex;align-items:center;gap:16px;margin-bottom:10px;font-size:13px;">
           <span style="color:var(--muted);font-weight:600;letter-spacing:.04em;text-transform:uppercase;font-size:11px;">TTS</span>
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-            <input type="radio" name="tts-patch-provider" value="google" checked style="accent-color:#6366f1;">
+            <input type="radio" name="tts-patch-provider" value="edge" checked style="accent-color:#6366f1;">
+            <span>Edge <span style="color:var(--muted);font-size:11px;">(free)</span></span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="radio" name="tts-patch-provider" value="kokoro" style="accent-color:#6366f1;">
+            <span>Kokoro <span style="color:var(--muted);font-size:11px;">(free, EN only)</span></span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="radio" name="tts-patch-provider" value="google" style="accent-color:#6366f1;">
             <span>Google</span>
           </label>
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">

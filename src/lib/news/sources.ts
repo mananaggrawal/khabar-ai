@@ -22,6 +22,8 @@ export type FeedConfig = {
   emoji: string;
   /** Build the RSS URL, optionally parameterised (e.g. local city). */
   buildUrl: (opts?: { city?: string }) => string;
+  /** Fallback URL if buildUrl returns 0 results (e.g. topic ID expired). */
+  fallbackUrl?: string;
 };
 
 // ── URL builders ──────────────────────────────────────────────────────────────
@@ -56,7 +58,9 @@ export const FEEDS: FeedConfig[] = [
     label: "India",
     labelHi: "भारत",
     emoji: "🇮🇳",
+    // Topic ID can expire — search URL is a reliable fallback (rss.ts tries topic first)
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.india}?${LOCALE}`,
+    fallbackUrl: `${GN_BASE}/search?q=india+news&${LOCALE}`,
   },
   {
     id: "world",

@@ -20,10 +20,12 @@ import { fetchRss, type RssItem } from "./rss";
 import { FEEDS, FEED_MAP, DEFAULT_CITY, type SectionId } from "./sources";
 import { elevenLabsTTS, isQuotaExhausted } from "@/lib/tts/elevenlabs";
 import { googleTTS, isDailyQuotaExhausted } from "@/lib/tts/google";
+import { edgeTTS } from "@/lib/tts/edge";
+import { kokoroTTS } from "@/lib/tts/kokoro";
 import { saveBriefingToStorage, loadBriefingFromStorage } from "@/lib/supabase-storage";
 import { isAbortRequested } from "@/lib/abort";
 
-export type TtsProvider = "google" | "elevenlabs";
+export type TtsProvider = "google" | "elevenlabs" | "edge" | "kokoro";
 
 const LOCAL_MODE = process.env.LOCAL_MODE === "true";
 
@@ -121,11 +123,18 @@ async function geminiJson(prompt: string): Promise<any> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: { responseMimeType: "application/json" },
+      generationConfig: {
+        responseMimeType: "application/json",
+        maxOutputTokens: 16384,  // Prevent truncation on large section batches
+      },
     }),
   });
   if (!res.ok) throw new Error(`Gemini ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const json = await res.json();
+  const finishReason = json.candidates?.[0]?.finishReason;
+  if (finishReason && finishReason !== "STOP") {
+    console.warn(`[gemini] finishReason=${finishReason}`);
+  }
   const text = json.candidates?.[0]?.content?.parts?.[0]?.text ?? "[]";
   return parseGeminiJson(text);
 }
@@ -136,7 +145,12 @@ async function fetchAllFeeds(city: string): Promise<Map<SectionId, RssItem[]>> {
   const results = await Promise.allSettled(
     FEEDS.map(async (feed) => {
       const url = feed.buildUrl({ city });
-      const items = await fetchRss(url, feed.label, feed.id);
+      let items = await fetchRss(url, feed.label, feed.id);
+      // If primary URL returned nothing and a fallback exists, try it
+      if (items.length === 0 && feed.fallbackUrl) {
+        console.warn(`[feeds] ${feed.label}: topic URL returned 0 — trying fallback URL`);
+        items = await fetchRss(feed.fallbackUrl, feed.label, feed.id);
+      }
       return { id: feed.id, items };
     }),
   );
@@ -285,6 +299,7 @@ async function clubAndScriptBatch(
   sectionStories: Story[],
   sectionId: SectionId,
   maxGroups: number,
+  logger: Logger = () => {},
 ): Promise<Story[]> {
   if (sectionStories.length === 0) return [];
 
@@ -374,7 +389,7 @@ ${sectionStories.map((s, i) => {
     for (let i = 0; i < sectionStories.length; i++) {
       if (covered.has(i)) continue;
       const s = sectionStories[i];
-      console.warn(`[generator] section ${sectionId} index ${i} not covered by clubbing — adding standalone`);
+      logger(`    ⚠ ${sectionId}[${i}] not covered by Gemini grouping — adding standalone`);
       output.push({
         ...s,
         sources: [{ title: s.title, source: s.source, link: s.link }],
@@ -386,7 +401,7 @@ ${sectionStories.map((s, i) => {
 
     return output;
   } catch (err: any) {
-    console.warn(`[generator] club ${sectionId} batch failed (${err.message}) — scripting individually`);
+    logger(`    ✗ ${sectionId} Gemini batch failed: ${err.message?.slice(0, 120)} — falling back to stubs`);
     return sectionStories.map(s => ({
       ...s,
       sources: [{ title: s.title, source: s.source, link: s.link }],
@@ -405,11 +420,12 @@ async function clubAndScriptSection(
   sectionStories: Story[],
   sectionId: SectionId,
   maxGroups: number,
+  logger: Logger = () => {},
 ): Promise<Story[]> {
   if (sectionStories.length === 0) return [];
 
   if (sectionStories.length <= CLUB_CHUNK_SIZE) {
-    return clubAndScriptBatch(sectionStories, sectionId, maxGroups);
+    return clubAndScriptBatch(sectionStories, sectionId, maxGroups, logger);
   }
 
   // Large section: split into chunks, distribute groups budget proportionally
@@ -419,12 +435,10 @@ async function clubAndScriptSection(
   }
   const groupsPerChunk = Math.max(2, Math.ceil(maxGroups / chunks.length));
 
-  console.log(
-    `[generator] ${sectionId}: ${sectionStories.length} stories → ${chunks.length} chunks × ~${groupsPerChunk} groups each`,
-  );
+  logger(`    ${sectionId}: ${sectionStories.length} stories → ${chunks.length} chunks × ~${groupsPerChunk} groups`);
 
   const chunkResults = await Promise.all(
-    chunks.map(chunk => clubAndScriptBatch(chunk, sectionId, groupsPerChunk)),
+    chunks.map(chunk => clubAndScriptBatch(chunk, sectionId, groupsPerChunk, logger)),
   );
 
   return chunkResults.flat();
@@ -464,7 +478,7 @@ async function clubAndScriptAllSections(
     logger(`  ${emoji} ${sectionId}: ${sectionStories.length} raw → ${capLabel} stories (${isPriority ? "primary" : "secondary"})…`);
 
     try {
-      const clubbed = await clubAndScriptSection(sectionStories, sectionId, maxGroups);
+      const clubbed = await clubAndScriptSection(sectionStories, sectionId, maxGroups, logger);
       allClubbedStories.push(...clubbed);
       logger(`    → ${clubbed.length} stories after clubbing`);
     } catch (err: any) {
@@ -547,9 +561,9 @@ async function generateAllTTS(
   logger(`TTS (${label}): ${stories.length} stories × 2 languages = ${stories.length * 2} calls…`);
 
   for (let i = 0; i < stories.length; i++) {
-    if (isAbortRequested())    { logger("⛔ Aborted by stop request"); break; }
-    if (isDailyQuotaExhausted()) { logger("⛔ Google TTS daily quota exhausted"); break; }
-    if (isQuotaExhausted())    { logger("⛔ ElevenLabs quota exhausted — top up credits to continue."); break; }
+    if (isAbortRequested()) { logger("⛔ Aborted by stop request"); break; }
+    if (provider === "google"     && isDailyQuotaExhausted()) { logger("⛔ Google TTS daily quota exhausted"); break; }
+    if (provider === "elevenlabs" && isQuotaExhausted())      { logger("⛔ ElevenLabs quota exhausted — top up credits to continue."); break; }
 
     const story    = stories[i];
     const fileBase = `${date}-${story.id}`;
@@ -557,12 +571,11 @@ async function generateAllTTS(
     let gotHi = false;
 
     const synthesize = async (script: string, filename: string): Promise<string> => {
-      if (provider === "google") {
-        const { url } = await googleTTS(script, filename);
-        return url;
-      }
-      const { url } = await elevenLabsTTS(script, filename);
-      return url;
+      if (provider === "google")     { const { url } = await googleTTS(script, filename);     return url; }
+      if (provider === "elevenlabs") { const { url } = await elevenLabsTTS(script, filename);  return url; }
+      if (provider === "edge")       { const { url } = await edgeTTS(script, filename);        return url; }
+      if (provider === "kokoro")     { const { url } = await kokoroTTS(script, filename);      return url; }
+      throw new Error(`Unknown TTS provider: ${provider}`);
     };
 
     // EN
@@ -602,11 +615,11 @@ async function generateAllTTS(
   }
 
   const totalChars = enChars + hiChars;
-  // ElevenLabs Flash v2.5: ~$0.50/1K chars (pay-per-use)
-  // Google TTS: $0.50/1M chars after free tier (effectively free at this scale)
-  const estimatedUsd = provider === "elevenlabs"
-    ? (totalChars / 1000) * 0.50
-    : (totalChars / 1_000_000) * 0.50;
+  // ElevenLabs Flash v2.5: ~$0.50/1K chars; Google: $0.50/1M chars; Edge/Kokoro: free
+  const estimatedUsd =
+    provider === "elevenlabs" ? (totalChars / 1000) * 0.50 :
+    provider === "google"     ? (totalChars / 1_000_000) * 0.50 :
+    0;
 
   const costInfo: TtsCostInfo = { provider, enChars, hiChars, totalChars, estimatedUsd, storiesAttempted: stories.length, storiesWithAudio };
   logger(`TTS done: ${storiesWithAudio}/${stories.length} stories, ${(totalChars / 1000).toFixed(1)}K chars, est. $${estimatedUsd.toFixed(2)}`);
