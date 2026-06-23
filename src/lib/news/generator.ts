@@ -152,19 +152,18 @@ type ClusteredEvent = {
 
 const TARGET_WPM = 150;
 
-// Target ~30 min listen time at ~1.5 min/story
-const TARGET_STORIES    = 20;
-// Soft per-section ceiling — prevents any one section monopolising the briefing
-// but imposes no hard floor. Pure score-rank decides everything else.
-const MAX_PER_SECTION   = 8;
+// Minimum score for a story to qualify — AI scores 0-10 against the user persona.
+// 3.5 means "relevant and worth the listener's time". Below this it's noise.
+const MIN_SCORE_THRESHOLD = 3.5;
+// Soft per-section ceiling — diversity guard so one section can't take everything.
+const MAX_PER_SECTION     = 8;
+// Hard safety valve — should never be hit in normal operation.
+const MAX_TOTAL_STORIES   = 40;
 
 const SECTION_ORDER: SectionId[] = [
   "india", "world", "business", "technology", "sports",
   "health", "entertainment", "science", "local",
 ];
-
-// Absolute ceiling — safety valve only, TARGET_STORIES is the real target
-const MAX_TOTAL_STORIES = 25;
 
 // ─── Gemini helpers ───────────────────────────────────────────────────────────
 
@@ -868,11 +867,12 @@ function buildBriefingPlan(events: ClusteredEvent[], logger: Logger): ClusteredE
     add(ev, ev.section);
   }
 
-  // 2. Fill remaining slots by score until TARGET_STORIES reached.
-  //    Soft cap: no single section > MAX_PER_SECTION (diversity guard).
+  // 2. Include all events scoring >= MIN_SCORE_THRESHOLD, ranked by score.
+  //    Only constraint: soft per-section diversity cap & absolute safety ceiling.
   for (const ev of sorted) {
     if (used.has(ev.eventId)) continue;
-    if (plan.length >= TARGET_STORIES) break;
+    if (plan.length >= MAX_TOTAL_STORIES) break;
+    if (ev.importanceScore < MIN_SCORE_THRESHOLD) break; // sorted desc, so can stop here
     if ((sectionCount.get(ev.section) ?? 0) >= MAX_PER_SECTION) continue;
     add(ev, ev.section);
   }
