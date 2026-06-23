@@ -213,7 +213,7 @@ const GEMINI_MAX_TIMEOUTS  = 1;
 const GEMINI_BASE_DELAY_MS = 5_000;
 const GEMINI_TIMEOUT_MS    = 90_000;
 
-async function geminiJson(prompt: string): Promise<any> {
+async function geminiJson(prompt: string, maxOutputTokens = 8192): Promise<any> {
   let lastError: Error | null = null;
   let timeouts = 0;
 
@@ -236,7 +236,7 @@ async function geminiJson(prompt: string): Promise<any> {
           contents: [{ role: "user", parts: [{ text: prompt }] }],
           generationConfig: {
             responseMimeType: "application/json",
-            maxOutputTokens: 8192,
+            maxOutputTokens,
             thinkingConfig: { thinkingBudget: 0 },
           },
         }),
@@ -647,22 +647,62 @@ async function clusterAllSections(
   return deduped;
 }
 
+// ─── Step 4b: Pre-filter events before scoring ────────────────────────────────
+// Scoring sends all events in one Gemini call. 400+ events exceeds the JSON
+// output token limit (~8K tokens = ~150 events max). Pre-filter to ~120 by:
+//   • Always keeping multi-publisher events (≥2 sources = genuinely covered)
+//   • Always keeping events that appeared on the Headlines feed
+//   • For solo-publisher events, keeping the N most recent per section
+
+const SOLO_KEEP_PER_SECTION: Partial<Record<SectionId, number>> = {
+  india:         12,
+  business:      10,
+  world:          8,
+  technology:     8,
+  sports:         6,
+  health:         5,
+  entertainment:  4,
+  science:        4,
+  local:          5,
+};
+
+function preFilterForScoring(events: ClusteredEvent[], logger: Logger): ClusteredEvent[] {
+  const alwaysKeep    = events.filter(ev => ev.publisherCount >= 2 || ev.inHeadlinesFeed);
+  const alwaysKeepIds = new Set(alwaysKeep.map(e => e.eventId));
+
+  const bySection = new Map<SectionId, ClusteredEvent[]>();
+  for (const ev of events) {
+    if (alwaysKeepIds.has(ev.eventId)) continue;
+    const arr = bySection.get(ev.section) ?? [];
+    arr.push(ev);
+    bySection.set(ev.section, arr);
+  }
+
+  const soloKept: ClusteredEvent[] = [];
+  for (const [sectionId, sectionEvents] of bySection) {
+    const limit  = SOLO_KEEP_PER_SECTION[sectionId] ?? 5;
+    const sorted = [...sectionEvents].sort((a, b) =>
+      new Date(b.firstPublishedAt).getTime() - new Date(a.firstPublishedAt).getTime()
+    );
+    soloKept.push(...sorted.slice(0, limit));
+  }
+
+  const filtered = [...alwaysKeep, ...soloKept];
+  if (filtered.length < events.length) {
+    logger(`Pre-filter: ${events.length} events → ${filtered.length} kept for scoring`);
+  }
+  return filtered;
+}
+
 // ─── Step 5: Batch importance scoring ─────────────────────────────────────────
 
-async function scoreEvents(
-  events: ClusteredEvent[],
-  logger: Logger,
-): Promise<ClusteredEvent[]> {
-  if (events.length === 0) return [];
-
-  logger(`Scoring ${events.length} events (1 batch Gemini call)…`);
-
+function scoringPrompt(events: ClusteredEvent[]): string {
   const eventList = events.map((ev, i) =>
     `${i}. [${ev.section}] [${ev.publisherCount}pub] ${ev.canonicalTitle}` +
     (ev.inHeadlinesFeed ? " ★" : "")
   ).join("\n");
 
-  const prompt = `You are Khabar AI's editorial director. Score each news event by civic importance for an average Indian listener.
+  return `You are Khabar AI's editorial director. Score each news event by civic importance for an average Indian listener.
 
 SCORING GUIDE (0-10):
 10 = Every Indian is directly affected right now (budget, election result, major disaster)
@@ -693,33 +733,105 @@ Return a JSON array (same order as input, ${events.length} items):
 
 Events:
 ${eventList}`;
+}
 
-  try {
-    const results: Array<{ importance: number; reason: string; confidence: string; breaking: boolean; mustInclude: boolean }> =
-      await geminiJson(prompt);
+function fallbackScore(ev: ClusteredEvent): number {
+  const now = Date.now();
+  const ageMs = now - new Date(ev.firstPublishedAt).getTime();
+  const recencyBonus = ageMs < 6 * 3600_000 ? 1.5 : ageMs < 12 * 3600_000 ? 0.8 : 0;
+  return Math.min(9, ev.publisherCount * 1.8 + (ev.inHeadlinesFeed ? 2.0 : 0) + recencyBonus);
+}
 
-    if (!Array.isArray(results) || results.length < events.length * 0.8) {
-      throw new Error(`Unexpected result length: ${results?.length} for ${events.length} events`);
-    }
+async function scoreEvents(
+  events: ClusteredEvent[],
+  logger: Logger,
+): Promise<ClusteredEvent[]> {
+  if (events.length === 0) return [];
 
-    return events.map((ev, i) => {
-      const r = results[i] ?? { importance: 3, reason: "No score returned", confidence: "low", mustInclude: false };
-      const mustInclude = Boolean(r.mustInclude);
-      return {
-        ...ev,
-        importanceScore:   Math.max(0, Math.min(10, Number(r.importance) || 3)),
-        importanceReason:  String(r.reason ?? "").slice(0, 200),
-        forcedByEditorial: mustInclude,
-      };
-    });
-  } catch (err: any) {
-    logger(`  ✗ Scoring failed: ${err.message?.slice(0, 80)} — fallback to publisher count`);
-    return events.map(ev => ({
+  // Pre-filter to stay within Gemini JSON output token limit
+  // (~50 tokens/event × 150 events = 7500 tokens, safe under 16K)
+  const filtered = preFilterForScoring(events, logger);
+  const filteredIds = new Set(filtered.map(e => e.eventId));
+
+  // Events dropped by pre-filter get fallback scores (they're low-priority solo stories)
+  const droppedWithFallback = events
+    .filter(ev => !filteredIds.has(ev.eventId))
+    .map(ev => ({
       ...ev,
-      importanceScore:  Math.min(9, ev.publisherCount * 1.5 + (ev.inHeadlinesFeed ? 1 : 0)),
-      importanceReason: `Scored by publisher coverage (${ev.publisherCount} publishers)`,
+      importanceScore:  fallbackScore(ev),
+      importanceReason: `Pre-filter fallback: solo source, low recency`,
+    }));
+
+  type ScoreResult = { importance: number; reason: string; confidence: string; breaking: boolean; mustInclude: boolean };
+
+  async function scoreOneBatch(batch: ClusteredEvent[]): Promise<ScoreResult[]> {
+    // 16K tokens supports ~300 events; batch should always be ≤150 after pre-filter
+    const results: ScoreResult[] = await geminiJson(scoringPrompt(batch), 16384);
+    if (!Array.isArray(results) || results.length < batch.length * 0.8) {
+      throw new Error(`Bad result length: ${results?.length} for ${batch.length} events`);
+    }
+    return results;
+  }
+
+  const BATCH_SIZE = 120;
+
+  let scored: ClusteredEvent[];
+  try {
+    if (filtered.length <= BATCH_SIZE) {
+      // Single call (the common case after pre-filter)
+      logger(`Scoring ${filtered.length} events (1 Gemini call)…`);
+      const results = await scoreOneBatch(filtered);
+      scored = filtered.map((ev, i) => {
+        const r = results[i] ?? { importance: 3, reason: "No score", confidence: "low", mustInclude: false };
+        return {
+          ...ev,
+          importanceScore:   Math.max(0, Math.min(10, Number(r.importance) || 3)),
+          importanceReason:  String(r.reason ?? "").slice(0, 200),
+          forcedByEditorial: Boolean(r.mustInclude),
+        };
+      });
+    } else {
+      // Batch scoring — split into chunks, then do a final comparative re-rank on top events
+      const batches: ClusteredEvent[][] = [];
+      for (let i = 0; i < filtered.length; i += BATCH_SIZE) {
+        batches.push(filtered.slice(i, i + BATCH_SIZE));
+      }
+      logger(`Scoring ${filtered.length} events in ${batches.length} batches…`);
+
+      const batchScored: ClusteredEvent[] = [];
+      for (const [bi, batch] of batches.entries()) {
+        logger(`  Batch ${bi + 1}/${batches.length}: ${batch.length} events…`);
+        try {
+          const results = await scoreOneBatch(batch);
+          batchScored.push(...batch.map((ev, i) => {
+            const r = results[i] ?? { importance: 3, reason: "No score", confidence: "low", mustInclude: false };
+            return {
+              ...ev,
+              importanceScore:   Math.max(0, Math.min(10, Number(r.importance) || 3)),
+              importanceReason:  String(r.reason ?? "").slice(0, 200),
+              forcedByEditorial: Boolean(r.mustInclude),
+            };
+          }));
+        } catch {
+          batchScored.push(...batch.map(ev => ({
+            ...ev, importanceScore: fallbackScore(ev), importanceReason: "Batch fallback",
+          })));
+        }
+      }
+      scored = batchScored;
+    }
+  } catch (err: any) {
+    logger(`  ✗ Scoring failed: ${err.message?.slice(0, 80)} — using fallback scores`);
+    scored = filtered.map(ev => ({
+      ...ev,
+      importanceScore:  fallbackScore(ev),
+      importanceReason: `Fallback: ${ev.publisherCount} publishers${ev.inHeadlinesFeed ? ", in headlines" : ""}`,
     }));
   }
+
+  const scoreSec = (Date.now()) ; // caller tracks timing
+  logger(`Scoring done — ${scored.length} scored + ${droppedWithFallback.length} pre-filter fallbacks`);
+  return [...scored, ...droppedWithFallback];
 }
 
 // ─── Step 7: Briefing plan ────────────────────────────────────────────────────
@@ -762,18 +874,34 @@ function buildBriefingPlan(events: ClusteredEvent[], logger: Logger): ClusteredE
     const slot = SECTION_SLOTS[sectionId];
     if (!slot) continue;
 
-    const sectionEvents = sorted
+    const aboveThreshold = sorted
       .filter(ev => !used.has(ev.eventId) && ev.section === sectionId && ev.importanceScore >= slot.threshold)
       .slice(0, slot.max);
 
-    for (const ev of sectionEvents) {
+    for (const ev of aboveThreshold) {
       ev.assignedSection = sectionId;
       plan.push(ev);
       used.add(ev.eventId);
     }
 
-    if (sectionEvents.length < slot.min) {
-      logger(`  ⚠ ${sectionId}: ${sectionEvents.length}/${slot.min} min (threshold ${slot.threshold})`);
+    // Force minimum slots even if below threshold — a section should never be empty
+    // because fallback scoring may have produced low scores across the board
+    if (aboveThreshold.length < slot.min) {
+      const needed    = slot.min - aboveThreshold.length;
+      const forceFill = sorted
+        .filter(ev => !used.has(ev.eventId) && ev.section === sectionId)
+        .slice(0, needed);
+
+      for (const ev of forceFill) {
+        ev.assignedSection = sectionId;
+        plan.push(ev);
+        used.add(ev.eventId);
+        logger(`  ↑ Force-filled ${sectionId} (score ${ev.importanceScore.toFixed(1)} < threshold ${slot.threshold}): ${ev.canonicalTitle.slice(0, 50)}`);
+      }
+
+      if (aboveThreshold.length + forceFill.length < slot.min) {
+        logger(`  ⚠ ${sectionId}: only ${aboveThreshold.length + forceFill.length}/${slot.min} available`);
+      }
     }
   }
 
