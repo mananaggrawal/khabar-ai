@@ -533,11 +533,14 @@ async function scriptBatch(
   const withMr = languages.includes("mr");
   const nonEnLangs = languages.filter(l => l !== "en");
 
-  // Build per-language script rules with explicit unicode mandate
+  // Translation rules — non-EN scripts are direct translations of scriptEn
   const langScriptRules = [
-    `- scriptHi, titleHi: ${LANG_META.hi.scriptNote} Example script: "${LANG_META.hi.example}"`,
-    withTa ? `- scriptTa, titleTa: ${LANG_META.ta.scriptNote} Example script: "${LANG_META.ta.example}"` : "",
-    withMr ? `- scriptMr, titleMr: ${LANG_META.mr.scriptNote} Example script: "${LANG_META.mr.example}"` : "",
+    `- scriptHi: Translate scriptEn into Hindi. ${LANG_META.hi.scriptNote} Example: "${LANG_META.hi.example}"`,
+    withTa ? `- scriptTa: Translate scriptEn into Tamil. ${LANG_META.ta.scriptNote} Example: "${LANG_META.ta.example}"` : "",
+    withMr ? `- scriptMr: Translate scriptEn into Marathi. ${LANG_META.mr.scriptNote} Example: "${LANG_META.mr.example}"` : "",
+    `- titleHi: Translate the English title into Hindi (Devanagari).`,
+    withTa ? `- titleTa: Translate the English title into Tamil script.` : "",
+    withMr ? `- titleMr: Translate the English title into Marathi (Devanagari).` : "",
   ].filter(Boolean).join("\n");
 
   const extraLangFields = [
@@ -563,10 +566,10 @@ SCRIPT RULES (scriptEn):
 - Never hedge with "details are unclear", "reportedly", or "it is said". State what is known as fact; omit what isn't.
 - Do NOT invent facts. If information is thin, make the known facts vivid — don't pad with filler phrases.
 
-SCRIPT LANGUAGE REQUIREMENTS — STRICTLY ENFORCED:
+TRANSLATIONS (scriptHi/Ta/Mr are direct translations of scriptEn — same content, different language):
 ${langScriptRules}
-- Keep English names, brands, numbers (digits) in their original form across all languages.
-- titleHi/titleTa/titleMr: natural translation of the English title — MUST use the native script.
+- Keep proper nouns, brand names, and numbers in their original form across all languages.
+- NEVER use Roman letters for native-language words.
 
 CRITICAL: Every index 0–${sectionStories.length - 1} must appear in exactly one group's sourceIndices.
 
