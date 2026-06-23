@@ -118,10 +118,10 @@ function parseGeminiJson(raw: string): any {
 
 // Retryable status codes: 429 (rate limit), 500, 502, 503, 504 (transient server errors)
 const RETRYABLE_STATUSES  = new Set([429, 500, 502, 503, 504]);
-const GEMINI_MAX_RETRIES  = 3;      // for HTTP errors (rate limit, server error)
-const GEMINI_MAX_TIMEOUTS = 1;      // only 1 retry on hang — fail fast, don't block the run
-const GEMINI_BASE_DELAY_MS = 5_000; // 5s → 10s → 20s
-const GEMINI_TIMEOUT_MS   = 60_000; // 60s per attempt — Gemini Flash responds in <30s normally
+const GEMINI_MAX_RETRIES  = 3;       // for HTTP errors (rate limit, server error)
+const GEMINI_MAX_TIMEOUTS = 1;       // max 2 total timeout attempts, then give up
+const GEMINI_BASE_DELAY_MS = 5_000;  // 5s → 10s → 20s
+const GEMINI_TIMEOUT_MS   = 90_000;  // 90s — thinking disabled below so Flash responds in <20s normally
 
 async function geminiJson(prompt: string): Promise<any> {
   let lastError: Error | null = null;
@@ -146,7 +146,9 @@ async function geminiJson(prompt: string): Promise<any> {
           contents: [{ role: "user", parts: [{ text: prompt }] }],
           generationConfig: {
             responseMimeType: "application/json",
-            maxOutputTokens: 16384,
+            maxOutputTokens: 8192,
+            // Disable thinking tokens — not needed for news scripting and adds 30-120s latency
+            thinkingConfig: { thinkingBudget: 0 },
           },
         }),
       });
@@ -163,7 +165,11 @@ async function geminiJson(prompt: string): Promise<any> {
       if (finishReason && finishReason !== "STOP") {
         console.warn(`[gemini] finishReason=${finishReason}`);
       }
-      const text = json.candidates?.[0]?.content?.parts?.[0]?.text ?? "[]";
+      // Find the first part that contains actual text (skip any thought parts)
+      const parts: any[] = json.candidates?.[0]?.content?.parts ?? [];
+      const text = parts.find((p: any) => p.text && !p.thought)?.text
+        ?? parts.find((p: any) => p.text)?.text
+        ?? "[]";
       return parseGeminiJson(text);
     } catch (err: any) {
       if (err.name === "AbortError") {
