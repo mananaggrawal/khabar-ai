@@ -1,12 +1,9 @@
 /**
  * ElevenLabs TTS — per-story synthesis.
  *
- * Model: eleven_flash_v2_5 — cheapest multilingual model (50% lower cost vs v2),
- *        supports both English and Hindi.
- * language_code: only set for Hindi ("hi"). "en-IN" is not a valid ElevenLabs
- *        language code and causes 400 errors — English is left unset so the
- *        voice speaks in its natural accent.
- * Voice:  configured via ELEVENLABS_VOICE_ID env var.
+ * Model: eleven_flash_v2_5 — cheapest multilingual model, supports EN/HI/TA/MR.
+ * language_code: set for all non-English languages. English omitted (no "en-IN").
+ * Voice: configured via ELEVENLABS_VOICE_ID_* env vars per language.
  * Output: MP3 @ 44.1 kHz / 128 kbps.
  */
 
@@ -26,16 +23,30 @@ export const resetQuota       = () => { _quotaExhausted = false; };
 const MODEL_ID   = "eleven_flash_v2_5";
 const OUTPUT_FMT = "mp3_44100_128";
 
+// Language codes supported by Flash v2.5. English is omitted (use model default).
+const LANG_CODES: Record<string, string> = {
+  hi: "hi",
+  ta: "ta",
+  mr: "mr",
+};
+
+function getLangFromFilename(filename: string): string {
+  if (filename.endsWith("-hi")) return "hi";
+  if (filename.endsWith("-ta")) return "ta";
+  if (filename.endsWith("-mr")) return "mr";
+  return "en";
+}
+
 function getKey(): string {
   const k = process.env.ELEVENLABS_API_KEY;
   if (!k) throw new Error("ELEVENLABS_API_KEY is not set");
   return k;
 }
 
-function getVoiceId(filename: string): string {
-  if (filename.endsWith("-hi")) {
-    return process.env.ELEVENLABS_VOICE_ID_HI ?? process.env.ELEVENLABS_VOICE_ID ?? "WuePGPKIAIKI8COZpzce";
-  }
+function getVoiceId(lang: string): string {
+  if (lang === "hi") return process.env.ELEVENLABS_VOICE_ID_HI ?? process.env.ELEVENLABS_VOICE_ID ?? "WuePGPKIAIKI8COZpzce";
+  if (lang === "ta") return process.env.ELEVENLABS_VOICE_ID_TA ?? process.env.ELEVENLABS_VOICE_ID ?? "nwj0s2LU9bDWRKND5yzA";
+  if (lang === "mr") return process.env.ELEVENLABS_VOICE_ID_MR ?? process.env.ELEVENLABS_VOICE_ID ?? "nwj0s2LU9bDWRKND5yzA";
   return process.env.ELEVENLABS_VOICE_ID ?? "nwj0s2LU9bDWRKND5yzA";
 }
 
@@ -44,12 +55,10 @@ function getVoiceId(filename: string): string {
 async function synthesize(text: string, filename: string): Promise<Buffer> {
   if (_quotaExhausted) throw new Error("ElevenLabs quota exhausted — skipping API call");
 
-  const isHindi = filename.endsWith("-hi");
-  const voiceId = getVoiceId(filename);
+  const lang    = getLangFromFilename(filename);
+  const voiceId = getVoiceId(lang);
   const url     = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=${OUTPUT_FMT}`;
 
-  // language_code "hi" steers Flash v2.5 into Hindi.
-  // English: omit language_code entirely — "en-IN" is invalid and returns 400.
   const payload: Record<string, unknown> = {
     text,
     model_id: MODEL_ID,
@@ -60,7 +69,10 @@ async function synthesize(text: string, filename: string): Promise<Buffer> {
       use_speaker_boost: true,
     },
   };
-  if (isHindi) payload.language_code = "hi";
+
+  // Set language_code for all non-English languages.
+  // English is omitted entirely — "en-IN" is invalid and returns 400.
+  if (LANG_CODES[lang]) payload.language_code = LANG_CODES[lang];
 
   const res = await fetch(url, {
     method: "POST",
@@ -134,7 +146,7 @@ export async function elevenLabsTTS(
   const mp3         = await synthesizeWithRetry(text, filename);
   const durationSec = estimateDurationSec(text);
   const kb          = (mp3.length / 1024).toFixed(0);
-  const lang        = filename.endsWith("-hi") ? "HI" : "EN";
+  const lang        = getLangFromFilename(filename).toUpperCase();
 
   if (LOCAL_MODE) {
     const dir = join(process.cwd(), "public", "audio");

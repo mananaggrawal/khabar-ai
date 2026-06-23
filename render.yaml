@@ -27,5 +27,15 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID          # English voice (default)
+        sync: false
+      - key: ELEVENLABS_VOICE_ID_HI       # Hindi voice
+        sync: false
+      - key: ELEVENLABS_VOICE_ID_TA       # Tamil voice
+        sync: false
+      - key: ELEVENLABS_VOICE_ID_MR       # Marathi voice
+        sync: false
       - key: ADMIN_KEY
         sync: false

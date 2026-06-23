@@ -1,16 +1,18 @@
 /**
- * Khabar AI Briefing Generator — v3
+ * Khabar AI Briefing Generator — v4
  *
  * Pipeline:
- *  1. Fetch all Google News topic feeds in parallel (no caps — take everything)
- *  2. Parse + deduplicate stories (URL-hash + title-prefix)
- *  3. Per-section club + script (1 Gemini call/section): groups related stories,
- *     synthesises them into one richer story, writes EN+HI scripts (60-80 words)
- *  4. Time guard — if estimated listen time > 15 min, trim from tail of
- *     non-priority sections (Headlines / Business / World are never trimmed)
- *  5. Per-story TTS: one googleTTS call per story per language
- *     → abort works between every story, timestamps are exact (audioStartSec = 0)
- *  6. Save flat DailyBriefing { stories[] } to Supabase Storage
+ *  1. Fetch all Google News RSS feeds in parallel
+ *  2. URL/title dedup → flat raw stories
+ *  3. OG image fetching [parallel with step 4]
+ *  4. Gemini clustering: group same-event articles per section → ClusteredEvents
+ *  5. Batch importance scoring: one Gemini call, all events compared + mustInclude flags
+ *  6. mustInclude events (PM, disasters, RBI, etc.) flagged by AI — no hardcoded patterns
+ *  7. Briefing plan: slot-based selection → 16-20 stories across sections
+ *  8. Script generation: 130-160 word Hook/What/Why/Next per selected event
+ *  9. Briefing wrapper: static opening + LLM transitions + static closing
+ * 10. TTS: per story + per segment, 4 languages (EN/HI/TA/MR) via ElevenLabs
+ * 11. Save DailyBriefing with stories[], segments[], meta{} to Supabase Storage
  */
 
 import { createHash } from "node:crypto";
@@ -29,68 +31,157 @@ export type TtsProvider = "google" | "elevenlabs" | "edge" | "kokoro";
 
 const LOCAL_MODE = process.env.LOCAL_MODE === "true";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Public types ─────────────────────────────────────────────────────────────
 
 export type StorySource = {
   title: string;
-  source: string; // publication name
+  source: string;
   link: string;
 };
 
 export type Story = {
   id: string;
   title: string;
-  titleHi?: string;        // Hindi title — shown in UI when language = "hi"
-  titleTa?: string;        // Tamil title
-  titleMr?: string;        // Marathi title
+  titleHi?: string;
+  titleTa?: string;
+  titleMr?: string;
   source: string;
   link: string;
   publishedAt: string;
   section: SectionId;
   imageUrl?: string;
-  description?: string;   // RSS snippet — used by Gemini to write richer scripts
-  sources?: StorySource[]; // all raw articles that were merged into this story
+  description?: string;
+  sources?: StorySource[];
   scriptEn: string;
   scriptHi: string;
-  scriptTa?: string;       // Tamil script
-  scriptMr?: string;       // Marathi script
+  scriptTa?: string;
+  scriptMr?: string;
   audioUrlEn?: string;
   audioUrlHi?: string;
-  audioUrlTa?: string;     // Tamil audio
-  audioUrlMr?: string;     // Marathi audio
-  audioStartSec?: number; // always 0 — kept for compatibility with player
+  audioUrlTa?: string;
+  audioUrlMr?: string;
+  audioStartSec?: number;
+  // v4 additions
+  importanceScore?: number;
+  importanceReason?: string;
+  forcedByEditorial?: boolean;
+  wordCount?: number;
+  publisherCount?: number;
+  publishers?: string[];
+};
+
+/** A non-story audio segment: opening, section transition, or closing. */
+export type BriefingSegment = {
+  id: string;
+  type: "opening" | "transition" | "closing";
+  /** For transitions: the section that starts AFTER this segment plays. */
+  section?: SectionId;
+  scriptEn: string;
+  scriptHi: string;
+  scriptTa?: string;
+  scriptMr?: string;
+  audioUrlEn?: string;
+  audioUrlHi?: string;
+  audioUrlTa?: string;
+  audioUrlMr?: string;
+};
+
+export type BriefingMeta = {
+  totalStories: number;
+  totalArticles: number;
+  estimatedDurationSec: number;
+  sections: SectionId[];
 };
 
 export type DailyBriefing = {
   date: string;
   generatedAt: string;
   stories: Story[];
-  generatedLanguages?: string[];  // which languages TTS was generated for
+  segments?: BriefingSegment[];
+  meta?: BriefingMeta;
+  generatedLanguages?: string[];
+  runSummary?: RunSummary;
 };
 
 export type Logger = (msg: string) => void;
 
+export type RunSummary = {
+  elapsedSec: number;
+  fetchSec: number;
+  clusterSec: number;
+  scoreSec: number;
+  scriptSec: number;
+  ttsSec: number;
+  rawStories: number;
+  clusteredEvents: number;
+  selectedStories: number;
+  tts: TtsCostInfo;
+};
+
+export type TtsCostInfo = {
+  provider: TtsProvider;
+  enChars: number;
+  hiChars: number;
+  taChars: number;
+  mrChars: number;
+  totalChars: number;
+  estimatedUsd: number;
+  storiesAttempted: number;
+  storiesWithAudio: number;
+};
+
+// ─── Internal type: event after clustering, before scripting ──────────────────
+
+type ClusteredEvent = {
+  eventId: string;
+  canonicalTitle: string;
+  section: SectionId;          // source section from RSS feed
+  assignedSection: SectionId;  // final section in briefing (may differ)
+  sourceStories: Story[];      // all raw stories merged into this event
+  publisherCount: number;
+  publishers: string[];
+  imageUrl?: string;
+  firstPublishedAt: string;
+  importanceScore: number;
+  importanceReason: string;
+  forcedByEditorial: boolean;
+  inHeadlinesFeed: boolean;    // appeared on Google News homepage/top feed
+};
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const TARGET_WPM   = 150;  // average reading/speech rate
-const TARGET_MINS  = 30;   // soft cap — secondary sections trimmed only if well over this
+const TARGET_WPM = 150;
 
+const TOP_STORIES_MIN  = 4;
+const TOP_STORIES_MAX  = 5;
+const TOP_STORIES_THRESHOLD = 6.5;
 
-// Primary sections: all stories kept, never trimmed by time guard
-const PRIORITY_SECTIONS: SectionId[] = ["headlines", "india", "world", "business"];
+// Section slots: min/max stories per section + minimum importance score to qualify
+const SECTION_SLOTS: Partial<Record<SectionId, { min: number; max: number; threshold: number }>> = {
+  india:         { min: 2, max: 4, threshold: 4.0 },
+  world:         { min: 2, max: 4, threshold: 4.0 },
+  business:      { min: 1, max: 3, threshold: 4.0 },
+  technology:    { min: 1, max: 2, threshold: 3.5 },
+  sports:        { min: 1, max: 2, threshold: 3.0 },
+  health:        { min: 0, max: 1, threshold: 3.0 },
+  entertainment: { min: 0, max: 1, threshold: 3.0 },
+  science:       { min: 0, max: 1, threshold: 3.0 },
+  local:         { min: 0, max: 1, threshold: 3.0 },
+};
 
-// ─── Story ID ─────────────────────────────────────────────────────────────────
+const SECTION_ORDER: SectionId[] = [
+  "india", "world", "business", "technology", "sports",
+  "health", "entertainment", "science", "local",
+];
 
-function storyId(url: string): string {
-  return createHash("sha256").update(url).digest("hex").slice(0, 16);
-}
+const MAX_TOTAL_STORIES = 20;
 
 // ─── Gemini helpers ───────────────────────────────────────────────────────────
 
 const GEMINI_URL = (key: string) =>
   `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`;
 
-function getKey(): string {
+function getGeminiKey(): string {
   const k = process.env.GEMINI_API_KEY;
   if (!k) throw new Error("GEMINI_API_KEY is not set");
   return k;
@@ -116,12 +207,11 @@ function parseGeminiJson(raw: string): any {
   throw new Error(`Failed to parse Gemini JSON: ${text.slice(0, 200)}`);
 }
 
-// Retryable status codes: 429 (rate limit), 500, 502, 503, 504 (transient server errors)
-const RETRYABLE_STATUSES  = new Set([429, 500, 502, 503, 504]);
-const GEMINI_MAX_RETRIES  = 3;       // for HTTP errors (rate limit, server error)
-const GEMINI_MAX_TIMEOUTS = 1;       // max 2 total timeout attempts, then give up
-const GEMINI_BASE_DELAY_MS = 5_000;  // 5s → 10s → 20s
-const GEMINI_TIMEOUT_MS   = 90_000;  // 90s — thinking disabled below so Flash responds in <20s normally
+const RETRYABLE_STATUSES   = new Set([429, 500, 502, 503, 504]);
+const GEMINI_MAX_RETRIES   = 3;
+const GEMINI_MAX_TIMEOUTS  = 1;
+const GEMINI_BASE_DELAY_MS = 5_000;
+const GEMINI_TIMEOUT_MS    = 90_000;
 
 async function geminiJson(prompt: string): Promise<any> {
   let lastError: Error | null = null;
@@ -130,7 +220,7 @@ async function geminiJson(prompt: string): Promise<any> {
   for (let attempt = 0; attempt <= GEMINI_MAX_RETRIES; attempt++) {
     if (attempt > 0) {
       const delayMs = GEMINI_BASE_DELAY_MS * Math.pow(2, attempt - 1);
-      console.log(`[gemini] retry ${attempt}/${GEMINI_MAX_RETRIES} after ${delayMs / 1000}s (${lastError?.message?.slice(0, 60)})`);
+      console.log(`[gemini] retry ${attempt}/${GEMINI_MAX_RETRIES} after ${delayMs / 1000}s`);
       await new Promise(r => setTimeout(r, delayMs));
     }
 
@@ -138,7 +228,7 @@ async function geminiJson(prompt: string): Promise<any> {
     const timer = setTimeout(() => ctrl.abort(), GEMINI_TIMEOUT_MS);
 
     try {
-      const res = await fetch(GEMINI_URL(getKey()), {
+      const res = await fetch(GEMINI_URL(getGeminiKey()), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: ctrl.signal,
@@ -147,7 +237,6 @@ async function geminiJson(prompt: string): Promise<any> {
           generationConfig: {
             responseMimeType: "application/json",
             maxOutputTokens: 8192,
-            // Disable thinking tokens — not needed for news scripting and adds 30-120s latency
             thinkingConfig: { thinkingBudget: 0 },
           },
         }),
@@ -161,11 +250,6 @@ async function geminiJson(prompt: string): Promise<any> {
       }
 
       const json = await res.json();
-      const finishReason = json.candidates?.[0]?.finishReason;
-      if (finishReason && finishReason !== "STOP") {
-        console.warn(`[gemini] finishReason=${finishReason}`);
-      }
-      // Find the first part that contains actual text (skip any thought parts)
       const parts: any[] = json.candidates?.[0]?.content?.parts ?? [];
       const text = parts.find((p: any) => p.text && !p.thought)?.text
         ?? parts.find((p: any) => p.text)?.text
@@ -174,9 +258,8 @@ async function geminiJson(prompt: string): Promise<any> {
     } catch (err: any) {
       if (err.name === "AbortError") {
         timeouts++;
-        lastError = new Error(`Gemini timed out after ${GEMINI_TIMEOUT_MS / 1000}s (timeout ${timeouts}/${GEMINI_MAX_TIMEOUTS + 1})`);
-        console.warn(`[gemini] attempt ${attempt} timed out`);
-        if (timeouts > GEMINI_MAX_TIMEOUTS) throw lastError; // give up fast after 2 timeouts
+        lastError = new Error(`Gemini timed out (${timeouts}/${GEMINI_MAX_TIMEOUTS + 1})`);
+        if (timeouts > GEMINI_MAX_TIMEOUTS) throw lastError;
         continue;
       }
       throw err;
@@ -188,6 +271,38 @@ async function geminiJson(prompt: string): Promise<any> {
   throw lastError ?? new Error("Gemini request failed after retries");
 }
 
+// ─── Language metadata ────────────────────────────────────────────────────────
+
+const LANG_META: Record<string, { name: string; scriptNote: string; example: string }> = {
+  hi: {
+    name:       "Hindi",
+    scriptNote: "MUST use Devanagari script. NEVER Roman/English letters for Hindi words.",
+    example:    "भारत में इस हफ्ते तकनीक क्षेत्र में बड़ा बदलाव आया।",
+  },
+  ta: {
+    name:       "Tamil",
+    scriptNote: "MUST use Tamil script. NEVER Roman/English letters for Tamil words.",
+    example:    "இந்தியாவில் இந்த வாரம் தொழில்நுட்பத்தில் பெரிய மாற்றம் ஏற்பட்டது.",
+  },
+  mr: {
+    name:       "Marathi",
+    scriptNote: "MUST use Devanagari script. NEVER Roman/English letters for Marathi words.",
+    example:    "भारतात या आठवड्यात तंत्रज्ञान क्षेत्रात मोठा बदल झाला.",
+  },
+};
+
+const SCRIPT_RE: Record<string, RegExp> = {
+  hi: /[ऀ-ॿ]/,
+  mr: /[ऀ-ॿ]/,
+  ta: /[஀-௿]/,
+};
+
+function hasExpectedScript(text: string | undefined, lang: string): boolean {
+  if (!text || text.trim().length < 3) return false;
+  const re = SCRIPT_RE[lang];
+  return re ? re.test(text) : true;
+}
+
 // ─── Step 1: Fetch all feeds ──────────────────────────────────────────────────
 
 async function fetchAllFeeds(city: string): Promise<Map<SectionId, RssItem[]>> {
@@ -195,9 +310,8 @@ async function fetchAllFeeds(city: string): Promise<Map<SectionId, RssItem[]>> {
     FEEDS.map(async (feed) => {
       const url = feed.buildUrl({ city });
       let items = await fetchRss(url, feed.label, feed.id);
-      // If primary URL returned nothing and a fallback exists, try it
       if (items.length === 0 && feed.fallbackUrl) {
-        console.warn(`[feeds] ${feed.label}: topic URL returned 0 — trying fallback URL`);
+        console.warn(`[feeds] ${feed.label}: topic URL returned 0 — trying fallback`);
         items = await fetchRss(feed.fallbackUrl, feed.label, feed.id);
       }
       return { id: feed.id, items };
@@ -213,17 +327,22 @@ async function fetchAllFeeds(city: string): Promise<Map<SectionId, RssItem[]>> {
   return map;
 }
 
-// ─── Step 2: Deduplicate into flat Story list ─────────────────────────────────
+// ─── Step 2: Build raw stories (dedup) ───────────────────────────────────────
 
 function normalize(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
 }
 
-function buildStories(feedMap: Map<SectionId, RssItem[]>): Story[] {
+function storyId(url: string): string {
+  return createHash("sha256").update(url).digest("hex").slice(0, 16);
+}
+
+function buildRawStories(feedMap: Map<SectionId, RssItem[]>): Story[] {
   const seenIds    = new Set<string>();
   const seenTitles = new Set<string>();
   const stories: Story[] = [];
 
+  // Process section feeds before headlines so section metadata is preserved
   const order: SectionId[] = [
     "india", "world", "business", "technology", "entertainment",
     "sports", "science", "health", "local", "headlines",
@@ -257,7 +376,7 @@ function buildStories(feedMap: Map<SectionId, RssItem[]>): Story[] {
   return stories;
 }
 
-// ─── Step 2b: OG images ───────────────────────────────────────────────────────
+// ─── Step 2b: OG image fetching ───────────────────────────────────────────────
 
 function extractOgImage(html: string): string | undefined {
   const head = html.slice(0, 20_000);
@@ -274,12 +393,10 @@ function extractOgImage(html: string): string | undefined {
   return undefined;
 }
 
-// Real Chrome UA — Googlebot gets blocked or served bot-challenge pages on most Indian news sites
 const FETCH_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1";
 
 async function fetchOgImage(url: string): Promise<string | undefined> {
   const ctrl  = new AbortController();
-  // Single timer covers the ENTIRE request (connect + headers + body read)
   const timer = setTimeout(() => ctrl.abort(), 8000);
   try {
     const res = await fetch(url, {
@@ -297,17 +414,18 @@ async function fetchOgImage(url: string): Promise<string | undefined> {
     if (!reader) return undefined;
     const chunks: Uint8Array[] = [];
     let total = 0;
-    // Read up to 40KB — enough to clear verbose <head> sections on Indian news sites
     while (total < 40_000) {
       const { done, value } = await reader.read();
       if (done || !value) break;
       chunks.push(value);
       total += value.byteLength;
     }
-    // Abort to cleanly close the connection (better than reader.cancel())
     ctrl.abort();
     const html = new TextDecoder().decode(
-      chunks.reduce((acc, c) => { const a = new Uint8Array(acc.length + c.length); a.set(acc); a.set(c, acc.length); return a; }, new Uint8Array(0))
+      chunks.reduce((acc, c) => {
+        const a = new Uint8Array(acc.length + c.length);
+        a.set(acc); a.set(c, acc.length); return a;
+      }, new Uint8Array(0))
     );
     return extractOgImage(html);
   } catch {
@@ -320,9 +438,9 @@ async function fetchOgImage(url: string): Promise<string | undefined> {
 async function fetchAllOgImages(
   stories: Story[],
   logger: Logger,
-  liveMap?: Map<string, string>,  // optional shared map populated as images arrive
+  liveMap?: Map<string, string>,
 ): Promise<Story[]> {
-  logger(`Fetching OG images for ${stories.length} stories (10 concurrent)…`);
+  logger(`Fetching OG images for ${stories.length} stories…`);
   const updated     = stories.map((s) => ({ ...s }));
   const CONCURRENCY = 10;
 
@@ -338,7 +456,7 @@ async function fetchAllOgImages(
         const img = await fetchOgImage(story.link);
         if (img) {
           updated[idx] = { ...updated[idx], imageUrl: img };
-          liveMap?.set(story.id, img);   // make available to concurrent scripting saves
+          liveMap?.set(story.id, img);
         }
       }),
     );
@@ -349,84 +467,457 @@ async function fetchAllOgImages(
   return updated;
 }
 
-// Build the best possible fallback script from raw RSS fields (no Gemini)
-function fallbackScript(s: Story): string {
-  const desc = s.description
-    ?.replace(/<[^>]+>/g, "")   // strip HTML tags
-    .replace(/&nbsp;/gi, " ")   // decode &nbsp; in case description came from an older briefing
-    .replace(/&#160;/g, " ")
-    .replace(/  +/g, " ")       // collapse double-spaces
-    .replace(/\s+/g, " ")
-    .trim();
-  // Google News descriptions are a list of article titles — not useful as a summary.
-  // Detect by: very few periods but many distinct source-name-like segments.
-  const isArticleList = desc
-    ? (desc.match(/\s{1,}[A-Z][a-z]+ [A-Z][a-z]+\s/g) ?? []).length > 2 && !desc.includes(".")
-    : false;
-  if (desc && desc.length > 40 && !isArticleList) {
-    // Combine title + description into a readable sentence
-    const titleClean = s.title.replace(/\s*[-–|].*$/, "").trim(); // strip source suffix
-    const descTrimmed = desc.slice(0, 220).trim();
-    // Avoid repeating the title verbatim in the description
-    const descStart = descTrimmed.toLowerCase().startsWith(titleClean.toLowerCase().slice(0, 20))
-      ? descTrimmed
-      : `${titleClean}. ${descTrimmed}`;
-    return descStart.endsWith(".") || descStart.endsWith("?") || descStart.endsWith("!")
-      ? descStart
-      : `${descStart}.`;
+// ─── Step 4: Cluster articles into events (per section, no scripts) ───────────
+
+interface ClusterGroup {
+  canonicalTitle: string;
+  sourceIndices:  number[];
+  imageIndex?:    number;
+}
+
+async function clusterSection(
+  sectionStories: Story[],
+  sectionId: SectionId,
+  logger: Logger,
+): Promise<ClusteredEvent[]> {
+  if (sectionStories.length === 0) return [];
+
+  const label       = FEED_MAP.get(sectionId)?.label ?? sectionId;
+  const isHeadlines = sectionId === "headlines";
+
+  const prompt = `You are a news editor. These ${sectionStories.length} articles are from the "${label}" section.
+
+Group articles that cover EXACTLY the same event or announcement.
+Different stories — even if loosely related — MUST stay in separate groups.
+When in doubt, keep separate.
+
+Return JSON array only:
+[{"canonicalTitle":"concise event title (max 12 words)","sourceIndices":[0,2],"imageIndex":0}]
+
+Rules:
+- Every index 0-${sectionStories.length - 1} must appear in exactly one group
+- canonicalTitle: specific and factual, state the event clearly
+- imageIndex: which sourceIndex is most likely to have an image (prefer Reuters, AP, PTI, AFP)
+
+Articles:
+${sectionStories.map((s, i) => `${i}. [${s.source}] ${s.title}`).join("\n")}`;
+
+  try {
+    const groups: ClusterGroup[] = await geminiJson(prompt);
+    if (!Array.isArray(groups) || groups.length === 0) throw new Error("empty result");
+
+    const covered       = new Set<number>();
+    const emittedTitles = new Set<string>();
+    const events: ClusteredEvent[] = [];
+
+    for (const g of groups) {
+      const indices = (g.sourceIndices ?? []).filter(i => i >= 0 && i < sectionStories.length);
+      if (indices.length === 0) continue;
+      indices.forEach(i => covered.add(i));
+
+      const title = (g.canonicalTitle ?? "").trim();
+      if (!title || emittedTitles.has(title)) continue;
+      emittedTitles.add(title);
+
+      const imageIdx      = g.imageIndex != null && indices.includes(g.imageIndex) ? g.imageIndex : indices[0];
+      const primaryUrl    = sectionStories[imageIdx]?.link ?? sectionStories[indices[0]].link;
+      const publishers    = [...new Set(indices.map(i => sectionStories[i].source))];
+      const dates         = indices.map(i => sectionStories[i].publishedAt).sort();
+      const imageUrl      = indices.map(i => sectionStories[i].imageUrl).find(Boolean);
+      const sourceStories = indices.map(i => sectionStories[i]);
+
+      // For headlines feed, inherit the best matching non-headlines section
+      const nonHeadlineSection = sourceStories
+        .map(s => s.section)
+        .find(s => s !== "headlines") ?? "india";
+
+      events.push({
+        eventId:           storyId(primaryUrl),
+        canonicalTitle:    title,
+        section:           isHeadlines ? nonHeadlineSection : sectionId,
+        assignedSection:   isHeadlines ? nonHeadlineSection : sectionId,
+        sourceStories,
+        publisherCount:    publishers.length,
+        publishers,
+        imageUrl,
+        firstPublishedAt:  dates[0] ?? new Date().toISOString(),
+        importanceScore:   0,
+        importanceReason:  "",
+        forcedByEditorial: false,
+        inHeadlinesFeed:   isHeadlines || sourceStories.some(s => s.section === "headlines"),
+      });
+    }
+
+    // Uncovered stories → solo events
+    for (let i = 0; i < sectionStories.length; i++) {
+      if (covered.has(i)) continue;
+      const s = sectionStories[i];
+      const nonHLSection = s.section !== "headlines" ? s.section : "india";
+      events.push({
+        eventId:           s.id,
+        canonicalTitle:    s.title.replace(/\s*[-–|]\s*[^-–|]{1,40}$/, "").trim(),
+        section:           isHeadlines ? nonHLSection : sectionId,
+        assignedSection:   isHeadlines ? nonHLSection : sectionId,
+        sourceStories:     [s],
+        publisherCount:    1,
+        publishers:        [s.source],
+        imageUrl:          s.imageUrl,
+        firstPublishedAt:  s.publishedAt,
+        importanceScore:   0,
+        importanceReason:  "",
+        forcedByEditorial: false,
+        inHeadlinesFeed:   isHeadlines,
+      });
+    }
+
+    return events;
+  } catch (err: any) {
+    logger(`  ✗ cluster ${sectionId}: ${err.message?.slice(0, 80)} — each article = 1 event`);
+    return sectionStories.map(s => {
+      const nonHLSection = s.section !== "headlines" ? s.section : "india";
+      return {
+        eventId:           s.id,
+        canonicalTitle:    s.title.replace(/\s*[-–|]\s*[^-–|]{1,40}$/, "").trim(),
+        section:           isHeadlines ? nonHLSection : sectionId,
+        assignedSection:   isHeadlines ? nonHLSection : sectionId,
+        sourceStories:     [s],
+        publisherCount:    1,
+        publishers:        [s.source],
+        imageUrl:          s.imageUrl,
+        firstPublishedAt:  s.publishedAt,
+        importanceScore:   0,
+        importanceReason:  "",
+        forcedByEditorial: false,
+        inHeadlinesFeed:   sectionId === "headlines",
+      };
+    });
   }
-  // Last resort: use cleaned title (strip " – Source" suffix common in Google News)
-  const cleanTitle = s.title.replace(/\s*[-–|]\s*[^-–|]{1,40}$/, "").trim();
-  return `${cleanTitle}.`;
 }
 
-// ─── Step 3: Script stories — merge duplicates, keep distinct ones separate ───
-//
-// One Gemini call for all stories in a section.
-// Stories covering the same event are merged into one group; distinct ones stay separate.
-// No group cap — Gemini decides what's truly the same story.
-// Target: 50-70 words per group, capturing key facts, numbers, and metrics.
+/** Deduplicate clustered events across sections by title token overlap. */
+function dedupeEvents(events: ClusteredEvent[]): ClusteredEvent[] {
+  function tokenize(s: string): string[] {
+    return s.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter(t => t.length > 2);
+  }
+  function overlap(a: string[], b: string[]): number {
+    const sb = new Set(b);
+    return a.filter(t => sb.has(t)).length / Math.max(a.length, b.length, 1);
+  }
 
-// ── Script language validation ────────────────────────────────────────────────
-// Checks that a text field is actually written in the expected unicode block.
-
-const SCRIPT_RE: Record<string, RegExp> = {
-  hi: /[ऀ-ॿ]/,  // Devanagari
-  mr: /[ऀ-ॿ]/,  // Devanagari (Marathi)
-  ta: /[஀-௿]/,  // Tamil
-};
-
-function hasExpectedScript(text: string | undefined, lang: string): boolean {
-  if (!text || text.trim().length < 3) return false;
-  const re = SCRIPT_RE[lang];
-  return re ? re.test(text) : true; // EN has no unicode block requirement
+  const kept: { event: ClusteredEvent; tokens: string[] }[] = [];
+  for (const ev of events) {
+    const toks  = tokenize(ev.canonicalTitle);
+    const isDup = kept.some(k => overlap(toks, k.tokens) >= 0.55);
+    if (!isDup) kept.push({ event: ev, tokens: toks });
+  }
+  return kept.map(k => k.event);
 }
 
-// Language metadata used for prompt construction and fix-up calls
-const LANG_META: Record<string, { name: string; scriptNote: string; example: string }> = {
-  hi: {
-    name:       "Hindi",
-    scriptNote: "MUST use Devanagari script. NEVER Roman/English letters for Hindi words.",
-    example:    "भारत में इस हफ्ते तकनीक क्षेत्र में बड़ा बदलाव आया।",
-  },
-  ta: {
-    name:       "Tamil",
-    scriptNote: "MUST use Tamil script. NEVER Roman/English letters for Tamil words.",
-    example:    "இந்தியாவில் இந்த வாரம் தொழில்நுட்பத்தில் பெரிய மாற்றம் ஏற்பட்டது.",
-  },
-  mr: {
-    name:       "Marathi",
-    scriptNote: "MUST use Devanagari script. NEVER Roman/English letters for Marathi words.",
-    example:    "भारतात या आठवड्यात तंत्रज्ञान क्षेत्रात मोठा बदल झाला.",
-  },
-};
+async function clusterAllSections(
+  rawStories: Story[],
+  logger: Logger,
+): Promise<ClusteredEvent[]> {
+  const bySection = new Map<SectionId, Story[]>();
+  for (const s of rawStories) {
+    const arr = bySection.get(s.section) ?? [];
+    arr.push(s);
+    bySection.set(s.section, arr);
+  }
 
-// ── Fix-up pass: re-translate any scripts that came back in the wrong language ──
-//
-// Called after Gemini returns. For any story where a non-EN script field is
-// empty or lacks the expected unicode block, we run one targeted Gemini call
-// per batch of broken stories to get the correct native-script translation.
+  logger(`Clustering ${rawStories.length} stories across ${bySection.size} sections…`);
+  const allEvents: ClusteredEvent[] = [];
 
+  for (const [sectionId, stories] of bySection) {
+    if (isAbortRequested()) { logger("⛔ Aborted"); break; }
+    const emoji = FEED_MAP.get(sectionId)?.emoji ?? "📰";
+    logger(`  ${emoji} ${sectionId}: ${stories.length} articles…`);
+    const events = await clusterSection(stories, sectionId, logger);
+    logger(`    → ${events.length} events`);
+    allEvents.push(...events);
+  }
+
+  const deduped = dedupeEvents(allEvents);
+  logger(`Clustering complete — ${allEvents.length} raw events → ${deduped.length} after cross-section dedup`);
+  return deduped;
+}
+
+// ─── Step 5: Batch importance scoring ─────────────────────────────────────────
+
+async function scoreEvents(
+  events: ClusteredEvent[],
+  logger: Logger,
+): Promise<ClusteredEvent[]> {
+  if (events.length === 0) return [];
+
+  logger(`Scoring ${events.length} events (1 batch Gemini call)…`);
+
+  const eventList = events.map((ev, i) =>
+    `${i}. [${ev.section}] [${ev.publisherCount}pub] ${ev.canonicalTitle}` +
+    (ev.inHeadlinesFeed ? " ★" : "")
+  ).join("\n");
+
+  const prompt = `You are Khabar AI's editorial director. Score each news event by civic importance for an average Indian listener.
+
+SCORING GUIDE (0-10):
+10 = Every Indian is directly affected right now (budget, election result, major disaster)
+8-9 = Major event shaping this week's national narrative
+6-7 = Significant; informed citizens should know
+4-5 = Relevant but not urgent
+2-3 = Niche, regional, or low-stakes
+0-1 = Entertainment/celebrity with no civic significance
+
+★ = Appeared on Google News homepage (add 0.5 bonus)
+
+Compare events against each other — scores should reflect relative importance.
+
+MANDATORY COVERAGE — set mustInclude: true for these regardless of score:
+• Any decision, statement, or action by the PM, Cabinet, or President of India
+• Supreme Court judgments affecting public life
+• Union Budget announcements or major fiscal policy
+• Natural disasters with casualties (earthquake, cyclone, major floods)
+• Terror attacks or major security incidents in India or involving Indians
+• RBI policy decisions (repo rate, monetary policy committee)
+• National or state election results
+• Major airline crashes or industrial disasters
+• Pandemic or health emergency declarations
+Use your judgment — when in doubt, set mustInclude: false and let the score decide.
+
+Return a JSON array (same order as input, ${events.length} items):
+[{"importance": 7.5, "reason": "one clear sentence", "confidence": "high", "breaking": false, "mustInclude": false}]
+
+Events:
+${eventList}`;
+
+  try {
+    const results: Array<{ importance: number; reason: string; confidence: string; breaking: boolean; mustInclude: boolean }> =
+      await geminiJson(prompt);
+
+    if (!Array.isArray(results) || results.length < events.length * 0.8) {
+      throw new Error(`Unexpected result length: ${results?.length} for ${events.length} events`);
+    }
+
+    return events.map((ev, i) => {
+      const r = results[i] ?? { importance: 3, reason: "No score returned", confidence: "low", mustInclude: false };
+      const mustInclude = Boolean(r.mustInclude);
+      return {
+        ...ev,
+        importanceScore:   Math.max(0, Math.min(10, Number(r.importance) || 3)),
+        importanceReason:  String(r.reason ?? "").slice(0, 200),
+        forcedByEditorial: mustInclude,
+      };
+    });
+  } catch (err: any) {
+    logger(`  ✗ Scoring failed: ${err.message?.slice(0, 80)} — fallback to publisher count`);
+    return events.map(ev => ({
+      ...ev,
+      importanceScore:  Math.min(9, ev.publisherCount * 1.5 + (ev.inHeadlinesFeed ? 1 : 0)),
+      importanceReason: `Scored by publisher coverage (${ev.publisherCount} publishers)`,
+    }));
+  }
+}
+
+// ─── Step 7: Briefing plan ────────────────────────────────────────────────────
+
+function buildBriefingPlan(events: ClusteredEvent[], logger: Logger): ClusteredEvent[] {
+  const sorted = [...events].sort((a, b) => b.importanceScore - a.importanceScore);
+  const used   = new Set<string>();
+  const plan:  ClusteredEvent[] = [];
+
+  // 1. Force editorial overrides into top stories
+  for (const ev of sorted) {
+    if (!ev.forcedByEditorial) continue;
+    if (plan.length >= TOP_STORIES_MAX) break;
+    ev.assignedSection = "headlines";
+    plan.push(ev);
+    used.add(ev.eventId);
+  }
+
+  // 2. Fill top stories with highest-scoring events
+  for (const ev of sorted) {
+    if (used.has(ev.eventId)) continue;
+    if (plan.length >= TOP_STORIES_MAX) break;
+    if (ev.importanceScore >= TOP_STORIES_THRESHOLD) {
+      ev.assignedSection = "headlines";
+      plan.push(ev);
+      used.add(ev.eventId);
+    }
+  }
+
+  // Ensure minimum top stories count even if scores are low
+  for (const ev of sorted) {
+    if (used.has(ev.eventId)) continue;
+    if (plan.length >= TOP_STORIES_MIN) break;
+    ev.assignedSection = "headlines";
+    plan.push(ev);
+    used.add(ev.eventId);
+  }
+
+  // 3. Fill section slots
+  for (const sectionId of SECTION_ORDER) {
+    const slot = SECTION_SLOTS[sectionId];
+    if (!slot) continue;
+
+    const sectionEvents = sorted
+      .filter(ev => !used.has(ev.eventId) && ev.section === sectionId && ev.importanceScore >= slot.threshold)
+      .slice(0, slot.max);
+
+    for (const ev of sectionEvents) {
+      ev.assignedSection = sectionId;
+      plan.push(ev);
+      used.add(ev.eventId);
+    }
+
+    if (sectionEvents.length < slot.min) {
+      logger(`  ⚠ ${sectionId}: ${sectionEvents.length}/${slot.min} min (threshold ${slot.threshold})`);
+    }
+  }
+
+  const final = plan.slice(0, MAX_TOTAL_STORIES);
+
+  const bySection = new Map<string, number>();
+  for (const ev of final) bySection.set(ev.assignedSection, (bySection.get(ev.assignedSection) ?? 0) + 1);
+  logger(`Briefing plan: ${final.length} events`);
+  for (const [section, count] of bySection) logger(`  ${section}: ${count}`);
+
+  return final;
+}
+
+// ─── Step 8: Script generation ────────────────────────────────────────────────
+
+interface ScriptedEvent {
+  title:    string;
+  titleHi?: string;
+  titleTa?: string;
+  titleMr?: string;
+  scriptEn: string;
+  scriptHi: string;
+  scriptTa?: string;
+  scriptMr?: string;
+}
+
+async function scriptEventBatch(
+  sectionEvents: ClusteredEvent[],
+  sectionId: SectionId,
+  logger: Logger,
+  languages: string[],
+): Promise<ScriptedEvent[]> {
+  if (sectionEvents.length === 0) return [];
+
+  const label    = sectionId === "headlines" ? "Top Stories" : (FEED_MAP.get(sectionId)?.label ?? sectionId);
+  const withTa   = languages.includes("ta");
+  const withMr   = languages.includes("mr");
+
+  const langRules = [
+    `- scriptHi: Translate scriptEn into Hindi. ${LANG_META.hi.scriptNote}`,
+    withTa ? `- scriptTa: Translate scriptEn into Tamil. ${LANG_META.ta.scriptNote}` : "",
+    withMr ? `- scriptMr: Translate scriptEn into Marathi. ${LANG_META.mr.scriptNote}` : "",
+    `- titleHi: Translate English title to Hindi (Devanagari).`,
+    withTa ? `- titleTa: Translate English title to Tamil script.` : "",
+    withMr ? `- titleMr: Translate English title to Marathi (Devanagari).` : "",
+  ].filter(Boolean).join("\n");
+
+  const extraTitleFields = [
+    withTa ? `"titleTa":"..."` : "",
+    withMr ? `"titleMr":"..."` : "",
+  ].filter(Boolean).join(",");
+
+  const extraScriptFields = [
+    withTa ? `"scriptTa":"..."` : "",
+    withMr ? `"scriptMr":"..."` : "",
+  ].filter(Boolean).join(",");
+
+  const jsonShape = `[{"title":"...","titleHi":"..."${extraTitleFields ? "," + extraTitleFields : ""},"scriptEn":"...","scriptHi":"..."${extraScriptFields ? "," + extraScriptFields : ""}}]`;
+
+  const today = new Date().toLocaleDateString("en-IN", {
+    weekday: "long", year: "numeric", month: "long", day: "numeric",
+    timeZone: "Asia/Kolkata",
+  });
+
+  const eventsPayload = sectionEvents.map((ev, i) => {
+    const sources = ev.sourceStories.slice(0, 4).map(s => {
+      const desc = s.description
+        ?.replace(/<[^>]+>/g, "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 200);
+      return `  [${s.source}] ${s.title}${desc ? `\n   → ${desc}` : ""}`;
+    }).join("\n");
+    return `${i}. ${ev.canonicalTitle} (${ev.publisherCount} publishers)\n${sources}`;
+  }).join("\n\n");
+
+  const prompt = `You are Khabar AI — India's voice-first news briefing. Today: ${today}.
+Section: "${label}" (${sectionEvents.length} events to script)
+
+Write one spoken-audio script per event. These will be read aloud by a professional voice.
+
+━━━ SCRIPT STRUCTURE — follow EXACTLY ━━━
+
+1. HOOK (1 sentence, ~20 words)
+   Make the listener lean in immediately. State the stakes or surprising angle.
+   NEVER start with: "Today", "In a", "According to", "The", "India's", "A new"
+   ✓ "Your home loan EMI stays exactly where it is for now."
+   ✓ "India and China may be closer to a border deal than most people think."
+   ✓ "The price of something millions of Indians eat every day just fell significantly."
+
+2. WHAT HAPPENED (2-3 sentences)
+   Every relevant number, name, percentage, date. Be precise and specific.
+   No vagueness. No hedging. State what is known as fact.
+
+3. WHY IT MATTERS (1-2 sentences)
+   Connect to the listener's life. Stakes for an average Indian.
+
+4. WHAT'S NEXT (1 sentence)
+   Forward-looking. What to watch for. Makes the story feel alive, not closed.
+
+━━━ WRITING RULES ━━━
+• WORD COUNT: 130-160 words per script. Shorter is a mistake — use the full range.
+• SENTENCES: Never exceed 18 words. Mix short punchy with medium-length for rhythm.
+• VOICE: Conversational but authoritative. Sharp friend who read everything so you didn't have to.
+• NEVER: "reportedly", "it is said", "details are unclear", "sources say", "according to"
+• NEVER: bullet points, lists, parentheses, em-dashes mid-sentence
+• NEVER: invent facts. If information is thin, make the known facts vivid — don't pad.
+• ALWAYS: full natural sentences. Flowing spoken rhythm. No cliffhangers.
+
+━━━ TRANSLATIONS ━━━
+${langRules}
+• Keep proper nouns, brand names, acronyms, and numbers in their original form.
+• NEVER use Roman letters for native-language words.
+• Each translation is a complete spoken script — same structure, native script only.
+
+Return JSON array only (${sectionEvents.length} objects):
+${jsonShape}
+
+Events:
+${eventsPayload}`;
+
+  try {
+    const results: ScriptedEvent[] = await geminiJson(prompt);
+    if (!Array.isArray(results) || results.length === 0) throw new Error("empty result");
+
+    return sectionEvents.map((ev, i) => {
+      const r = results[i] ?? {};
+      return {
+        title:    r.title    || ev.canonicalTitle,
+        titleHi:  hasExpectedScript(r.titleHi, "hi") ? r.titleHi : undefined,
+        titleTa:  hasExpectedScript(r.titleTa, "ta") ? r.titleTa : undefined,
+        titleMr:  hasExpectedScript(r.titleMr, "mr") ? r.titleMr : undefined,
+        scriptEn: r.scriptEn || ev.canonicalTitle + ".",
+        scriptHi: hasExpectedScript(r.scriptHi, "hi") ? r.scriptHi : "",
+        scriptTa: hasExpectedScript(r.scriptTa, "ta") ? r.scriptTa : undefined,
+        scriptMr: hasExpectedScript(r.scriptMr, "mr") ? r.scriptMr : undefined,
+      };
+    });
+  } catch (err: any) {
+    logger(`  ✗ Script ${sectionId}: ${err.message?.slice(0, 80)} — using fallback`);
+    return sectionEvents.map(ev => ({
+      title:    ev.canonicalTitle,
+      scriptEn: ev.canonicalTitle + ". " + (ev.sourceStories[0]?.description?.replace(/<[^>]+>/g, "").slice(0, 200) ?? ""),
+      scriptHi: "",
+    }));
+  }
+}
+
+/** Fix-up pass: re-translate fields that came back in wrong script. */
 async function fixScriptLanguages(
   stories: Story[],
   nonEnLangs: string[],
@@ -434,27 +925,20 @@ async function fixScriptLanguages(
 ): Promise<Story[]> {
   if (nonEnLangs.length === 0) return stories;
 
-  // Find stories that need any non-EN field fixed
-  const toFix = stories
-    .map((s, idx) => {
-      const missingLangs = nonEnLangs.filter(lang => {
-        const script = lang === "hi" ? s.scriptHi :
-                       lang === "ta" ? s.scriptTa :
-                       lang === "mr" ? s.scriptMr : undefined;
-        return !hasExpectedScript(script, lang);
-      });
-      return missingLangs.length > 0 ? { idx, story: s, missingLangs } : null;
-    })
-    .filter(Boolean) as Array<{ idx: number; story: Story; missingLangs: string[] }>;
+  const toFix = stories.map((s, idx) => {
+    const missingLangs = nonEnLangs.filter(lang => {
+      const script = lang === "hi" ? s.scriptHi : lang === "ta" ? s.scriptTa : lang === "mr" ? s.scriptMr : undefined;
+      return !hasExpectedScript(script, lang);
+    });
+    return missingLangs.length > 0 ? { idx, story: s, missingLangs } : null;
+  }).filter(Boolean) as Array<{ idx: number; story: Story; missingLangs: string[] }>;
 
   if (toFix.length === 0) return stories;
-  logger(`  ⚙ Re-translating ${toFix.length} stories with missing/wrong-script fields…`);
+  logger(`  ⚙ Re-translating ${toFix.length} stories with missing-script fields…`);
 
-  const updated = stories.map(s => ({ ...s }));
-
-  // Batch all broken stories into one Gemini call
+  const updated    = stories.map(s => ({ ...s }));
   const batchLangs = [...new Set(toFix.flatMap(x => x.missingLangs))];
-  const langDescs = batchLangs.map(lang => {
+  const langDescs  = batchLangs.map(lang => {
     const m = LANG_META[lang]!;
     return `- ${lang.toUpperCase()} (${m.name}): ${m.scriptNote} Example: "${m.example}"`;
   }).join("\n");
@@ -463,14 +947,13 @@ async function fixScriptLanguages(
     `${i}. title: "${x.story.title}"\n   scriptEn: "${x.story.scriptEn}"\n   needs: ${x.missingLangs.join(", ")}`
   ).join("\n");
 
-  const prompt = `Translate these news scripts into the specified Indian languages.
-Each translation MUST use the native script characters — never Roman transliteration.
+  const prompt = `Translate these news scripts into the specified Indian languages. Native script ONLY — no Roman letters.
 
 LANGUAGE RULES:
 ${langDescs}
 
-Return a JSON array with one object per story (same order), containing only the fields needed:
-[${toFix.map(x => `{${x.missingLangs.flatMap(l => [`"script${l.charAt(0).toUpperCase() + l.slice(1)}":"..."`, `"title${l.charAt(0).toUpperCase() + l.slice(1)}":"..."`]).join(",")}}`).join(",")}]
+Return JSON array (${toFix.length} objects, same order):
+[${toFix.map(x => `{${x.missingLangs.flatMap(l => [`"script${l[0].toUpperCase() + l.slice(1)}":"..."`, `"title${l[0].toUpperCase() + l.slice(1)}":"..."`]).join(",")}}`).join(",")}]
 
 Stories:
 ${storiesPayload}`;
@@ -478,20 +961,17 @@ ${storiesPayload}`;
   try {
     const results: any[] = await geminiJson(prompt);
     if (!Array.isArray(results)) throw new Error("not an array");
-
     for (let i = 0; i < toFix.length && i < results.length; i++) {
       const { idx, missingLangs } = toFix[i];
       const r = results[i] ?? {};
       for (const lang of missingLangs) {
-        const sKey = `script${lang.charAt(0).toUpperCase() + lang.slice(1)}` as keyof Story;
-        const tKey = `title${lang.charAt(0).toUpperCase() + lang.slice(1)}`  as keyof Story;
+        const sKey = `script${lang[0].toUpperCase() + lang.slice(1)}` as keyof Story;
+        const tKey = `title${lang[0].toUpperCase() + lang.slice(1)}`  as keyof Story;
         const newScript = r[sKey as string];
         const newTitle  = r[tKey as string];
         if (hasExpectedScript(newScript, lang)) {
           (updated[idx] as any)[sKey] = newScript;
           logger(`    ✓ ${lang.toUpperCase()} fixed: ${updated[idx].title.slice(0, 45)}`);
-        } else {
-          logger(`    ✗ ${lang.toUpperCase()} still wrong-script — skipping audio for this story`);
         }
         if (newTitle && hasExpectedScript(newTitle, lang)) {
           (updated[idx] as any)[tKey] = newTitle;
@@ -499,272 +979,258 @@ ${storiesPayload}`;
       }
     }
   } catch (err: any) {
-    logger(`  ✗ Script fix-up Gemini call failed: ${err.message?.slice(0, 80)}`);
-    // Leave stories as-is — they'll have empty non-EN scripts, so no audio generated
+    logger(`  ✗ Script fix-up failed: ${err.message?.slice(0, 80)}`);
   }
 
   return updated;
 }
 
-interface ScriptedGroup {
-  title:         string;
-  titleHi:       string;
-  titleTa?:      string;
-  titleMr?:      string;
-  scriptEn:      string;
-  scriptHi:      string;
-  scriptTa?:     string;
-  scriptMr?:     string;
-  sourceIndices: number[];
+async function scriptSelectedEvents(
+  selectedEvents: ClusteredEvent[],
+  logger: Logger,
+  languages: string[],
+): Promise<Story[]> {
+  if (selectedEvents.length === 0) return [];
+
+  const bySection = new Map<SectionId, ClusteredEvent[]>();
+  for (const ev of selectedEvents) {
+    const arr = bySection.get(ev.assignedSection) ?? [];
+    arr.push(ev);
+    bySection.set(ev.assignedSection, arr);
+  }
+
+  logger(`Scripting ${selectedEvents.length} events across ${bySection.size} sections…`);
+  const stories: Story[] = [];
+  const sectionProcessOrder: SectionId[] = ["headlines", ...SECTION_ORDER];
+
+  for (const sectionId of sectionProcessOrder) {
+    if (isAbortRequested()) { logger("⛔ Aborted"); break; }
+    const events = bySection.get(sectionId);
+    if (!events || events.length === 0) continue;
+
+    const emoji = FEED_MAP.get(sectionId)?.emoji ?? "📰";
+    logger(`  ${emoji} ${sectionId}: scripting ${events.length} events…`);
+
+    const scripted = await scriptEventBatch(events, sectionId, logger, languages);
+
+    for (let i = 0; i < events.length; i++) {
+      const ev = events[i];
+      const sc = scripted[i] ?? { title: ev.canonicalTitle, scriptEn: ev.canonicalTitle + ".", scriptHi: "" };
+      const primary = ev.sourceStories[0];
+      const sources: StorySource[] = ev.sourceStories.map(s => ({
+        title: s.title, source: s.source, link: s.link,
+      }));
+
+      stories.push({
+        id:                ev.eventId,
+        title:             sc.title || ev.canonicalTitle,
+        titleHi:           sc.titleHi,
+        titleTa:           sc.titleTa,
+        titleMr:           sc.titleMr,
+        source:            ev.publishers[0] ?? primary.source,
+        link:              primary.link,
+        publishedAt:       ev.firstPublishedAt,
+        section:           ev.assignedSection,
+        imageUrl:          ev.imageUrl ?? primary.imageUrl,
+        description:       primary.description,
+        sources,
+        scriptEn:          sc.scriptEn,
+        scriptHi:          sc.scriptHi ?? "",
+        scriptTa:          sc.scriptTa,
+        scriptMr:          sc.scriptMr,
+        audioStartSec:     0,
+        importanceScore:   ev.importanceScore,
+        importanceReason:  ev.importanceReason,
+        forcedByEditorial: ev.forcedByEditorial,
+        wordCount:         sc.scriptEn.trim().split(/\s+/).length,
+        publisherCount:    ev.publisherCount,
+        publishers:        ev.publishers,
+      });
+    }
+  }
+
+  const nonEnLangs = languages.filter(l => l !== "en");
+  const fixed = await fixScriptLanguages(stories, nonEnLangs, logger);
+  logger(`Scripting done — ${fixed.length} stories`);
+  return fixed;
 }
 
-async function scriptBatch(
-  sectionStories: Story[],
-  sectionId: SectionId,
-  logger: Logger = () => {},
-  languages: string[] = ["en", "hi"],
-): Promise<Story[]> {
-  if (sectionStories.length === 0) return [];
+// ─── Step 9: Briefing wrapper ─────────────────────────────────────────────────
 
-  const today = new Date().toISOString().slice(0, 10);
-  const label = FEED_MAP.get(sectionId)?.label ?? sectionId;
+function makeOpeningScript(): { en: string; hi: string; ta: string; mr: string } {
+  const now     = new Date();
+  const dayName = now.toLocaleDateString("en-IN", { weekday: "long",  timeZone: "Asia/Kolkata" });
+  const dateStr = now.toLocaleDateString("en-IN", {
+    day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Kolkata",
+  });
+  return {
+    en: `Good morning. Today is ${dayName}, ${dateStr}. Here's everything important that happened in the last twenty-four hours.`,
+    hi: `सुप्रभात। आज ${dayName} है, ${dateStr}। पिछले चौबीस घंटों में जो महत्वपूर्ण हुआ, वह यहाँ है।`,
+    ta: `காலை வணக்கம். இன்று ${dayName}, ${dateStr}. கடந்த இருபத்து நான்கு மணி நேரத்தில் நடந்த முக்கியமான செய்திகள் இங்கே.`,
+    mr: `शुभ प्रभात. आज ${dayName} आहे, ${dateStr}. गेल्या चोवीस तासांत जे महत्त्वाचे घडले ते येथे आहे.`,
+  };
+}
+
+function makeClosingScript(): { en: string; hi: string; ta: string; mr: string } {
+  return {
+    en: "That's your Khabar AI briefing for today. We'll be back tomorrow morning with everything that matters. Have a wonderful day.",
+    hi: "यह था आज का आपका खबर एआई ब्रीफिंग। हम कल सुबह फिर लौटेंगे हर जरूरी खबर के साथ। आपका दिन शुभ हो।",
+    ta: "இன்றைய உங்கள் கபர் ஏஐ பிரீஃபிங் இங்கே முடிகிறது. நாளை காலை முக்கியமான அனைத்து செய்திகளுடன் திரும்பி வருவோம். நல்ல நாள் வாழ்த்துகள்.",
+    mr: "हे होते आजचे तुमचे खबर एआय ब्रीफिंग. उद्या सकाळी महत्त्वाच्या सर्व बातम्यांसह परत येऊ. आपला दिवस चांगला जावो.",
+  };
+}
+
+const SECTION_LABELS: Partial<Record<SectionId, string>> = {
+  headlines:     "Top Stories",
+  india:         "India",
+  world:         "World",
+  business:      "Business",
+  technology:    "Technology",
+  sports:        "Sports",
+  health:        "Health",
+  entertainment: "Entertainment",
+  science:       "Science",
+  local:         "Local News",
+};
+
+const STATIC_TRANSITIONS: Partial<Record<SectionId, string>> = {
+  india:         "Now let's turn to India.",
+  world:         "From India to the world.",
+  business:      "In business today...",
+  technology:    "Now, some technology news.",
+  sports:        "Here's what happened in sports.",
+  health:        "On the health front...",
+  entertainment: "And now, some lighter news.",
+  science:       "In science and research...",
+  local:         "Some local news now.",
+};
+
+async function generateTransitions(
+  sections: SectionId[],
+  logger: Logger,
+  languages: string[],
+): Promise<BriefingSegment[]> {
+  // Need a transition before each section except the first
+  const transitionSections = sections.slice(1);
+  if (transitionSections.length === 0) return [];
 
   const withTa = languages.includes("ta");
   const withMr = languages.includes("mr");
-  const nonEnLangs = languages.filter(l => l !== "en");
 
-  // Translation rules — non-EN scripts are direct translations of scriptEn
-  const langScriptRules = [
-    `- scriptHi: Translate scriptEn into Hindi. ${LANG_META.hi.scriptNote} Example: "${LANG_META.hi.example}"`,
-    withTa ? `- scriptTa: Translate scriptEn into Tamil. ${LANG_META.ta.scriptNote} Example: "${LANG_META.ta.example}"` : "",
-    withMr ? `- scriptMr: Translate scriptEn into Marathi. ${LANG_META.mr.scriptNote} Example: "${LANG_META.mr.example}"` : "",
-    `- titleHi: Translate the English title into Hindi (Devanagari).`,
-    withTa ? `- titleTa: Translate the English title into Tamil script.` : "",
-    withMr ? `- titleMr: Translate the English title into Marathi (Devanagari).` : "",
-  ].filter(Boolean).join("\n");
-
-  const extraLangFields = [
-    withTa ? `"titleTa":"...","scriptTa":"..."` : "",
-    withMr ? `"titleMr":"...","scriptMr":"..."` : "",
+  const extraFields = [
+    withTa ? `"scriptTa":"..."` : "",
+    withMr ? `"scriptMr":"..."` : "",
   ].filter(Boolean).join(",");
 
-  const jsonExample = `[{"title":"...","titleHi":"..."${extraLangFields ? "," + extraLangFields : ""},"scriptEn":"...","scriptHi":"..."${withTa ? `,"scriptTa":"..."` : ""}${withMr ? `,"scriptMr":"..."` : ""},"sourceIndices":[0,2]}]`;
+  const prompt = `You are Khabar AI's radio host. Write short section-intro lines for a news briefing.
+These play between sections — warm, professional, like BBC Radio 4.
 
-  const prompt = `You are Khabar AI — India's sharpest spoken-audio news editor. Today: ${today}.
-Section: "${label}" (${sectionStories.length} stories).
+Each line: 8-15 words. One sentence. No filler like "And now let's move on to our next segment."
+Sound human and direct. Use present tense or imperative mood.
 
-YOUR JOB:
-1. GROUPING: Merge stories only if they cover the exact same event or announcement. Different topics — even loosely related — stay in separate groups. When in doubt, keep separate.
-2. SCRIPT: Write one crisp, engaging 70-100 word spoken-audio script per group.
+✓ "Now let's turn to India."
+✓ "In business today, a big day for Indian markets."
+✓ "Turning to sports — a busy week in cricket."
 
-SCRIPT RULES (scriptEn):
-- 70-100 words. Conversational but authoritative — like a sharp friend who just read everything so you don't have to.
-- Open with the most gripping fact or the "why this matters" angle. Never start with "In a...", "According to...", "Today,", or a restatement of the headline.
-- Weave in every number, figure, percentage, and named person or place — these make the story real.
-- Vary sentence length: mix short punchy sentences with longer ones for natural spoken rhythm.
-- Close with one sentence of context — what this means, what to watch next, or what's at stake.
-- Never hedge with "details are unclear", "reportedly", or "it is said". State what is known as fact; omit what isn't.
-- Do NOT invent facts. If information is thin, make the known facts vivid — don't pad with filler phrases.
+Write ONE intro line per section. Return JSON array:
+[{"section":"india","scriptEn":"...","scriptHi":"..."${extraFields ? "," + extraFields : ""}}]
 
-TRANSLATIONS (scriptHi/Ta/Mr are direct translations of scriptEn — same content, different language):
-${langScriptRules}
-- Keep proper nouns, brand names, and numbers in their original form across all languages.
-- NEVER use Roman letters for native-language words.
+All scriptHi must use Devanagari script only.
+${withTa ? "All scriptTa must use Tamil script only." : ""}
+${withMr ? "All scriptMr must use Devanagari script only (Marathi)." : ""}
 
-CRITICAL: Every index 0–${sectionStories.length - 1} must appear in exactly one group's sourceIndices.
-
-Return JSON array only:
-${jsonExample}
-
-Stories:
-${sectionStories.map((s, i) => {
-    const desc = s.description?.replace(/\s+/g, " ").trim().slice(0, 300);
-    return `${i}. [${s.source}] ${s.title}${desc ? `\n   → ${desc}` : ""}`;
-  }).join("\n")}`;
+Sections needed (${transitionSections.length} total):
+${transitionSections.map((s, i) => `${i + 1}. ${s} → "${SECTION_LABELS[s] ?? s}"`).join("\n")}`;
 
   try {
-    const result: ScriptedGroup[] = await geminiJson(prompt);
-    if (!Array.isArray(result) || result.length === 0) throw new Error("empty result");
+    const results: Array<{ section: string; scriptEn: string; scriptHi: string; scriptTa?: string; scriptMr?: string }> =
+      await geminiJson(prompt);
 
-    const covered = new Set<number>();
-    for (const g of result) (g.sourceIndices ?? []).forEach(i => covered.add(i));
+    if (!Array.isArray(results)) throw new Error("not array");
 
-    const output: Story[] = [];
-    const emittedPrimaryIds = new Set<string>();
-
-    for (const group of result) {
-      const indices = (group.sourceIndices ?? []).filter(i => i >= 0 && i < sectionStories.length);
-      if (indices.length === 0) continue;
-
-      const primaryIdx = indices.find(i => sectionStories[i]?.imageUrl) ?? indices[0];
-      const primaryId  = sectionStories[primaryIdx]?.id;
-      if (primaryId && emittedPrimaryIds.has(primaryId)) continue; // skip duplicate group
-      if (primaryId) emittedPrimaryIds.add(primaryId);
-      const primary    = sectionStories[primaryIdx];
-      const sources: StorySource[] = indices.map(i => ({
-        title:  sectionStories[i].title,
-        source: sectionStories[i].source,
-        link:   sectionStories[i].link,
-      }));
-
-      // Validate each non-EN script: discard if it's not in the expected unicode block
-      const safeHi = hasExpectedScript(group.scriptHi, "hi")  ? group.scriptHi  : undefined;
-      const safeTa = hasExpectedScript(group.scriptTa, "ta")  ? group.scriptTa  : undefined;
-      const safeMr = hasExpectedScript(group.scriptMr, "mr")  ? group.scriptMr  : undefined;
-      const safeTitleHi = hasExpectedScript(group.titleHi, "hi") ? group.titleHi : undefined;
-      const safeTitleTa = hasExpectedScript(group.titleTa, "ta") ? group.titleTa : undefined;
-      const safeTitleMr = hasExpectedScript(group.titleMr, "mr") ? group.titleMr : undefined;
-
-      output.push({
-        ...primary,
-        title:    group.title    || primary.title,
-        titleHi:  safeTitleHi,
-        titleTa:  safeTitleTa,
-        titleMr:  safeTitleMr,
-        sources,
-        scriptEn: group.scriptEn || `${primary.title}.`,
-        scriptHi: safeHi  ?? "",   // empty = no Hindi audio generated
-        scriptTa: safeTa  ?? undefined,
-        scriptMr: safeMr  ?? undefined,
-        audioUrlEn:   undefined,
-        audioUrlHi:   undefined,
-        audioUrlTa:   undefined,
-        audioUrlMr:   undefined,
-        audioStartSec: 0,
-      });
-    }
-
-    // Any uncovered → stub (EN only; non-EN left empty until fix-up pass)
-    for (let i = 0; i < sectionStories.length; i++) {
-      if (covered.has(i)) continue;
-      const s = sectionStories[i];
-      logger(`    ⚠ ${sectionId}[${i}] not in any group — adding standalone`);
-      output.push({
-        ...s,
-        sources:  [{ title: s.title, source: s.source, link: s.link }],
-        scriptEn: fallbackScript(s),
-        scriptHi: "",
-        audioStartSec: 0,
-      });
-    }
-
-    // Fix-up pass: stories where Gemini returned English in a non-English field
-    const fixed = await fixScriptLanguages(output, nonEnLangs, logger);
-    return fixed;
+    return transitionSections.map((sectionId, i) => {
+      const r = results.find(x => x.section === sectionId) ?? results[i] ?? {} as any;
+      return {
+        id:       `transition-${sectionId}`,
+        type:     "transition" as const,
+        section:  sectionId,
+        scriptEn: r.scriptEn || STATIC_TRANSITIONS[sectionId] || `Now, ${SECTION_LABELS[sectionId] ?? sectionId}.`,
+        scriptHi: hasExpectedScript(r.scriptHi, "hi") ? r.scriptHi : `अब, ${SECTION_LABELS[sectionId] ?? sectionId}.`,
+        scriptTa: withTa && hasExpectedScript(r.scriptTa, "ta") ? r.scriptTa : undefined,
+        scriptMr: withMr && hasExpectedScript(r.scriptMr, "mr") ? r.scriptMr : undefined,
+      };
+    });
   } catch (err: any) {
-    logger(`  ✗ ${sectionId} Gemini script failed: ${err.message?.slice(0, 120)} — using fallback stubs`);
-    return sectionStories.map(s => ({
-      ...s,
-      sources:  [{ title: s.title, source: s.source, link: s.link }],
-      scriptEn: fallbackScript(s),
-      scriptHi: "",   // empty — no Hindi audio rather than English audio
-      audioStartSec: 0,
+    logger(`  ✗ Transitions: ${err.message?.slice(0, 60)} — using static fallbacks`);
+    return transitionSections.map(sectionId => ({
+      id:       `transition-${sectionId}`,
+      type:     "transition" as const,
+      section:  sectionId,
+      scriptEn: STATIC_TRANSITIONS[sectionId] ?? `Now, ${SECTION_LABELS[sectionId] ?? sectionId}.`,
+      scriptHi: `अब, ${SECTION_LABELS[sectionId] ?? sectionId}.`,
+      scriptTa: undefined,
+      scriptMr: undefined,
     }));
   }
 }
 
-async function scriptAllStories(
+async function generateWrapper(
   stories: Story[],
   logger: Logger,
-  onSectionDone?: (scripted: Story[]) => Promise<void>,
-  languages: string[] = ["en", "hi"],
-): Promise<Story[]> {
-  if (stories.length === 0) return [];
+  languages: string[],
+): Promise<BriefingSegment[]> {
+  logger("Generating briefing wrapper (opening, transitions, closing)…");
 
-  // Group by section, process each with one Gemini call
-  const bySection = new Map<SectionId, Story[]>();
-  for (const story of stories) {
-    const arr = bySection.get(story.section) ?? [];
-    arr.push(story);
-    bySection.set(story.section, arr);
-  }
+  const opening = makeOpeningScript();
+  const closing = makeClosingScript();
 
-  const sectionOrder: SectionId[] = [
-    ...PRIORITY_SECTIONS.filter(id => bySection.has(id)),
-    ...[...bySection.keys()].filter(id => !PRIORITY_SECTIONS.includes(id)),
+  // Determine ordered sections present in the briefing
+  const sectionSet = new Set<SectionId>();
+  for (const story of stories) sectionSet.add(story.section);
+  const orderedSections = (["headlines", ...SECTION_ORDER] as SectionId[])
+    .filter(s => sectionSet.has(s));
+
+  const transitions = await generateTransitions(orderedSections, logger, languages);
+
+  const segments: BriefingSegment[] = [
+    {
+      id:       "opening",
+      type:     "opening",
+      scriptEn: opening.en,
+      scriptHi: opening.hi,
+      scriptTa: languages.includes("ta") ? opening.ta : undefined,
+      scriptMr: languages.includes("mr") ? opening.mr : undefined,
+    },
+    ...transitions,
+    {
+      id:       "closing",
+      type:     "closing",
+      scriptEn: closing.en,
+      scriptHi: closing.hi,
+      scriptTa: languages.includes("ta") ? closing.ta : undefined,
+      scriptMr: languages.includes("mr") ? closing.mr : undefined,
+    },
   ];
 
-  logger(`Scripting ${stories.length} stories across ${bySection.size} sections… (langs: ${languages.join(",")})`);
-
-  const all: Story[] = [];
-
-  for (const sectionId of sectionOrder) {
-    if (isAbortRequested()) { logger("⛔ Aborted"); break; }
-    const sectionStories = bySection.get(sectionId)!;
-    const emoji = FEED_MAP.get(sectionId)?.emoji ?? "📰";
-    logger(`  ${emoji} ${sectionId}: ${sectionStories.length} raw stories…`);
-
-    const scripted = await scriptBatch(sectionStories, sectionId, logger, languages);
-    all.push(...scripted);
-    logger(`    → ${scripted.length} stories`);
-
-    if (onSectionDone) await onSectionDone([...all]);
-  }
-
-  logger(`Scripting done — ${all.length} stories total`);
-  return all;
+  logger(`Wrapper: 1 opening + ${transitions.length} transitions + 1 closing = ${segments.length} segments`);
+  return segments;
 }
 
-// ─── Step 4: Time guard ───────────────────────────────────────────────────────
-//
-// Estimates listen time from word count. If over TARGET_MINS, trims stories
-// from the tail of non-priority sections (lowest priority first).
+// ─── Step 10: TTS ─────────────────────────────────────────────────────────────
 
-// Secondary sections only — priority sections (headlines, india, world, business) never trimmed
-const TRIM_ORDER: SectionId[] = [
-  "local", "health", "science", "entertainment", "sports", "technology",
-];
-
-function estimateMins(stories: Story[]): number {
-  const words = stories.reduce((n, s) => n + s.scriptEn.split(/\s+/).length, 0);
-  return words / TARGET_WPM;
-}
-
-function applyTimeGuard(stories: Story[], logger: Logger): Story[] {
-  const est = estimateMins(stories);
-  logger(`Estimated listen time: ${est.toFixed(1)} min (${stories.length} stories)`);
-
-  if (est <= TARGET_MINS) return stories;
-
-  let trimmed = [...stories];
-
-  outer: for (const sectionId of TRIM_ORDER) {
-    // Remove stories from this section one at a time (from the back) until under budget
-    while (estimateMins(trimmed) > TARGET_MINS) {
-      const indices = trimmed
-        .map((s, i) => (s.section === sectionId ? i : -1))
-        .filter(i => i >= 0);
-      if (indices.length === 0) continue outer;
-      const last = indices[indices.length - 1];
-      trimmed.splice(last, 1);
-      logger(`  trimmed 1 story from ${sectionId}`);
-    }
-    if (estimateMins(trimmed) <= TARGET_MINS) break;
-  }
-
-  logger(`After time guard: ${trimmed.length} stories, ~${estimateMins(trimmed).toFixed(1)} min`);
-  return trimmed;
-}
-
-// ─── Step 5: TTS — one call per story per language (same structure for all providers) ──
-
-export type TtsCostInfo = {
-  provider: TtsProvider;
-  enChars: number;
-  hiChars: number;
-  totalChars: number;
-  /** Rough cost in USD (ElevenLabs: $0.50/1K chars; Google: $0.50/1M chars after free tier) */
-  estimatedUsd: number;
-  storiesAttempted: number;
-  storiesWithAudio: number;
-};
-
-// Map from lang code to Story audio URL field
 function getStoryScript(story: Story, lang: string): string | undefined {
-  if (lang === "en") return story.scriptEn;
-  if (lang === "hi") return story.scriptHi;
+  if (lang === "en") return story.scriptEn || undefined;
+  if (lang === "hi") return story.scriptHi || undefined;
   if (lang === "ta") return story.scriptTa;
   if (lang === "mr") return story.scriptMr;
+  return undefined;
+}
+
+function getSegmentScript(seg: BriefingSegment, lang: string): string | undefined {
+  if (lang === "en") return seg.scriptEn || undefined;
+  if (lang === "hi") return seg.scriptHi || undefined;
+  if (lang === "ta") return seg.scriptTa;
+  if (lang === "mr") return seg.scriptMr;
   return undefined;
 }
 
@@ -775,34 +1241,73 @@ function setStoryAudioUrl(story: Story, lang: string, url: string): void {
   else if (lang === "mr") story.audioUrlMr = url;
 }
 
+function setSegmentAudioUrl(seg: BriefingSegment, lang: string, url: string): void {
+  if (lang === "en") seg.audioUrlEn = url;
+  else if (lang === "hi") seg.audioUrlHi = url;
+  else if (lang === "ta") seg.audioUrlTa = url;
+  else if (lang === "mr") seg.audioUrlMr = url;
+}
+
+function isProviderLangSupported(provider: TtsProvider, lang: string): boolean {
+  if (provider === "kokoro") return lang === "en";
+  if (provider === "google") return lang === "en" || lang === "hi";
+  return true; // elevenlabs and edge support all 4 languages
+}
+
+async function synthesizeOne(text: string, filename: string, provider: TtsProvider): Promise<string> {
+  if (provider === "google")     { const { url } = await googleTTS(text, filename);    return url; }
+  if (provider === "elevenlabs") { const { url } = await elevenLabsTTS(text, filename); return url; }
+  if (provider === "edge")       { const { url } = await edgeTTS(text, filename);       return url; }
+  if (provider === "kokoro")     { const { url } = await kokoroTTS(text, filename);     return url; }
+  throw new Error(`Unknown TTS provider: ${provider}`);
+}
+
 async function generateAllTTS(
   stories: Story[],
+  segments: BriefingSegment[],
   date: string,
   provider: TtsProvider,
+  languages: string[],
   logger: Logger,
-  onStoryDone?: (stories: Story[]) => Promise<void>,
-  languages: string[] = ["en", "hi"],
-): Promise<{ stories: Story[]; costInfo: TtsCostInfo }> {
-  const updated = stories.map(s => ({ ...s }));
-  const label   = provider === "google" ? "Google" : provider === "elevenlabs" ? "ElevenLabs" : provider === "edge" ? "Edge" : "Kokoro";
-  let enChars = 0;
-  let hiChars = 0;
+  onProgress?: (stories: Story[], segments: BriefingSegment[]) => Promise<void>,
+): Promise<{ stories: Story[]; segments: BriefingSegment[]; costInfo: TtsCostInfo }> {
+  const updatedStories  = stories.map(s => ({ ...s }));
+  const updatedSegments = segments.map(s => ({ ...s }));
+  let enChars = 0, hiChars = 0, taChars = 0, mrChars = 0;
   let storiesWithAudio = 0;
 
-  logger(`TTS (${label}): ${stories.length} stories × ${languages.length} languages [${languages.join(",")}] = ${stories.length * languages.length} calls…`);
+  logger(`TTS (${provider}): ${stories.length} stories + ${segments.length} segments × ${languages.length} languages`);
 
-  const synthesize = async (script: string, filename: string): Promise<string> => {
-    if (provider === "google")     { const { url } = await googleTTS(script, filename);     return url; }
-    if (provider === "elevenlabs") { const { url } = await elevenLabsTTS(script, filename);  return url; }
-    if (provider === "edge")       { const { url } = await edgeTTS(script, filename);        return url; }
-    if (provider === "kokoro")     { const { url } = await kokoroTTS(script, filename);      return url; }
-    throw new Error(`Unknown TTS provider: ${provider}`);
-  };
+  // Wrapper segments first (short, fast) — save after each segment completes all languages
+  logger("  Wrapper segments…");
+  for (let si = 0; si < updatedSegments.length; si++) {
+    const seg = updatedSegments[si];
+    if (isAbortRequested()) break;
+    for (const lang of languages) {
+      if (!isProviderLangSupported(provider, lang)) continue;
+      const script = getSegmentScript(seg, lang);
+      if (!script) continue;
+      try {
+        const url = await synthesizeOne(script, `${date}-${seg.id}-${lang}`, provider);
+        setSegmentAudioUrl(seg, lang, url);
+        if (lang === "en") enChars += script.length;
+        else if (lang === "hi") hiChars += script.length;
+        else if (lang === "ta") taChars += script.length;
+        else if (lang === "mr") mrChars += script.length;
+        logger(`    ✓ ${seg.type} ${lang.toUpperCase()}${seg.section ? ` (→${seg.section})` : ""}`);
+      } catch (err: any) {
+        logger(`    ✗ ${seg.id} ${lang.toUpperCase()}: ${err.message?.slice(0, 60)}`);
+      }
+    }
+    // Save after each segment so partial progress survives an abort
+    if (onProgress) await onProgress([...updatedStories], [...updatedSegments]);
+  }
 
+  // Stories
   for (let i = 0; i < stories.length; i++) {
-    if (isAbortRequested()) { logger("⛔ Aborted by stop request"); break; }
-    if (provider === "google"     && isDailyQuotaExhausted()) { logger("⛔ Google TTS daily quota exhausted"); break; }
-    if (provider === "elevenlabs" && isQuotaExhausted())      { logger("⛔ ElevenLabs quota exhausted — top up credits to continue."); break; }
+    if (isAbortRequested()) { logger("⛔ Aborted"); break; }
+    if (provider === "google"     && isDailyQuotaExhausted()) { logger("⛔ Google TTS quota"); break; }
+    if (provider === "elevenlabs" && isQuotaExhausted())      { logger("⛔ ElevenLabs quota"); break; }
 
     const story    = stories[i];
     const fileBase = `${date}-${story.id}`;
@@ -810,27 +1315,21 @@ async function generateAllTTS(
 
     for (const lang of languages) {
       if (isAbortRequested()) break;
-      if (provider === "google"     && isDailyQuotaExhausted()) break;
-      if (provider === "elevenlabs" && isQuotaExhausted())      break;
-
-      // Kokoro only supports EN
-      if (provider === "kokoro" && lang !== "en") continue;
-      // Google TTS only supports EN and HI in this pipeline
-      if (provider === "google" && lang !== "en" && lang !== "hi") continue;
-      // ElevenLabs only supports EN and HI
-      if (provider === "elevenlabs" && lang !== "en" && lang !== "hi") continue;
+      if (!isProviderLangSupported(provider, lang)) continue;
 
       const script = getStoryScript(story, lang);
       if (!script) continue;
 
       try {
-        const url = await synthesize(script, `${fileBase}-${lang}`);
-        setStoryAudioUrl(updated[i], lang, url);
+        const url = await synthesizeOne(script, `${fileBase}-${lang}`, provider);
+        setStoryAudioUrl(updatedStories[i], lang, url);
         if (lang === "en") enChars += script.length;
         else if (lang === "hi") hiChars += script.length;
+        else if (lang === "ta") taChars += script.length;
+        else if (lang === "mr") mrChars += script.length;
         gotAny = true;
       } catch (err: any) {
-        logger(`  ✗ ${lang.toUpperCase()} [${i + 1}/${stories.length}]: ${err.message?.slice(0, 80)}`);
+        logger(`  ✗ [${i + 1}/${stories.length}] ${lang.toUpperCase()}: ${err.message?.slice(0, 60)}`);
       }
     }
 
@@ -840,25 +1339,29 @@ async function generateAllTTS(
     } else {
       logger(`  ⚠ [${i + 1}/${stories.length}] no audio — ${story.title.slice(0, 45)}`);
     }
-    if (onStoryDone) await onStoryDone([...updated]);
 
-    // Proactive inter-call delay for Google to stay under RPM limit (~10 RPM on preview model)
+    if (onProgress) await onProgress([...updatedStories], [...updatedSegments]);
+
+    // Google RPM guard
     if (provider === "google" && i < stories.length - 1) {
       await new Promise(r => setTimeout(r, 6_000));
     }
   }
 
-  const totalChars = enChars + hiChars;
-  // ElevenLabs Flash v2.5: ~$0.50/1K chars; Google: $0.50/1M chars; Edge/Kokoro: free
+  const totalChars = enChars + hiChars + taChars + mrChars;
+  // ElevenLabs Flash v2.5: ~$0.30/1K chars; Google: negligible; Edge/Kokoro: free
   const estimatedUsd =
-    provider === "elevenlabs" ? (totalChars / 1000) * 0.50 :
+    provider === "elevenlabs" ? (totalChars / 1000) * 0.30 :
     provider === "google"     ? (totalChars / 1_000_000) * 0.50 :
     0;
 
-  const costInfo: TtsCostInfo = { provider, enChars, hiChars, totalChars, estimatedUsd, storiesAttempted: stories.length, storiesWithAudio };
-  logger(`TTS done: ${storiesWithAudio}/${stories.length} stories, ${(totalChars / 1000).toFixed(1)}K chars, est. $${estimatedUsd.toFixed(2)}`);
+  const costInfo: TtsCostInfo = {
+    provider, enChars, hiChars, taChars, mrChars, totalChars,
+    estimatedUsd, storiesAttempted: stories.length, storiesWithAudio,
+  };
 
-  return { stories: updated, costInfo };
+  logger(`TTS done: ${storiesWithAudio}/${stories.length} stories, ${(totalChars / 1000).toFixed(1)}K chars, est. $${estimatedUsd.toFixed(2)}`);
+  return { stories: updatedStories, segments: updatedSegments, costInfo };
 }
 
 // ─── Storage helpers ──────────────────────────────────────────────────────────
@@ -881,10 +1384,10 @@ export async function saveBriefing(briefing: DailyBriefing): Promise<void> {
 function mapOldCategory(cat: string): SectionId {
   const m: Record<string, SectionId> = {
     "india-national": "india",   "india-business": "business",
-    "india-sports": "sports",    "india-tech": "technology",
+    "india-sports":   "sports",  "india-tech":     "technology",
     "india-entertainment": "entertainment", "india-health": "health",
-    "global-world": "world",     "global-business": "business",
-    "global-sports": "sports",   "global-tech": "technology",
+    "global-world":   "world",   "global-business": "business",
+    "global-sports":  "sports",  "global-tech":    "technology",
     "global-entertainment": "entertainment", "global-health": "health",
   };
   return m[cat] ?? "headlines";
@@ -898,16 +1401,16 @@ function normalizeBriefing(raw: any): DailyBriefing {
     for (const section of raw.sections) {
       for (const topic of (section.topics ?? [])) {
         stories.push({
-          id:          topic.id ?? storyId(topic.sourceUrl ?? String(Math.random())),
-          title:       topic.headline ?? topic.title ?? "",
-          source:      topic.sourceName ?? "Unknown",
-          link:        topic.sourceUrl ?? "",
-          publishedAt: raw.generatedAt ?? new Date().toISOString(),
-          section:     mapOldCategory(section.category),
-          scriptEn:    topic.monologueScript ?? "",
-          scriptHi:    "",
-          audioUrlEn:  topic.audioUrlEn ?? (topic as any).audioUrl,
-          audioUrlHi:  topic.audioUrlHi,
+          id:            topic.id ?? storyId(topic.sourceUrl ?? String(Math.random())),
+          title:         topic.headline ?? topic.title ?? "",
+          source:        topic.sourceName ?? "Unknown",
+          link:          topic.sourceUrl ?? "",
+          publishedAt:   raw.generatedAt ?? new Date().toISOString(),
+          section:       mapOldCategory(section.category),
+          scriptEn:      topic.monologueScript ?? "",
+          scriptHi:      "",
+          audioUrlEn:    topic.audioUrlEn ?? (topic as any).audioUrl,
+          audioUrlHi:    topic.audioUrlHi,
           audioStartSec: 0,
         });
       }
@@ -941,15 +1444,6 @@ export const getTodayBriefing = getLatestBriefing;
 
 // ─── Main generator ───────────────────────────────────────────────────────────
 
-export type RunSummary = {
-  elapsedSec: number;
-  fetchSec: number;
-  clubSec: number;
-  ttsSec: number;
-  stories: number;
-  tts: TtsCostInfo;
-};
-
 export async function generateDailyBriefing(
   logger: Logger = () => {},
   city = DEFAULT_CITY,
@@ -957,12 +1451,12 @@ export async function generateDailyBriefing(
   languages: string[] = ["en", "hi"],
 ): Promise<DailyBriefing & { runSummary?: RunSummary }> {
   const runStart = Date.now();
-  const date = new Date().toISOString().slice(0, 10);
-  const log  = (msg: string) => { console.log(`[generator] ${msg}`); logger(msg); };
+  const date     = new Date().toISOString().slice(0, 10);
+  const log      = (msg: string) => { console.log(`[generator] ${msg}`); logger(msg); };
 
-  log(`Starting briefing for ${date} (city: ${city}, TTS: ${ttsProvider}, langs: ${languages.join(",")})`);
+  log(`Starting briefing v4 — ${date} | city: ${city} | TTS: ${ttsProvider} | langs: ${languages.join(",")}`);
 
-  // Step 1: Fetch all feeds
+  // Step 1: Fetch
   const t0 = Date.now();
   log(`Fetching ${FEEDS.length} Google News feeds…`);
   const feedMap  = await fetchAllFeeds(city);
@@ -971,71 +1465,115 @@ export async function generateDailyBriefing(
   log(`Fetched ${rawTotal} raw items from ${feedMap.size} feeds (${fetchSec.toFixed(1)}s)`);
 
   // Step 2: Dedup
-  const rawStories = buildStories(feedMap);
-  log(`After dedup: ${rawStories.length} unique stories`);
+  const rawStories = buildRawStories(feedMap);
+  log(`After dedup: ${rawStories.length} unique articles`);
   for (const feed of FEEDS) {
     const n = rawStories.filter(s => s.section === feed.id).length;
     if (n > 0) log(`  ${feed.emoji} ${feed.label}: ${n}`);
   }
 
-  // Steps 2b + 3 in parallel: OG images and club+script are independent.
-  // Images are collected into a shared map as they arrive so partial saves
-  // during scripting can include already-fetched images.
+  // Steps 2b + 4 in parallel: OG images + clustering
   const t1 = Date.now();
-  log(`Fetching OG images and scripting in parallel…`);
-  const liveImageById = new Map<string, string>(); // populated as OG fetches complete
-
-  const [withImages, clubbed] = await Promise.all([
-    // Image fetcher: fill liveImageById as each batch completes
-    (async () => {
-      const result = await fetchAllOgImages(rawStories, log, liveImageById);
-      return result;
-    })(),
-    scriptAllStories(rawStories, log, async (partial) => {
-      // Merge whatever images have arrived so far into the partial save
-      const withLiveImages = partial.map(s =>
-        s.imageUrl ? s : { ...s, imageUrl: liveImageById.get(s.id) }
-      );
-      await saveBriefing({ date, generatedAt: new Date().toISOString(), stories: withLiveImages, generatedLanguages: languages });
-      log(`  💾 saved ${partial.length} stories (${withLiveImages.filter(s => s.imageUrl).length} with images)`);
-    }, languages),
+  const liveImageById = new Map<string, string>();
+  const [withImages, allEvents] = await Promise.all([
+    fetchAllOgImages(rawStories, log, liveImageById),
+    clusterAllSections(rawStories, log),
   ]);
-  const clubSec = (Date.now() - t1) / 1000;
-  log(`Clubbing done in ${clubSec.toFixed(1)}s → ${clubbed.length} stories`);
+  const clusterSec = (Date.now() - t1) / 1000;
 
-  // Merge images into clubbed stories by matching id
+  // Merge OG images into events
   const imageById = new Map(withImages.map(s => [s.id, s.imageUrl]));
-  const merged = clubbed.map(s => ({
-    ...s,
-    imageUrl: s.imageUrl ?? imageById.get(s.id),
-  }));
+  for (const ev of allEvents) {
+    if (!ev.imageUrl) {
+      ev.imageUrl = ev.sourceStories.map(s => imageById.get(s.id)).find(Boolean);
+    }
+  }
 
-  // Step 4: Time guard — disabled, keep all stories
-  const guarded = merged; // applyTimeGuard(merged, log);
-
-  // Save after scripting (before TTS so scripts survive TTS quota failures)
-  await saveBriefing({ date, generatedAt: new Date().toISOString(), stories: guarded, generatedLanguages: languages });
-  log(`Scripts done — ${guarded.length} stories, saving before TTS…`);
-
-  // Step 5: TTS — per-story, same structure for all providers
+  // Step 5: Score
   const t2 = Date.now();
-  log(`TTS provider: ${ttsProvider} (${guarded.length} stories × ${languages.length} langs [${languages.join(",")}] = ${guarded.length * languages.length} calls)`);
-  const { stories: withAudio, costInfo } = await generateAllTTS(guarded, date, ttsProvider, log, async (partialStories) => {
-    await saveBriefing({ date, generatedAt: new Date().toISOString(), stories: partialStories, generatedLanguages: languages });
-  }, languages);
-  const ttsSec = (Date.now() - t2) / 1000;
+  const scoredEvents = await scoreEvents(allEvents, log);
+  const scoreSec = (Date.now() - t2) / 1000;
+  log(`Scoring done in ${scoreSec.toFixed(1)}s`);
+
+  // Step 6: mustInclude events are already flagged by scoreEvents() via AI judgment
+  const forced = scoredEvents.filter(e => e.forcedByEditorial).length;
+  if (forced > 0) log(`AI editorial flags: ${forced} events marked mustInclude`);
+
+  // Step 7: Briefing plan
+  const selectedEvents = buildBriefingPlan(scoredEvents, log);
+
+  // Early save (structure visible before scripts are generated)
+  await saveBriefing({
+    date, generatedAt: new Date().toISOString(), generatedLanguages: languages,
+    stories: selectedEvents.map(ev => ({
+      id: ev.eventId, title: ev.canonicalTitle,
+      source: ev.publishers[0] ?? "", link: ev.sourceStories[0]?.link ?? "",
+      publishedAt: ev.firstPublishedAt, section: ev.assignedSection,
+      imageUrl: ev.imageUrl, scriptEn: "", scriptHi: "",
+    })),
+  });
+
+  // Step 8: Scripts
+  const t3 = Date.now();
+  const stories = await scriptSelectedEvents(selectedEvents, log, languages);
+  const scriptSec = (Date.now() - t3) / 1000;
+  log(`Scripts done in ${scriptSec.toFixed(1)}s`);
+
+  // Build meta
+  const estimatedWords      = stories.reduce((n, s) => n + (s.wordCount ?? s.scriptEn.split(/\s+/).length), 0);
+  const estimatedDurationSec = Math.round((estimatedWords / TARGET_WPM) * 60);
+  const sectionSet           = new Set<SectionId>();
+  for (const s of stories) sectionSet.add(s.section);
+  const sections = (["headlines", ...SECTION_ORDER] as SectionId[]).filter(s => sectionSet.has(s));
+
+  const meta: BriefingMeta = {
+    totalStories:          stories.length,
+    totalArticles:         rawStories.length,
+    estimatedDurationSec,
+    sections,
+  };
+
+  // Step 9: Wrapper
+  const segments = await generateWrapper(stories, log, languages);
+
+  // Save with scripts + segments (pre-TTS checkpoint)
+  await saveBriefing({ date, generatedAt: new Date().toISOString(), stories, segments, meta, generatedLanguages: languages });
+  log(`Pre-TTS checkpoint: ${stories.length} stories + ${segments.length} segments saved`);
+
+  // Step 10: TTS
+  const t4 = Date.now();
+  const { stories: withAudio, segments: withSegmentAudio, costInfo } = await generateAllTTS(
+    stories, segments, date, ttsProvider, languages, log,
+    async (s, segs) => {
+      await saveBriefing({ date, generatedAt: new Date().toISOString(), stories: s, segments: segs, meta, generatedLanguages: languages });
+    },
+  );
+  const ttsSec     = (Date.now() - t4) / 1000;
   const elapsedSec = (Date.now() - runStart) / 1000;
 
-  const runSummary: RunSummary = { elapsedSec, fetchSec, clubSec, ttsSec, stories: withAudio.length, tts: costInfo };
+  const runSummary: RunSummary = {
+    elapsedSec,
+    fetchSec,
+    clusterSec,
+    scoreSec,
+    scriptSec,
+    ttsSec,
+    rawStories:      rawStories.length,
+    clusteredEvents: allEvents.length,
+    selectedStories: stories.length,
+    tts:             costInfo,
+  };
 
   const mins = Math.floor(elapsedSec / 60);
   const secs = Math.round(elapsedSec % 60);
-  log(`✅ Done in ${mins}m ${secs}s — ${withAudio.length} stories, TTS: ${(costInfo.totalChars / 1000).toFixed(1)}K chars, est. $${costInfo.estimatedUsd.toFixed(2)}`);
+  log(`✅ Done in ${mins}m ${secs}s — ${withAudio.length} stories, ~${(estimatedDurationSec / 60).toFixed(1)} min briefing, est. $${costInfo.estimatedUsd.toFixed(2)}`);
 
-  const briefing = {
+  const briefing: DailyBriefing & { runSummary?: RunSummary } = {
     date,
-    generatedAt: new Date().toISOString(),
-    stories: withAudio,
+    generatedAt:        new Date().toISOString(),
+    stories:            withAudio,
+    segments:           withSegmentAudio,
+    meta,
     generatedLanguages: languages,
     runSummary,
   };
@@ -1044,7 +1582,7 @@ export async function generateDailyBriefing(
   return briefing;
 }
 
-// ─── Patch: add newly published stories to existing briefing ──────────────────
+// ─── Admin: generate missing sections ─────────────────────────────────────────
 
 export async function generateMissingSections(
   logger: Logger = () => {},
@@ -1059,158 +1597,13 @@ export async function generateMissingSections(
     return { added: ["(full generation)"], briefing: full };
   }
 
-  log(`Refreshing stories for ${existing.date}…`);
-  const existingIds = new Set(existing.stories.map(s => s.id));
-
-  const feedMap    = await fetchAllFeeds(city);
-  const allStories = buildStories(feedMap);
-  const newStories = allStories.filter(s => !existingIds.has(s.id));
-
-  if (newStories.length === 0) {
-    log("No new stories found");
-    return { added: [], briefing: existing };
-  }
-
-  log(`Found ${newStories.length} new stories — clubbing + scripting new sections…`);
-
-  // Re-club each section that has new stories (merge new + existing for that section)
-  const newSections = new Set(newStories.map(s => s.section));
-  const patchLangs  = existing.generatedLanguages ?? ["en", "hi"];
-  log(`Patch-missing using languages from existing briefing: ${patchLangs.join(",")}`);
-
-  const [withImages, clubbedNew] = await Promise.all([
-    fetchAllOgImages(newStories, log),
-    scriptAllStories(newStories, log, undefined, patchLangs),
-  ]);
-
-  const imageById = new Map(withImages.map(s => [s.id, s.imageUrl]));
-  const mergedNew = clubbedNew.map(s => ({
-    ...s,
-    imageUrl: s.imageUrl ?? imageById.get(s.id),
-  }));
-
-  // TTS for new stories — use same provider and languages as original run
-  const patchProvider: TtsProvider = "google";
-  const { stories: withAudio } = await generateAllTTS(mergedNew, existing.date, patchProvider, log, async (partial) => {
-    await saveBriefing({
-      ...existing,
-      generatedAt: new Date().toISOString(),
-      stories: [...existing.stories, ...partial],
-    });
-  }, patchLangs);
-
-  const merged: DailyBriefing = {
-    ...existing,
-    generatedAt: new Date().toISOString(),
-    stories: [...existing.stories, ...withAudio],
-  };
-
-  await saveBriefing(merged);
-  const addedLabels = [...newSections].map(s => FEED_MAP.get(s)?.label ?? s);
-  log(`Added ${withAudio.length} stories across: ${addedLabels.join(", ")}`);
-  return { added: addedLabels, briefing: merged };
+  // v4 pipeline is holistic (scoring requires all events together), so always regenerate
+  log(`Refreshing: ${existing.stories.length} stories exist — running full regeneration…`);
+  const fresh = await generateDailyBriefing(logger, city, "google", existing.generatedLanguages ?? ["en", "hi"]);
+  return { added: ["(full regeneration)"], briefing: fresh };
 }
 
-// ─── Script patch ────────────────────────────────────────────────────────────
-// Re-script stories where scriptEn is garbled (leftover &nbsp; from older RSS parser,
-// or title-only fallbacks that never got a real Gemini script)
-
-function isGarbledScript(s: Story): boolean {
-  const script = s.scriptEn;
-  if (!script || script.length < 40) return true;
-  if (script.includes("&nbsp;") || script.includes("&#160;")) return true;
-
-  // Title-only fallback: script is the story title (with optional trailing period)
-  // Covers both the full title and the cleaned title (source suffix stripped)
-  const scriptCore  = script.replace(/\.$/, "").trim();
-  const titleFull   = s.title.trim();
-  const titleClean  = titleFull.replace(/\s*[-–|]\s*[^-–|]{1,40}$/, "").trim();
-  if (scriptCore === titleFull || scriptCore === titleClean) return true;
-  // Catch near-matches: script starts with the title base and adds almost nothing
-  if (scriptCore.startsWith(titleClean) && scriptCore.length < titleClean.length + 20) return true;
-
-  // Article list fallback: many words but no sentence-ending punctuation at all
-  const periods = (script.match(/[.!?]/g) ?? []).length;
-  const words   = script.trim().split(/\s+/).length;
-  if (words > 15 && periods === 0) return true;
-
-  return false;
-}
-
-export async function patchScripts(
-  logger: Logger = () => {},
-): Promise<{ patched: number; briefing: DailyBriefing }> {
-  const log = (msg: string) => { console.log(`[generator] ${msg}`); logger(msg); };
-
-  const existing = await getLatestBriefing();
-  if (!existing) throw new Error("No existing briefing — run full generation first");
-
-  const badStories = existing.stories.filter(isGarbledScript);
-
-  if (badStories.length === 0) {
-    log("All scripts look clean — nothing to patch");
-    return { patched: 0, briefing: existing };
-  }
-
-  log(`Found ${badStories.length} stories with garbled/missing scripts — re-scripting…`);
-
-  const languages = existing.generatedLanguages ?? ["en", "hi"];
-  log(`Re-scripting for languages: ${languages.join(",")}`);
-
-  // Group bad stories by section
-  const bySection = new Map<SectionId, Story[]>();
-  for (const s of badStories) {
-    const arr = bySection.get(s.section) ?? [];
-    arr.push(s);
-    bySection.set(s.section, arr);
-  }
-
-  const updated = existing.stories.map(s => ({ ...s }));
-  let patched = 0;
-
-  for (const [sectionId, sectionStories] of bySection) {
-    if (isAbortRequested()) { log("⛔ Aborted"); break; }
-    const emoji = FEED_MAP.get(sectionId)?.emoji ?? "📰";
-    log(`  ${emoji} Re-scripting ${sectionId}: ${sectionStories.length} stories…`);
-
-    try {
-      const rescripted = await scriptBatch(sectionStories, sectionId, log, languages);
-
-      for (const rs of rescripted) {
-        const idx = updated.findIndex(s => s.id === rs.id);
-        if (idx < 0) continue;
-        // Keep existing audio URLs; update scripts + titles only
-        updated[idx] = {
-          ...updated[idx],
-          scriptEn: rs.scriptEn || updated[idx].scriptEn,
-          scriptHi: rs.scriptHi || updated[idx].scriptHi,
-          ...(rs.scriptTa !== undefined ? { scriptTa: rs.scriptTa } : {}),
-          ...(rs.scriptMr !== undefined ? { scriptMr: rs.scriptMr } : {}),
-          ...(rs.titleHi  !== undefined ? { titleHi:  rs.titleHi  } : {}),
-          ...(rs.titleTa  !== undefined ? { titleTa:  rs.titleTa  } : {}),
-          ...(rs.titleMr  !== undefined ? { titleMr:  rs.titleMr  } : {}),
-        };
-        patched++;
-      }
-    } catch (err: any) {
-      log(`  ✗ ${sectionId}: ${err.message?.slice(0, 80)}`);
-    }
-
-    // Save after each section so progress survives a partial run
-    await saveBriefing({ ...existing, generatedAt: new Date().toISOString(), stories: updated });
-  }
-
-  const briefing: DailyBriefing = {
-    ...existing,
-    generatedAt: new Date().toISOString(),
-    stories: updated,
-  };
-  await saveBriefing(briefing);
-  log(`✅ Patched ${patched} scripts`);
-  return { patched, briefing };
-}
-
-// ─── TTS-only patch ───────────────────────────────────────────────────────────
+// ─── Admin: generate missing TTS ──────────────────────────────────────────────
 
 export async function generateMissingTTS(
   logger: Logger = () => {},
@@ -1219,86 +1612,98 @@ export async function generateMissingTTS(
   const log = (msg: string) => { console.log(`[generator] ${msg}`); logger(msg); };
 
   const existing = await getLatestBriefing();
-  if (!existing) throw new Error("No existing briefing — run full generation first");
+  if (!existing) {
+    log("No briefing found");
+    return { patched: 0, briefing: { date: "", generatedAt: "", stories: [] } };
+  }
 
-  // All 4 languages — a story is "missing" if it has a script but no audio for any lang
-  // Use the languages that were actually generated — avoids trying TA/MR on EN+HI-only runs
-  const PATCH_LANGS = (existing.generatedLanguages ?? ["en", "hi"]) as string[];
-  const scriptKey = (lang: string) => `script${lang.charAt(0).toUpperCase() + lang.slice(1)}` as keyof Story;
-  const audioKey  = (lang: string) => `audioUrl${lang.charAt(0).toUpperCase() + lang.slice(1)}` as keyof Story;
+  const languages = existing.generatedLanguages ?? ["en", "hi"];
 
-  const missing = existing.stories.filter(s =>
-    PATCH_LANGS.some(lang => (s as any)[scriptKey(lang)] && !(s as any)[audioKey(lang)])
+  const storiesNeedingAudio = existing.stories.filter(s =>
+    languages.some(lang => {
+      const script = getStoryScript(s, lang);
+      const audio  = lang === "en" ? s.audioUrlEn : lang === "hi" ? s.audioUrlHi
+                   : lang === "ta" ? s.audioUrlTa : s.audioUrlMr;
+      return script && !audio;
+    })
+  );
+  const segmentsNeedingAudio = (existing.segments ?? []).filter(seg =>
+    languages.some(lang => {
+      const script = getSegmentScript(seg, lang);
+      const audio  = lang === "en" ? seg.audioUrlEn : lang === "hi" ? seg.audioUrlHi
+                   : lang === "ta" ? seg.audioUrlTa : seg.audioUrlMr;
+      return script && !audio;
+    })
   );
 
-  if (missing.length === 0) {
-    log("All stories already have audio — nothing to do");
+  log(`TTS patch: ${storiesNeedingAudio.length} stories + ${segmentsNeedingAudio.length} segments need audio`);
+
+  if (storiesNeedingAudio.length === 0 && segmentsNeedingAudio.length === 0) {
+    log("All audio already generated");
     return { patched: 0, briefing: existing };
   }
 
-  const synthesize = async (script: string, filename: string): Promise<string> => {
-    if (provider === "google")     { const { url } = await googleTTS(script, filename);     return url; }
-    if (provider === "elevenlabs") { const { url } = await elevenLabsTTS(script, filename);  return url; }
-    if (provider === "edge")       { const { url } = await edgeTTS(script, filename);        return url; }
-    if (provider === "kokoro")     { const { url } = await kokoroTTS(script, filename);      return url; }
-    throw new Error(`Unknown TTS provider: ${provider}`);
+  const { stories: patched, segments: patchedSegs, costInfo } = await generateAllTTS(
+    storiesNeedingAudio, segmentsNeedingAudio, existing.date, provider, languages, log,
+  );
+
+  const patchedById    = new Map(patched.map(s => [s.id, s]));
+  const patchedSegById = new Map(patchedSegs.map(s => [s.id, s]));
+  const mergedStories  = existing.stories.map(s => patchedById.get(s.id) ?? s);
+  const mergedSegments = (existing.segments ?? []).map(s => patchedSegById.get(s.id) ?? s);
+
+  const updatedBriefing: DailyBriefing = {
+    ...existing,
+    stories:     mergedStories,
+    segments:    mergedSegments,
+    generatedAt: new Date().toISOString(),
   };
 
-  log(`TTS patch (${provider}): ${missing.length} stories with missing audio…`);
+  await saveBriefing(updatedBriefing);
+  log(`TTS patch done: ${patched.filter(s => s.audioUrlEn).length} stories, est. $${costInfo.estimatedUsd.toFixed(2)}`);
+  return { patched: patched.length, briefing: updatedBriefing };
+}
 
-  const updated = existing.stories.map(s => ({ ...s }));
-  let patched   = 0;
+// ─── Admin: patch garbled scripts ─────────────────────────────────────────────
 
-  for (const story of missing) {
-    if (isAbortRequested())                                    { log("⛔ Aborted by stop request"); break; }
-    if (provider === "elevenlabs" && isQuotaExhausted())       { log("⛔ ElevenLabs quota exhausted — stopping."); break; }
-    if (provider === "google"     && isDailyQuotaExhausted())  { log("⛔ Google TTS daily quota exhausted — stopping."); break; }
+export async function patchScripts(
+  logger: Logger = () => {},
+): Promise<{ patched: number; briefing: DailyBriefing }> {
+  const log = (msg: string) => { console.log(`[generator] ${msg}`); logger(msg); };
 
-    const idx = updated.findIndex(s => s.id === story.id);
-    if (idx < 0) continue;
-    const fileBase = `${existing.date}-${story.id}`;
-    let gotAny = false;
-
-    for (const lang of PATCH_LANGS) {
-      if (isAbortRequested()) break;
-      if (provider === "elevenlabs" && isQuotaExhausted()) break;
-      if (provider === "google"     && isDailyQuotaExhausted()) break;
-
-      // Provider language restrictions
-      if (provider === "kokoro"     && lang !== "en")              continue;
-      if (provider === "google"     && lang !== "en" && lang !== "hi") continue;
-      if (provider === "elevenlabs" && lang !== "en" && lang !== "hi") continue;
-
-      const sk = scriptKey(lang);
-      const ak = audioKey(lang);
-      const script   = (story as any)[sk] as string | undefined;
-      const hasAudio = (story as any)[ak] as string | undefined;
-
-      if (!script || hasAudio) continue;
-
-      try {
-        (updated[idx] as any)[ak] = await synthesize(script, `${fileBase}-${lang}`);
-        if (lang === "en") updated[idx].audioStartSec = 0;
-        patched++;
-        gotAny = true;
-      } catch (err: any) {
-        log(`  ✗ ${lang.toUpperCase()} ${story.id.slice(0, 8)}: ${err.message?.slice(0, 80)}`);
-      }
-    }
-
-    if (gotAny) {
-      log(`  ✓ ${story.title.slice(0, 55)}`);
-    } else {
-      log(`  ⚠ no audio saved — ${story.title.slice(0, 45)}`);
-    }
-    await saveBriefing({ ...existing, generatedAt: new Date().toISOString(), stories: updated });
+  const existing = await getLatestBriefing();
+  if (!existing) {
+    log("No briefing found");
+    return { patched: 0, briefing: { date: "", generatedAt: "", stories: [] } };
   }
 
-  const briefing: DailyBriefing = {
+  const languages  = existing.generatedLanguages ?? ["en", "hi"];
+  const nonEnLangs = languages.filter(l => l !== "en");
+
+  const needsFixup = existing.stories.filter(s =>
+    nonEnLangs.some(lang => {
+      const script = lang === "hi" ? s.scriptHi : lang === "ta" ? s.scriptTa : lang === "mr" ? s.scriptMr : undefined;
+      return s.scriptEn && !hasExpectedScript(script, lang);
+    })
+  );
+
+  log(`Script patch: ${needsFixup.length}/${existing.stories.length} stories need non-EN fix-up`);
+  if (needsFixup.length === 0) {
+    log("All scripts look healthy");
+    return { patched: 0, briefing: existing };
+  }
+
+  const fixed       = await fixScriptLanguages(needsFixup, nonEnLangs, log);
+  const fixedById   = new Map(fixed.map(s => [s.id, s]));
+  const mergedStories = existing.stories.map(s => fixedById.get(s.id) ?? s);
+
+  const updatedBriefing: DailyBriefing = {
     ...existing,
+    stories:     mergedStories,
     generatedAt: new Date().toISOString(),
-    stories: updated,
   };
-  await saveBriefing(briefing);
-  return { patched, briefing };
+
+  await saveBriefing(updatedBriefing);
+  log(`Script patch done: ${fixed.length} stories updated`);
+  return { patched: fixed.length, briefing: updatedBriefing };
 }
