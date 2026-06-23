@@ -156,17 +156,19 @@ const TOP_STORIES_MIN  = 4;
 const TOP_STORIES_MAX  = 5;
 const TOP_STORIES_THRESHOLD = 6.5;
 
-// Section slots: min/max stories per section + minimum importance score to qualify
+// Section slots: min/max stories per section + minimum importance score to qualify.
+// Tuned for post-retirement Indian audience (60+): governance, economy, health, policy
+// are high priority; tech and entertainment are low priority.
 const SECTION_SLOTS: Partial<Record<SectionId, { min: number; max: number; threshold: number }>> = {
-  india:         { min: 2, max: 4, threshold: 4.0 },
-  world:         { min: 2, max: 4, threshold: 4.0 },
-  business:      { min: 1, max: 3, threshold: 4.0 },
-  technology:    { min: 1, max: 2, threshold: 3.5 },
-  sports:        { min: 1, max: 2, threshold: 3.0 },
-  health:        { min: 0, max: 1, threshold: 3.0 },
-  entertainment: { min: 0, max: 1, threshold: 3.0 },
-  science:       { min: 0, max: 1, threshold: 3.0 },
-  local:         { min: 0, max: 1, threshold: 3.0 },
+  india:         { min: 3, max: 5, threshold: 4.0 },  // politics, policy, state news — core interest
+  world:         { min: 2, max: 4, threshold: 4.0 },  // India's foreign relations, global events
+  business:      { min: 2, max: 4, threshold: 3.5 },  // economy, markets, inflation, gold, FD rates
+  health:        { min: 1, max: 3, threshold: 3.0 },  // diseases, hospitals, medicine — high concern
+  sports:        { min: 1, max: 2, threshold: 3.0 },  // cricket primarily
+  technology:    { min: 0, max: 1, threshold: 5.0 },  // only truly major tech news
+  entertainment: { min: 0, max: 1, threshold: 5.0 },  // only nationally significant cultural events
+  science:       { min: 0, max: 1, threshold: 4.0 },  // ISRO, major research
+  local:         { min: 0, max: 1, threshold: 3.0 },  // city-specific
 };
 
 const SECTION_ORDER: SectionId[] = [
@@ -702,21 +704,42 @@ function scoringPrompt(events: ClusteredEvent[]): string {
     (ev.inHeadlinesFeed ? " ★" : "")
   ).join("\n");
 
-  return `You are Khabar AI's editorial director. Score each news event by civic importance for an average Indian listener.
+  return `You are Khabar AI's editorial director. Your audience is retired Indians aged 60+, living in tier-1 and tier-2 cities. They are educated, politically aware, and deeply interested in how governance, policy, and the economy affect their daily lives and their children's futures. They follow cricket. They care about health. They are not interested in startup funding rounds, celebrity gossip, or gadget launches unless these have clear national significance.
 
-SCORING GUIDE (0-10):
-10 = Every Indian is directly affected right now (budget, election result, major disaster)
-8-9 = Major event shaping this week's national narrative
-6-7 = Significant; informed citizens should know
-4-5 = Relevant but not urgent
-2-3 = Niche, regional, or low-stakes
-0-1 = Entertainment/celebrity with no civic significance
+Score each news event 0-10 by importance to THIS audience.
+
+SCORING GUIDE:
+10 = Directly and immediately affects their lives (budget, election result, major disaster, health emergency)
+8-9 = Major national event they will want to discuss with family today
+6-7 = Significant governance, policy, or civic news an informed citizen should know
+4-5 = Relevant but not urgent — worth mentioning
+2-3 = Niche, regional with limited impact, or low-stakes
+0-1 = Celebrity gossip, product launches, startup funding — no civic significance
+
+TOPICS THAT SCORE HIGHER for this audience (all else equal):
+• National & state politics: Parliament sessions, CM decisions, party developments, by-elections
+• Economic policy: inflation, petrol/LPG prices, gold prices, FD interest rates, pension schemes
+• Governance & welfare: government schemes, subsidies, Aadhaar, ration policy
+• Judiciary: Supreme Court and High Court judgments on property, rights, civil matters
+• Health: disease outbreaks, hospital news, medicine prices, AIIMS, health schemes
+• India's foreign relations: Pakistan, China, USA, NRI policy, diaspora
+• Infrastructure: roads, railways, airports affecting daily life
+• ISRO and national science achievements
+• Cricket — any format, any major development
+• Major religious or cultural events of national significance
+
+TOPICS THAT SCORE LOWER for this audience:
+• Startup funding, VC investments, unicorn valuations
+• Gadget launches, app updates, social media trends
+• Celebrity birthdays, film releases, OTT content
+• Niche sports other than cricket (unless medals/major achievement)
+• Academic conference findings with no immediate application
 
 ★ = Appeared on Google News homepage (add 0.5 bonus)
 
-Compare events against each other — scores should reflect relative importance.
+Compare events against each other — scores must reflect relative importance to this specific audience.
 
-MANDATORY COVERAGE — set mustInclude: true for these regardless of score:
+MANDATORY COVERAGE — set mustInclude: true regardless of score:
 • Any decision, statement, or action by the PM, Cabinet, or President of India
 • Supreme Court judgments affecting public life
 • Union Budget announcements or major fiscal policy
@@ -726,10 +749,11 @@ MANDATORY COVERAGE — set mustInclude: true for these regardless of score:
 • National or state election results
 • Major airline crashes or industrial disasters
 • Pandemic or health emergency declarations
+• Any event affecting pension, PF, or senior citizen schemes
 Use your judgment — when in doubt, set mustInclude: false and let the score decide.
 
 Return a JSON array (same order as input, ${events.length} items):
-[{"importance": 7.5, "reason": "one clear sentence", "confidence": "high", "breaking": false, "mustInclude": false}]
+[{"importance": 7.5, "reason": "one clear sentence why this matters to a retired Indian", "confidence": "high", "breaking": false, "mustInclude": false}]
 
 Events:
 ${eventList}`;
