@@ -152,31 +152,19 @@ type ClusteredEvent = {
 
 const TARGET_WPM = 150;
 
-const TOP_STORIES_MIN  = 4;
-const TOP_STORIES_MAX  = 5;
-const TOP_STORIES_THRESHOLD = 6.5;
-
-// Section slots: min/max stories per section + minimum importance score to qualify.
-// Tuned for post-retirement Indian audience (60+): governance, economy, health, policy
-// are high priority; tech and entertainment are low priority.
-const SECTION_SLOTS: Partial<Record<SectionId, { min: number; max: number; threshold: number }>> = {
-  india:         { min: 3, max: 5, threshold: 4.0 },  // politics, policy, state news — core interest
-  world:         { min: 2, max: 4, threshold: 4.0 },  // India's foreign relations, global events
-  business:      { min: 2, max: 4, threshold: 3.5 },  // economy, markets, inflation, gold, FD rates
-  health:        { min: 1, max: 3, threshold: 3.0 },  // diseases, hospitals, medicine — high concern
-  sports:        { min: 1, max: 2, threshold: 3.0 },  // cricket primarily
-  technology:    { min: 0, max: 1, threshold: 5.0 },  // only truly major tech news
-  entertainment: { min: 0, max: 1, threshold: 5.0 },  // only nationally significant cultural events
-  science:       { min: 0, max: 1, threshold: 4.0 },  // ISRO, major research
-  local:         { min: 0, max: 1, threshold: 3.0 },  // city-specific
-};
+// Target ~30 min listen time at ~1.5 min/story
+const TARGET_STORIES    = 20;
+// Soft per-section ceiling — prevents any one section monopolising the briefing
+// but imposes no hard floor. Pure score-rank decides everything else.
+const MAX_PER_SECTION   = 8;
 
 const SECTION_ORDER: SectionId[] = [
   "india", "world", "business", "technology", "sports",
   "health", "entertainment", "science", "local",
 ];
 
-const MAX_TOTAL_STORIES = 20;
+// Absolute ceiling — safety valve only, TARGET_STORIES is the real target
+const MAX_TOTAL_STORIES = 25;
 
 // ─── Gemini helpers ───────────────────────────────────────────────────────────
 
@@ -861,82 +849,40 @@ async function scoreEvents(
 // ─── Step 7: Briefing plan ────────────────────────────────────────────────────
 
 function buildBriefingPlan(events: ClusteredEvent[], logger: Logger): ClusteredEvent[] {
+  // Sort purely by importance score — the AI already weighted for the user persona
   const sorted = [...events].sort((a, b) => b.importanceScore - a.importanceScore);
-  const used   = new Set<string>();
-  const plan:  ClusteredEvent[] = [];
+  const used         = new Set<string>();
+  const plan: ClusteredEvent[] = [];
+  const sectionCount = new Map<string, number>();
 
-  // 1. Guarantee all mustInclude events — no cap, they always air
+  const add = (ev: ClusteredEvent, section: string) => {
+    ev.assignedSection = section;
+    plan.push(ev);
+    used.add(ev.eventId);
+    sectionCount.set(section, (sectionCount.get(section) ?? 0) + 1);
+  };
+
+  // 1. mustInclude events always air — no cap, no section limit
   for (const ev of sorted) {
     if (!ev.forcedByEditorial) continue;
-    ev.assignedSection = "headlines";
-    plan.push(ev);
-    used.add(ev.eventId);
+    add(ev, ev.section);
   }
 
-  // 2. Fill top stories with highest-scoring events
+  // 2. Fill remaining slots by score until TARGET_STORIES reached.
+  //    Soft cap: no single section > MAX_PER_SECTION (diversity guard).
   for (const ev of sorted) {
     if (used.has(ev.eventId)) continue;
-    if (plan.length >= TOP_STORIES_MAX) break;
-    if (ev.importanceScore >= TOP_STORIES_THRESHOLD) {
-      ev.assignedSection = "headlines";
-      plan.push(ev);
-      used.add(ev.eventId);
-    }
+    if (plan.length >= TARGET_STORIES) break;
+    if ((sectionCount.get(ev.section) ?? 0) >= MAX_PER_SECTION) continue;
+    add(ev, ev.section);
   }
-
-  // Ensure minimum top stories count even if scores are low
-  for (const ev of sorted) {
-    if (used.has(ev.eventId)) continue;
-    if (plan.length >= TOP_STORIES_MIN) break;
-    ev.assignedSection = "headlines";
-    plan.push(ev);
-    used.add(ev.eventId);
-  }
-
-  // 3. Fill section slots
-  for (const sectionId of SECTION_ORDER) {
-    const slot = SECTION_SLOTS[sectionId];
-    if (!slot) continue;
-
-    const aboveThreshold = sorted
-      .filter(ev => !used.has(ev.eventId) && ev.section === sectionId && ev.importanceScore >= slot.threshold)
-      .slice(0, slot.max);
-
-    for (const ev of aboveThreshold) {
-      ev.assignedSection = sectionId;
-      plan.push(ev);
-      used.add(ev.eventId);
-    }
-
-    // Force minimum slots even if below threshold — a section should never be empty
-    // because fallback scoring may have produced low scores across the board
-    if (aboveThreshold.length < slot.min) {
-      const needed    = slot.min - aboveThreshold.length;
-      const forceFill = sorted
-        .filter(ev => !used.has(ev.eventId) && ev.section === sectionId)
-        .slice(0, needed);
-
-      for (const ev of forceFill) {
-        ev.assignedSection = sectionId;
-        plan.push(ev);
-        used.add(ev.eventId);
-        logger(`  ↑ Force-filled ${sectionId} (score ${ev.importanceScore.toFixed(1)} < threshold ${slot.threshold}): ${ev.canonicalTitle.slice(0, 50)}`);
-      }
-
-      if (aboveThreshold.length + forceFill.length < slot.min) {
-        logger(`  ⚠ ${sectionId}: only ${aboveThreshold.length + forceFill.length}/${slot.min} available`);
-      }
-    }
-  }
-
-  const final = plan.slice(0, MAX_TOTAL_STORIES);
 
   const bySection = new Map<string, number>();
-  for (const ev of final) bySection.set(ev.assignedSection, (bySection.get(ev.assignedSection) ?? 0) + 1);
-  logger(`Briefing plan: ${final.length} events`);
+  for (const ev of plan) bySection.set(ev.assignedSection, (bySection.get(ev.assignedSection) ?? 0) + 1);
+  logger(`Briefing plan: ${plan.length} events (~${Math.round(plan.length * 1.5)} min listen)`);
   for (const [section, count] of bySection) logger(`  ${section}: ${count}`);
 
-  return final;
+  return plan;
 }
 
 // ─── Step 8: Script generation ────────────────────────────────────────────────

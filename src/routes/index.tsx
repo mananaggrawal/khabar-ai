@@ -127,7 +127,7 @@ function HeroCard({
   const displayStory = mono.currentStory ?? briefing.stories[0];
 
   const withAudio = briefing.stories.filter((s) => !!getAudioUrl(s, mono.language));
-  const listenMins = Math.max(1, Math.round(withAudio.length * 1.5));
+  const listenMins = Math.max(1, Math.round(withAudio.length * 1.5)); // ~1.5 min/story → 20 stories ≈ 30 min
   const today = new Date().toLocaleDateString("en-IN", {
     weekday: "short", day: "numeric", month: "long",
   });
