@@ -115,19 +115,6 @@ function MiniPlayer({
   );
 }
 
-// ── Section Divider ───────────────────────────────────────────────────────────
-
-function SectionDivider({ label }: { label: string }) {
-  return (
-    <div className="flex items-center gap-3 pt-2 pb-1">
-      <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground/60">
-        {label}
-      </span>
-      <div className="flex-1 h-px bg-border/40" />
-    </div>
-  );
-}
-
 // ── Hero Card ─────────────────────────────────────────────────────────────────
 
 function HeroCard({
@@ -310,37 +297,30 @@ function HomePage() {
           {/* Hero card */}
           <HeroCard briefing={briefing} mono={mono} />
 
-          {/* Flat story list with inline section dividers */}
+          {/* Flat story list */}
           <div
             className="flex-1 overflow-y-auto px-4 pb-4 space-y-2"
             style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 148px)" }}
           >
-            {storiesBySection.map(({ sectionId, feed, stories }) => (
-              <div key={sectionId}>
-                <SectionDivider
-                  label={`${feed?.emoji ?? ""} ${mono.language === "hi" ? (feed?.labelHi ?? sectionId) : (feed?.label ?? sectionId)}`}
-                />
-                <div className="space-y-2">
-                  {stories.map((story) => {
-                    const hasAudio = !!getAudioUrl(story, mono.language);
-                    const storyIdx = mono.storiesWithAudio.findIndex((s) => s.id === story.id);
-                    const isActive = mono.currentStory?.id === story.id;
-                    return (
-                      <StoryCard
-                        key={story.id}
-                        story={story}
-                        language={mono.language}
-                        isPlaying={isActive && mono.state === "playing"}
-                        hasAudio={hasAudio}
-                        onPlay={() => storyIdx >= 0 && mono.playFrom(storyIdx)}
-                        onPause={mono.pause}
-                        onTap={() => setDetailStory(story)}
-                      />
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
+            {storiesBySection.flatMap(({ sectionId, stories }) =>
+              stories.map((story) => {
+                const hasAudio = !!getAudioUrl(story, mono.language);
+                const storyIdx = mono.storiesWithAudio.findIndex((s) => s.id === story.id);
+                const isActive = mono.currentStory?.id === story.id;
+                return (
+                  <StoryCard
+                    key={story.id}
+                    story={story}
+                    language={mono.language}
+                    isPlaying={isActive && mono.state === "playing"}
+                    hasAudio={hasAudio}
+                    onPlay={() => storyIdx >= 0 && mono.playFrom(storyIdx)}
+                    onPause={mono.pause}
+                    onTap={() => setDetailStory(story)}
+                  />
+                );
+              })
+            )}
           </div>
         </>
       )}
