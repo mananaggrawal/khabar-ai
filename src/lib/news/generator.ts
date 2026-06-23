@@ -1010,8 +1010,8 @@ export async function generateDailyBriefing(
     imageUrl: s.imageUrl ?? imageById.get(s.id),
   }));
 
-  // Step 4: Time guard
-  const guarded = applyTimeGuard(merged, log);
+  // Step 4: Time guard — disabled, keep all stories
+  const guarded = merged; // applyTimeGuard(merged, log);
 
   // Save after scripting (before TTS so scripts survive TTS quota failures)
   await saveBriefing({ date, generatedAt: new Date().toISOString(), stories: guarded, generatedLanguages: languages });
@@ -1075,9 +1075,12 @@ export async function generateMissingSections(
 
   // Re-club each section that has new stories (merge new + existing for that section)
   const newSections = new Set(newStories.map(s => s.section));
+  const patchLangs  = existing.generatedLanguages ?? ["en", "hi"];
+  log(`Patch-missing using languages from existing briefing: ${patchLangs.join(",")}`);
+
   const [withImages, clubbedNew] = await Promise.all([
     fetchAllOgImages(newStories, log),
-    scriptAllStories(newStories, log),
+    scriptAllStories(newStories, log, undefined, patchLangs),
   ]);
 
   const imageById = new Map(withImages.map(s => [s.id, s.imageUrl]));
@@ -1086,14 +1089,15 @@ export async function generateMissingSections(
     imageUrl: s.imageUrl ?? imageById.get(s.id),
   }));
 
-  // TTS for new stories (default to google for patch runs)
-  const { stories: withAudio } = await generateAllTTS(mergedNew, existing.date, "google", log, async (partial) => {
+  // TTS for new stories — use same provider and languages as original run
+  const patchProvider: TtsProvider = "google";
+  const { stories: withAudio } = await generateAllTTS(mergedNew, existing.date, patchProvider, log, async (partial) => {
     await saveBriefing({
       ...existing,
       generatedAt: new Date().toISOString(),
       stories: [...existing.stories, ...partial],
     });
-  });
+  }, patchLangs);
 
   const merged: DailyBriefing = {
     ...existing,
