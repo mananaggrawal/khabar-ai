@@ -590,12 +590,16 @@ ${sectionStories.map((s, i) => {
     for (const g of result) (g.sourceIndices ?? []).forEach(i => covered.add(i));
 
     const output: Story[] = [];
+    const emittedPrimaryIds = new Set<string>();
 
     for (const group of result) {
       const indices = (group.sourceIndices ?? []).filter(i => i >= 0 && i < sectionStories.length);
       if (indices.length === 0) continue;
 
       const primaryIdx = indices.find(i => sectionStories[i]?.imageUrl) ?? indices[0];
+      const primaryId  = sectionStories[primaryIdx]?.id;
+      if (primaryId && emittedPrimaryIds.has(primaryId)) continue; // skip duplicate group
+      if (primaryId) emittedPrimaryIds.add(primaryId);
       const primary    = sectionStories[primaryIdx];
       const sources: StorySource[] = indices.map(i => ({
         title:  sectionStories[i].title,
@@ -1214,7 +1218,8 @@ export async function generateMissingTTS(
   if (!existing) throw new Error("No existing briefing — run full generation first");
 
   // All 4 languages — a story is "missing" if it has a script but no audio for any lang
-  const PATCH_LANGS = ["en", "hi", "ta", "mr"] as const;
+  // Use the languages that were actually generated — avoids trying TA/MR on EN+HI-only runs
+  const PATCH_LANGS = (existing.generatedLanguages ?? ["en", "hi"]) as string[];
   const scriptKey = (lang: string) => `script${lang.charAt(0).toUpperCase() + lang.slice(1)}` as keyof Story;
   const audioKey  = (lang: string) => `audioUrl${lang.charAt(0).toUpperCase() + lang.slice(1)}` as keyof Story;
 
