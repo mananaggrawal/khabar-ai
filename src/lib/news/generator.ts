@@ -624,16 +624,22 @@ async function clusterAllSections(
     bySection.set(s.section, arr);
   }
 
-  logger(`Clustering ${rawStories.length} stories across ${bySection.size} sections…`);
-  const allEvents: ClusteredEvent[] = [];
+  logger(`Clustering ${rawStories.length} stories across ${bySection.size} sections (parallel)…`);
 
-  for (const [sectionId, stories] of bySection) {
-    if (isAbortRequested()) { logger("⛔ Aborted"); break; }
-    const emoji = FEED_MAP.get(sectionId)?.emoji ?? "📰";
-    logger(`  ${emoji} ${sectionId}: ${stories.length} articles…`);
-    const events = await clusterSection(stories, sectionId, logger);
-    logger(`    → ${events.length} events`);
-    allEvents.push(...events);
+  // Run all section clusters in parallel — they are fully independent
+  const results = await Promise.allSettled(
+    [...bySection.entries()].map(async ([sectionId, stories]) => {
+      const emoji = FEED_MAP.get(sectionId)?.emoji ?? "📰";
+      logger(`  ${emoji} ${sectionId}: ${stories.length} articles…`);
+      const events = await clusterSection(stories, sectionId, logger);
+      logger(`    → ${events.length} events (${sectionId})`);
+      return events;
+    })
+  );
+
+  const allEvents: ClusteredEvent[] = [];
+  for (const r of results) {
+    if (r.status === "fulfilled") allEvents.push(...r.value);
   }
 
   const deduped = dedupeEvents(allEvents);
@@ -723,10 +729,9 @@ function buildBriefingPlan(events: ClusteredEvent[], logger: Logger): ClusteredE
   const used   = new Set<string>();
   const plan:  ClusteredEvent[] = [];
 
-  // 1. Force editorial overrides into top stories
+  // 1. Guarantee all mustInclude events — no cap, they always air
   for (const ev of sorted) {
     if (!ev.forcedByEditorial) continue;
-    if (plan.length >= TOP_STORIES_MAX) break;
     ev.assignedSection = "headlines";
     plan.push(ev);
     used.add(ev.eventId);
@@ -826,7 +831,7 @@ async function scriptEventBatch(
     withMr ? `"scriptMr":"..."` : "",
   ].filter(Boolean).join(",");
 
-  const jsonShape = `[{"title":"...","titleHi":"..."${extraTitleFields ? "," + extraTitleFields : ""},"scriptEn":"...","scriptHi":"..."${extraScriptFields ? "," + extraScriptFields : ""}}]`;
+  const jsonShape = `[{"eventIndex":0,"title":"...","titleHi":"..."${extraTitleFields ? "," + extraTitleFields : ""},"scriptEn":"...","scriptHi":"..."${extraScriptFields ? "," + extraScriptFields : ""}}]`;
 
   const today = new Date().toLocaleDateString("en-IN", {
     weekday: "long", year: "numeric", month: "long", day: "numeric",
@@ -842,7 +847,7 @@ async function scriptEventBatch(
         .slice(0, 200);
       return `  [${s.source}] ${s.title}${desc ? `\n   → ${desc}` : ""}`;
     }).join("\n");
-    return `${i}. ${ev.canonicalTitle} (${ev.publisherCount} publishers)\n${sources}`;
+    return `eventIndex ${i}: ${ev.canonicalTitle} (${ev.publisherCount} publishers)\n${sources}`;
   }).join("\n\n");
 
   const prompt = `You are Khabar AI — India's voice-first news briefing. Today: ${today}.
@@ -891,8 +896,12 @@ Events:
 ${eventsPayload}`;
 
   try {
-    const results: ScriptedEvent[] = await geminiJson(prompt);
-    if (!Array.isArray(results) || results.length === 0) throw new Error("empty result");
+    const rawResults: Array<{ eventIndex?: number } & ScriptedEvent> = await geminiJson(prompt);
+    if (!Array.isArray(rawResults) || rawResults.length === 0) throw new Error("empty result");
+
+    // Sort by eventIndex if present so misreordered responses still align correctly
+    const byIndex = new Map(rawResults.map(r => [r.eventIndex ?? -1, r]));
+    const results = sectionEvents.map((_, i) => byIndex.get(i) ?? rawResults[i] ?? {});
 
     return sectionEvents.map((ev, i) => {
       const r = results[i] ?? {};
@@ -1058,16 +1067,23 @@ async function scriptSelectedEvents(
 // ─── Step 9: Briefing wrapper ─────────────────────────────────────────────────
 
 function makeOpeningScript(): { en: string; hi: string; ta: string; mr: string } {
-  const now     = new Date();
-  const dayName = now.toLocaleDateString("en-IN", { weekday: "long",  timeZone: "Asia/Kolkata" });
-  const dateStr = now.toLocaleDateString("en-IN", {
-    day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Kolkata",
-  });
+  const now = new Date();
+  const opts = { timeZone: "Asia/Kolkata" } as const;
+
+  const dayEn   = now.toLocaleDateString("en-IN",  { weekday: "long",  ...opts });
+  const dateEn  = now.toLocaleDateString("en-IN",  { day: "numeric", month: "long", year: "numeric", ...opts });
+  const dayHi   = now.toLocaleDateString("hi-IN",  { weekday: "long",  ...opts });
+  const dateHi  = now.toLocaleDateString("hi-IN",  { day: "numeric", month: "long", year: "numeric", ...opts });
+  const dayTa   = now.toLocaleDateString("ta-IN",  { weekday: "long",  ...opts });
+  const dateTa  = now.toLocaleDateString("ta-IN",  { day: "numeric", month: "long", year: "numeric", ...opts });
+  const dayMr   = now.toLocaleDateString("mr-IN",  { weekday: "long",  ...opts });
+  const dateMr  = now.toLocaleDateString("mr-IN",  { day: "numeric", month: "long", year: "numeric", ...opts });
+
   return {
-    en: `Good morning. Today is ${dayName}, ${dateStr}. Here's everything important that happened in the last twenty-four hours.`,
-    hi: `सुप्रभात। आज ${dayName} है, ${dateStr}। पिछले चौबीस घंटों में जो महत्वपूर्ण हुआ, वह यहाँ है।`,
-    ta: `காலை வணக்கம். இன்று ${dayName}, ${dateStr}. கடந்த இருபத்து நான்கு மணி நேரத்தில் நடந்த முக்கியமான செய்திகள் இங்கே.`,
-    mr: `शुभ प्रभात. आज ${dayName} आहे, ${dateStr}. गेल्या चोवीस तासांत जे महत्त्वाचे घडले ते येथे आहे.`,
+    en: `Good morning. Today is ${dayEn}, ${dateEn}. Here's everything important that happened in the last twenty-four hours.`,
+    hi: `सुप्रभात। आज ${dayHi} है, ${dateHi}। पिछले चौबीस घंटों में जो महत्वपूर्ण हुआ, वह यहाँ है।`,
+    ta: `காலை வணக்கம். இன்று ${dayTa}, ${dateTa}. கடந்த இருபத்து நான்கு மணி நேரத்தில் நடந்த முக்கியமான செய்திகள் இங்கே.`,
+    mr: `शुभ प्रभात. आज ${dayMr} आहे, ${dateMr}. गेल्या चोवीस तासांत जे महत्त्वाचे घडले ते येथे आहे.`,
   };
 }
 
@@ -1342,16 +1358,16 @@ async function generateAllTTS(
 
     if (onProgress) await onProgress([...updatedStories], [...updatedSegments]);
 
-    // Google RPM guard
+    // Google RPM guard — 1.5s is sufficient for Gemini TTS rate limits
     if (provider === "google" && i < stories.length - 1) {
-      await new Promise(r => setTimeout(r, 6_000));
+      await new Promise(r => setTimeout(r, 1_500));
     }
   }
 
   const totalChars = enChars + hiChars + taChars + mrChars;
-  // ElevenLabs Flash v2.5: ~$0.30/1K chars; Google: negligible; Edge/Kokoro: free
+  // ElevenLabs Flash v2.5: ~$0.08/1K chars; Google Neural2: ~$0.50/1M chars; Edge/Kokoro: free
   const estimatedUsd =
-    provider === "elevenlabs" ? (totalChars / 1000) * 0.30 :
+    provider === "elevenlabs" ? (totalChars / 1000) * 0.08 :
     provider === "google"     ? (totalChars / 1_000_000) * 0.50 :
     0;
 
@@ -1645,6 +1661,17 @@ export async function generateMissingTTS(
 
   const { stories: patched, segments: patchedSegs, costInfo } = await generateAllTTS(
     storiesNeedingAudio, segmentsNeedingAudio, existing.date, provider, languages, log,
+    async (patchedStories, patchedSegsPartial) => {
+      // Merge partial results back into the full briefing and save incrementally
+      const byId    = new Map(patchedStories.map(s => [s.id, s]));
+      const segById = new Map(patchedSegsPartial.map(s => [s.id, s]));
+      await saveBriefing({
+        ...existing,
+        stories:     existing.stories.map(s => byId.get(s.id) ?? s),
+        segments:    (existing.segments ?? []).map(s => segById.get(s.id) ?? s),
+        generatedAt: new Date().toISOString(),
+      });
+    },
   );
 
   const patchedById    = new Map(patched.map(s => [s.id, s]));

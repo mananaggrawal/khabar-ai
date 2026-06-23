@@ -605,8 +605,8 @@ function adminPage(supabaseUrl, supabaseKey) {
       </div>
       <div style="height:12px;"></div>
       <div class="group">
-        <div class="gen-sub">Generate only sections missing from today's briefing.</div>
-        <button class="btn-primary" id="patch-btn" onclick="runPatch()">Patch missing sections</button>
+        <div class="gen-sub">Regenerate today's briefing, preserving existing language selection.</div>
+        <button class="btn-primary" id="patch-btn" onclick="runPatch()">Refresh briefing</button>
         <div id="patch-log" class="log-terminal"></div>
       </div>
       <div style="height:12px;"></div>
