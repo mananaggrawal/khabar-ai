@@ -117,13 +117,15 @@ function parseGeminiJson(raw: string): any {
 }
 
 // Retryable status codes: 429 (rate limit), 500, 502, 503, 504 (transient server errors)
-const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
-const GEMINI_MAX_RETRIES = 4;
-const GEMINI_BASE_DELAY_MS = 5_000; // 5s → 10s → 20s → 40s
-const GEMINI_TIMEOUT_MS   = 120_000; // 2 min hard timeout per attempt — prevents silent hangs
+const RETRYABLE_STATUSES  = new Set([429, 500, 502, 503, 504]);
+const GEMINI_MAX_RETRIES  = 3;      // for HTTP errors (rate limit, server error)
+const GEMINI_MAX_TIMEOUTS = 1;      // only 1 retry on hang — fail fast, don't block the run
+const GEMINI_BASE_DELAY_MS = 5_000; // 5s → 10s → 20s
+const GEMINI_TIMEOUT_MS   = 60_000; // 60s per attempt — Gemini Flash responds in <30s normally
 
 async function geminiJson(prompt: string): Promise<any> {
   let lastError: Error | null = null;
+  let timeouts = 0;
 
   for (let attempt = 0; attempt <= GEMINI_MAX_RETRIES; attempt++) {
     if (attempt > 0) {
@@ -144,7 +146,7 @@ async function geminiJson(prompt: string): Promise<any> {
           contents: [{ role: "user", parts: [{ text: prompt }] }],
           generationConfig: {
             responseMimeType: "application/json",
-            maxOutputTokens: 16384,  // Prevent truncation on large section batches
+            maxOutputTokens: 16384,
           },
         }),
       });
@@ -152,8 +154,8 @@ async function geminiJson(prompt: string): Promise<any> {
       if (!res.ok) {
         const body = (await res.text()).slice(0, 300);
         lastError = new Error(`Gemini ${res.status}: ${body}`);
-        if (RETRYABLE_STATUSES.has(res.status)) continue; // retry
-        throw lastError; // non-retryable (e.g. 400, 401)
+        if (RETRYABLE_STATUSES.has(res.status)) continue;
+        throw lastError;
       }
 
       const json = await res.json();
@@ -165,9 +167,11 @@ async function geminiJson(prompt: string): Promise<any> {
       return parseGeminiJson(text);
     } catch (err: any) {
       if (err.name === "AbortError") {
-        lastError = new Error(`Gemini timed out after ${GEMINI_TIMEOUT_MS / 1000}s`);
-        console.warn(`[gemini] attempt ${attempt} timed out — retrying`);
-        continue; // treat timeout as retryable
+        timeouts++;
+        lastError = new Error(`Gemini timed out after ${GEMINI_TIMEOUT_MS / 1000}s (timeout ${timeouts}/${GEMINI_MAX_TIMEOUTS + 1})`);
+        console.warn(`[gemini] attempt ${attempt} timed out`);
+        if (timeouts > GEMINI_MAX_TIMEOUTS) throw lastError; // give up fast after 2 timeouts
+        continue;
       }
       throw err;
     } finally {
@@ -175,7 +179,6 @@ async function geminiJson(prompt: string): Promise<any> {
     }
   }
 
-  // All retries exhausted
   throw lastError ?? new Error("Gemini request failed after retries");
 }
 
@@ -366,7 +369,9 @@ function fallbackScript(s: Story): string {
       ? descStart
       : `${descStart}.`;
   }
-  return `${s.title}.`;
+  // Last resort: use cleaned title (strip " – Source" suffix common in Google News)
+  const cleanTitle = s.title.replace(/\s*[-–|]\s*[^-–|]{1,40}$/, "").trim();
+  return `${cleanTitle}.`;
 }
 
 // ─── Step 3: Script stories — merge duplicates, keep distinct ones separate ───
@@ -1095,12 +1100,23 @@ export async function generateMissingSections(
 
 function isGarbledScript(s: Story): boolean {
   const script = s.scriptEn;
-  if (!script || script.length < 30) return true;
+  if (!script || script.length < 40) return true;
   if (script.includes("&nbsp;") || script.includes("&#160;")) return true;
-  // Google News description fallback: long text with no sentence-ending punctuation
+
+  // Title-only fallback: script is the story title (with optional trailing period)
+  // Covers both the full title and the cleaned title (source suffix stripped)
+  const scriptCore  = script.replace(/\.$/, "").trim();
+  const titleFull   = s.title.trim();
+  const titleClean  = titleFull.replace(/\s*[-–|]\s*[^-–|]{1,40}$/, "").trim();
+  if (scriptCore === titleFull || scriptCore === titleClean) return true;
+  // Catch near-matches: script starts with the title base and adds almost nothing
+  if (scriptCore.startsWith(titleClean) && scriptCore.length < titleClean.length + 20) return true;
+
+  // Article list fallback: many words but no sentence-ending punctuation at all
   const periods = (script.match(/[.!?]/g) ?? []).length;
   const words   = script.trim().split(/\s+/).length;
   if (words > 15 && periods === 0) return true;
+
   return false;
 }
 
