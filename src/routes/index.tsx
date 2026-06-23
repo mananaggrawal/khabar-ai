@@ -14,7 +14,7 @@ import { BottomNav }         from "@/components/BottomNav";
 import { fetchBriefing }     from "@/lib/news/briefing.functions";
 import { useMonologue, getStoryTitle, getAudioUrl } from "@/hooks/useMonologue";
 import { useSavedStories }   from "@/hooks/useSavedStories";
-import { FEEDS, FEED_MAP, readCity, readPreferredSections, SECTIONS_KEY, type SectionId } from "@/lib/news/sources";
+import { FEED_MAP, type SectionId } from "@/lib/news/sources";
 import type { Story } from "@/lib/news/generator";
 
 // ── Route ─────────────────────────────────────────────────────────────────────
@@ -115,52 +115,15 @@ function MiniPlayer({
   );
 }
 
-// ── Section Tab Bar ───────────────────────────────────────────────────────────
+// ── Section Divider ───────────────────────────────────────────────────────────
 
-function SectionTabs({
-  activeSection,
-  availableSections,
-  onSelect,
-  language,
-}: {
-  activeSection: SectionId;
-  availableSections: Set<SectionId>;
-  onSelect: (id: SectionId) => void;
-  language: import("@/hooks/useMonologue").Language;
-}) {
-  const tabsRef = useRef<HTMLDivElement>(null);
-
-  // Scroll active tab into view
-  useEffect(() => {
-    const el = tabsRef.current?.querySelector(`[data-section="${activeSection}"]`) as HTMLElement | null;
-    el?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
-  }, [activeSection]);
-
+function SectionDivider({ label }: { label: string }) {
   return (
-    <div
-      ref={tabsRef}
-      className="flex gap-1.5 overflow-x-auto px-4 py-2 scrollbar-hide"
-      style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
-    >
-      {FEEDS.map((feed) => {
-        const hasContent = availableSections.has(feed.id);
-        if (!hasContent) return null; // hidden sections don't show tabs at all
-        const active = activeSection === feed.id;
-        return (
-          <button
-            key={feed.id}
-            data-section={feed.id}
-            onClick={() => onSelect(feed.id)}
-            className={`shrink-0 rounded-full px-3.5 py-1.5 text-sm font-medium transition-all whitespace-nowrap border ${
-              active
-                ? "border-primary/40 bg-primary/10 text-foreground"
-                : "border-border text-foreground/70 hover:border-border/80 hover:bg-black/[0.02]"
-            }`}
-          >
-            {language === "hi" ? feed.labelHi : feed.label}
-          </button>
-        );
-      })}
+    <div className="flex items-center gap-3 pt-2 pb-1">
+      <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-muted-foreground/60">
+        {label}
+      </span>
+      <div className="flex-1 h-px bg-border/40" />
     </div>
   );
 }
@@ -170,14 +133,11 @@ function SectionTabs({
 function HeroCard({
   briefing,
   mono,
-  firstSection,
 }: {
   briefing: NonNullable<Awaited<ReturnType<typeof fetchBriefing>>>;
   mono: ReturnType<typeof useMonologue>;
-  firstSection: SectionId;
 }) {
   const displayStory = mono.currentStory ?? briefing.stories[0];
-  const bgImage = displayStory?.imageUrl ?? briefing.stories[0]?.imageUrl;
 
   const withAudio = briefing.stories.filter((s) => !!getAudioUrl(s, mono.language));
   const listenMins = Math.max(1, Math.round(withAudio.length * 1.5));
@@ -185,7 +145,7 @@ function HeroCard({
     weekday: "short", day: "numeric", month: "long",
   });
 
-  const isPlayingAll = mono.state === "playing";
+  const isPlaying = mono.state === "playing";
 
   return (
     <div
@@ -217,7 +177,7 @@ function HeroCard({
             {today}
           </span>
           <span className="text-[10px] font-medium text-white/40">
-            {listenMins} min
+            {listenMins} min listen
           </span>
         </div>
 
@@ -231,14 +191,14 @@ function HeroCard({
           {/* Play button + story count */}
           <div className="flex items-center gap-2.5">
             <button
-              onClick={() => isPlayingAll ? mono.pause() : mono.playSection(firstSection)}
+              onClick={() => isPlaying ? mono.pause() : mono.playAll()}
               className="flex items-center gap-1.5 rounded-full px-4 py-2 text-[12px] font-semibold text-foreground transition-transform active:scale-95"
               style={{
                 background: "rgba(255,255,255,0.92)",
                 boxShadow: "0 2px 12px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.1)",
               }}
             >
-              {isPlayingAll ? (
+              {isPlaying ? (
                 <><Pause className="size-3 fill-current" />Pause</>
               ) : (
                 <><Play className="size-3 fill-current ml-0.5" />Play briefing</>
@@ -266,46 +226,11 @@ function HomePage() {
 
   const briefing = briefingQuery.data ?? null;
 
-  // Section preferences — re-read whenever settings changes them
-  const [preferredSections, setPreferredSections] = useState<Set<SectionId>>(
-    () => typeof window !== "undefined" ? readPreferredSections() : new Set(FEEDS.map(f => f.id))
-  );
-  useEffect(() => {
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === SECTIONS_KEY) setPreferredSections(readPreferredSections());
-    };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, []);
-
-  // Filter briefing stories to only preferred sections
-  const filteredBriefing = briefing
-    ? { ...briefing, stories: briefing.stories.filter(s => preferredSections.has(s.section)) }
-    : null;
-
-  const mono = useMonologue({ briefing: filteredBriefing });
+  const mono = useMonologue({ briefing });
   const savedStories = useSavedStories();
 
-  const [activeSection, setActiveSection] = useState<SectionId>("headlines");
   const [playerOpen, setPlayerOpen] = useState(false);
   const [detailStory, setDetailStory] = useState<Story | null>(null);
-
-  // Which sections actually have stories (after preference filter)
-  const availableSections = new Set(
-    (filteredBriefing?.stories ?? []).map((s) => s.section),
-  );
-
-  // Auto-select first available section
-  useEffect(() => {
-    if (availableSections.size > 0 && !availableSections.has(activeSection)) {
-      setActiveSection([...availableSections][0]);
-    }
-  }, [briefing, preferredSections]);
-
-  // Stories for the active tab
-  const activeStories = (filteredBriefing?.stories ?? []).filter(
-    (s) => s.section === activeSection,
-  );
 
   // Persist which languages are available in this briefing to localStorage
   useEffect(() => {
@@ -327,9 +252,18 @@ function HomePage() {
     if (mono.state === "idle") setPlayerOpen(false);
   }, [mono.state]);
 
-  const firstSection: SectionId = availableSections.has("headlines")
-    ? "headlines"
-    : ([...availableSections][0] as SectionId ?? "headlines");
+  // Group stories by section in display order
+  const SECTION_DISPLAY_ORDER: SectionId[] = [
+    "headlines", "india", "world", "business", "technology",
+    "sports", "health", "entertainment", "science", "local",
+  ];
+  const storiesBySection = SECTION_DISPLAY_ORDER
+    .map(sectionId => ({
+      sectionId,
+      feed: FEED_MAP.get(sectionId),
+      stories: (briefing?.stories ?? []).filter(s => s.section === sectionId),
+    }))
+    .filter(g => g.stories.length > 0);
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
@@ -371,53 +305,42 @@ function HomePage() {
         </div>
       )}
 
-      {filteredBriefing && (
+      {briefing && (
         <>
           {/* Hero card */}
-          <HeroCard
-            briefing={filteredBriefing}
-            mono={mono}
-            firstSection={firstSection}
-          />
+          <HeroCard briefing={briefing} mono={mono} />
 
-          {/* Section tabs */}
-          <div className="bg-background">
-            <SectionTabs
-              activeSection={activeSection}
-              availableSections={availableSections}
-              onSelect={setActiveSection}
-              language={mono.language}
-            />
-          </div>
-
-          {/* Story list */}
+          {/* Flat story list with inline section dividers */}
           <div
-            className="flex-1 overflow-y-auto px-4 py-4 space-y-2"
+            className="flex-1 overflow-y-auto px-4 pb-4 space-y-2"
             style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 148px)" }}
           >
-            {activeStories.length === 0 ? (
-              <p className="py-10 text-center text-sm text-muted-foreground">
-                No stories in this section yet.
-              </p>
-            ) : (
-              activeStories.map((story) => {
-                const hasAudio = !!getAudioUrl(story, mono.language);
-                const storyIdx = mono.storiesWithAudio.findIndex((s) => s.id === story.id);
-                const isActive = mono.currentStory?.id === story.id;
-                return (
-                  <StoryCard
-                    key={story.id}
-                    story={story}
-                    language={mono.language}
-                    isPlaying={isActive && mono.state === "playing"}
-                    hasAudio={hasAudio}
-                    onPlay={() => storyIdx >= 0 && mono.playFromInSection(storyIdx, activeSection)}
-                    onPause={mono.pause}
-                    onTap={() => setDetailStory(story)}
-                  />
-                );
-              })
-            )}
+            {storiesBySection.map(({ sectionId, feed, stories }) => (
+              <div key={sectionId}>
+                <SectionDivider
+                  label={`${feed?.emoji ?? ""} ${mono.language === "hi" ? (feed?.labelHi ?? sectionId) : (feed?.label ?? sectionId)}`}
+                />
+                <div className="space-y-2">
+                  {stories.map((story) => {
+                    const hasAudio = !!getAudioUrl(story, mono.language);
+                    const storyIdx = mono.storiesWithAudio.findIndex((s) => s.id === story.id);
+                    const isActive = mono.currentStory?.id === story.id;
+                    return (
+                      <StoryCard
+                        key={story.id}
+                        story={story}
+                        language={mono.language}
+                        isPlaying={isActive && mono.state === "playing"}
+                        hasAudio={hasAudio}
+                        onPlay={() => storyIdx >= 0 && mono.playFrom(storyIdx)}
+                        onPause={mono.pause}
+                        onTap={() => setDetailStory(story)}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
         </>
       )}
