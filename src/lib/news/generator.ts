@@ -227,7 +227,7 @@ function makeConcurrencyLimiter(limit: number) {
     }
   };
 }
-const geminiLimit = makeConcurrencyLimiter(2); // max 2 concurrent Gemini calls
+const geminiLimit = makeConcurrencyLimiter(1); // sequential — prevents burst 429s
 
 async function geminiJson(prompt: string, maxOutputTokens = 8192): Promise<any> {
   return geminiLimit(async () => {
