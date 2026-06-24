@@ -185,8 +185,10 @@ const SECTION_ORDER: SectionId[] = [
 
 // ─── Gemini helpers ───────────────────────────────────────────────────────────
 
+// gemini-2.0-flash: stable GA model, far fewer 503 demand spikes than 2.5-flash.
+// Plenty capable for clustering, scoring, and scripting.
 const GEMINI_URL = (key: string) =>
-  `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`;
+  `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`;
 
 function getGeminiKey(): string {
   const k = process.env.GEMINI_API_KEY;
