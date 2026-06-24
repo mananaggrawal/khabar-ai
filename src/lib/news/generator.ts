@@ -153,10 +153,20 @@ type ClusteredEvent = {
 const TARGET_WPM = 150;
 
 // Minimum score for a story to qualify — AI scores 0-10 against the user persona.
-// 3.5 means "relevant and worth the listener's time". Below this it's noise.
 const MIN_SCORE_THRESHOLD = 3.5;
-// Soft per-section ceiling — diversity guard so one section can't take everything.
-const MAX_PER_SECTION     = 8;
+// Per-section soft ceilings — reflect what matters most to the 60+ Indian audience.
+const MAX_PER_SECTION: Partial<Record<SectionId, number>> & { _default: number } = {
+  india:         10,  // politics, state news, governance — primary interest
+  business:       8,  // economy, markets, inflation, gold — high priority
+  world:          7,  // India's foreign relations, geopolitics
+  sports:         4,  // cricket-heavy but bounded
+  health:         3,  // relevant but was flooding — keep it tight
+  technology:     2,
+  entertainment:  2,
+  science:        2,
+  local:          2,
+  _default:       3,
+};
 // Hard safety valve — should never be hit in normal operation.
 const MAX_TOTAL_STORIES   = 40;
 
@@ -873,7 +883,8 @@ function buildBriefingPlan(events: ClusteredEvent[], logger: Logger): ClusteredE
     if (used.has(ev.eventId)) continue;
     if (plan.length >= MAX_TOTAL_STORIES) break;
     if (ev.importanceScore < MIN_SCORE_THRESHOLD) break; // sorted desc, so can stop here
-    if ((sectionCount.get(ev.section) ?? 0) >= MAX_PER_SECTION) continue;
+    const sectionCap = MAX_PER_SECTION[ev.section as SectionId] ?? MAX_PER_SECTION._default;
+    if ((sectionCount.get(ev.section) ?? 0) >= sectionCap) continue;
     add(ev, ev.section);
   }
 
