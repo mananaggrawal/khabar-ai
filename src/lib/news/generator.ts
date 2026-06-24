@@ -156,22 +156,26 @@ type ClusteredEvent = {
 
 const TARGET_WPM = 150;
 
-// Sections where multiple stories are clubbed into one roundup segment (≥2 needed).
-// Health + Sports added: limits individual slot flood while guaranteeing coverage via roundup.
-const ROUNDUP_SECTIONS = new Set<SectionId>(["local", "technology", "entertainment", "science", "health", "sports"]);
+// No roundup clubbing — every story gets its own full script.
+const ROUNDUP_SECTIONS = new Set<SectionId>([]);
 
-// Minimum score for a story to qualify — AI scores 0-10 against the user persona.
-// Score decides everything for non-roundup, non-backfill stories.
-const MIN_SCORE_THRESHOLD = 3.5;
-// Hard safety valve only — should not be hit in normal operation.
-const MAX_TOTAL_STORIES   = 40;
+// Score threshold — lowered to let more stories through.
+// Full day coverage is the goal; score is a deprioritisation tool, not a gate.
+const MIN_SCORE_THRESHOLD = 2.5;
+// Hard safety valve only.
+const MAX_TOTAL_STORIES   = 60;
 
-// Guaranteed minimum slots for key sections — backfilled even if score < threshold.
-// Ensures business/world/india never get squeezed out by a single dominant section.
+// Guaranteed minimum slots per section — backfilled even if score < threshold.
 const MIN_SECTION_SLOTS: Partial<Record<SectionId, number>> = {
-  india:    4,
-  business: 2,
-  world:    2,
+  india:         5,
+  business:      3,
+  world:         3,
+  sports:        2,
+  health:        2,
+  technology:    2,
+  entertainment: 1,
+  science:       1,
+  local:         1,
 };
 
 const SECTION_ORDER: SectionId[] = [
@@ -1100,50 +1104,53 @@ async function scriptEventBatch(
     return `eventIndex ${i}: ${ev.canonicalTitle} (${ev.publisherCount} publishers)${editorialHint}\n${sources}`;
   }).join("\n\n");
 
-  const prompt = `You are Khabar AI — India's voice-first news briefing. Today: ${today}.
-Section: "${label}" (${sectionEvents.length} events to script)
+  const prompt = `You are Khabar AI's senior scriptwriter. Today: ${today}.
+You are scripting the "${label}" section — ${sectionEvents.length} stories.
 
-Write one spoken-audio script per event. These will be read aloud by a professional voice.
+These scripts are spoken aloud. Think All India Radio meets a sharp, well-read friend. Complete. Engaging. Never thin.
 
-━━━ SCRIPT STRUCTURE — follow EXACTLY ━━━
+━━━ SCRIPT STRUCTURE (follow for every story) ━━━
 
-1. HOOK (1 sentence, ~20 words)
-   Make the listener lean in immediately. State the stakes or surprising angle.
-   NEVER start with: "Today", "In a", "According to", "The", "India's", "A new"
-   ✓ "Your home loan EMI stays exactly where it is for now."
-   ✓ "India and China may be closer to a border deal than most people think."
-   ✓ "The price of something millions of Indians eat every day just fell significantly."
+1. OPENING LINE — 1 sentence, 15-20 words.
+   Hook immediately. Lead with the most surprising or consequential fact.
+   NEVER begin with: "Today", "In a", "According to", "The", "A new", "India's"
+   ✓ "Your home loan EMI stays put — the RBI has held rates for the sixth time running."
+   ✓ "Something shifted quietly on India's northern border, and it matters."
+   ✓ "Petrol just got cheaper in four major cities, and more may follow."
 
-2. WHAT HAPPENED (2-3 sentences)
-   Every relevant number, name, percentage, date. Be precise and specific.
-   No vagueness. No hedging. State what is known as fact.
+2. THE FULL STORY — 4-6 sentences.
+   • Name everyone relevant. Quote every number.
+   • Explain what led to this — context and backstory matter.
+   • Who is doing what, and why.
+   • State things clearly. No hedging. No vagueness.
 
-3. WHY IT MATTERS (1-2 sentences)
-   Connect to the listener's life. Stakes for an average Indian.
+3. WHY IT MATTERS — 2 sentences.
+   Make it personal. How does this affect a retired Indian in a tier-1 or tier-2 city?
+   Think: savings, family, pension, cost of living, safety, governance.
 
-4. WHAT'S NEXT (1 sentence)
-   Forward-looking. What to watch for. Makes the story feel alive, not closed.
+4. WHAT'S NEXT — 1 sentence.
+   What should the listener keep an eye on? Leave them informed, not anxious.
 
 ━━━ WRITING RULES ━━━
-• WORD COUNT: 130-160 words per script. This is a hard floor — never go below 130 words.
-• SENTENCES: Never exceed 18 words. Mix short punchy with medium-length for rhythm.
-• VOICE: Conversational but authoritative. Sharp friend who read everything so you didn't have to.
-• NEVER: "reportedly", "it is said", "details are unclear", "sources say", "according to"
-• NEVER: bullet points, lists, parentheses, em-dashes mid-sentence
-• NEVER: invent specific numbers, quotes, or decisions not present in the source material.
-• DO: Use your knowledge of Indian context, policy history, and likely implications to fill out the significance. If source material is thin, explain WHY this story matters, who is affected, and what the broader context is.
-• ALWAYS: full natural sentences. Flowing spoken rhythm. No cliffhangers.
+• WORD COUNT: 160-200 words. Non-negotiable. Shorter is a failure. Use the full range.
+• Use your knowledge of Indian news, history, and context freely. If source material is sparse, draw on everything you know about this story, its background, and its implications.
+• Do NOT fabricate specific quotes, unverified votes, or numbers that contradict the source. But DO write with authority about context, history, significance, and implications.
+• VOICE: Warm, confident, conversational. Like a knowledgeable friend — not a newsreader robot.
+• FORBIDDEN: "reportedly", "it is said", "sources say", "according to", "details are unclear"
+• FORBIDDEN: bullet points, numbered lists, parentheses, em-dashes mid-sentence
+• SENTENCES: Max 18 words. Vary rhythm — some short and punchy, some medium-length.
+• ALWAYS flow naturally when spoken aloud. No awkward written-language constructions.
 
 ━━━ TRANSLATIONS ━━━
 ${langRules}
-• Keep proper nouns, brand names, acronyms, and numbers in their original form.
-• NEVER use Roman letters for native-language words.
-• Each translation is a complete spoken script — same structure, native script only.
+• Proper nouns, numbers, acronyms, brand names — keep in original form.
+• NEVER romanise native-language words.
+• Each translation is a complete spoken script in the target language — same depth and energy.
 
-Return JSON array only (${sectionEvents.length} objects):
+Return JSON only (${sectionEvents.length} objects, same order as input):
 ${jsonShape}
 
-Events:
+STORIES TO SCRIPT:
 ${eventsPayload}`;
 
   try {
