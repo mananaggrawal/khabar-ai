@@ -591,7 +591,7 @@ ${sectionStories.map((s, i) => `${i}. [${s.source}] ${s.title}`).join("\n")}`;
         const chunkGroups = await clusterSectionChunk(chunks[ci], sectionId, offset);
         allGroups.push(...chunkGroups);
       } catch (err: any) {
-        logger(`  ✗ cluster ${sectionId} chunk ${ci}: ${err.message?.slice(0, 60)} — soloing chunk`);
+        logger(`  ✗ cluster ${sectionId} chunk ${ci}: ${err.message?.slice(0, 200)} — soloing chunk`);
         // Solo-event fallback for this chunk only
         for (const s of chunks[ci]) allGroups.push({ canonicalTitle: s.title, sourceIndices: [sectionStories.indexOf(s)] });
       }
@@ -697,22 +697,21 @@ async function clusterAllSections(
     bySection.set(s.section, arr);
   }
 
-  logger(`Clustering ${rawStories.length} stories across ${bySection.size} sections (parallel)…`);
+  logger(`Clustering ${rawStories.length} stories across ${bySection.size} sections (sequential)…`);
 
-  // Run all section clusters in parallel — they are fully independent
-  const results = await Promise.allSettled(
-    [...bySection.entries()].map(async ([sectionId, stories]) => {
-      const emoji = FEED_MAP.get(sectionId)?.emoji ?? "📰";
-      logger(`  ${emoji} ${sectionId}: ${stories.length} articles…`);
+  // Process sections sequentially to avoid burst rate limiting.
+  // All chunks within a section are already sequential via the concurrency limiter.
+  const allEvents: ClusteredEvent[] = [];
+  for (const [sectionId, stories] of bySection.entries()) {
+    const emoji = FEED_MAP.get(sectionId)?.emoji ?? "📰";
+    logger(`  ${emoji} ${sectionId}: ${stories.length} articles…`);
+    try {
       const events = await clusterSection(stories, sectionId, logger);
       logger(`    → ${events.length} events (${sectionId})`);
-      return events;
-    })
-  );
-
-  const allEvents: ClusteredEvent[] = [];
-  for (const r of results) {
-    if (r.status === "fulfilled") allEvents.push(...r.value);
+      allEvents.push(...events);
+    } catch (err: any) {
+      logger(`  ✗ ${sectionId} section failed: ${err.message?.slice(0, 80)}`);
+    }
   }
 
   const deduped = dedupeEvents(allEvents);
