@@ -68,6 +68,9 @@ export type Story = {
   wordCount?: number;
   publisherCount?: number;
   publishers?: string[];
+  // roundup
+  isRoundup?: boolean;
+  roundupItems?: { title: string; titleHi?: string; titleTa?: string; titleMr?: string }[];
 };
 
 /** A non-story audio segment: opening, section transition, or closing. */
@@ -146,11 +149,15 @@ type ClusteredEvent = {
   importanceReason: string;
   forcedByEditorial: boolean;
   inHeadlinesFeed: boolean;    // appeared on Google News homepage/top feed
+  roundupGroup?: ClusteredEvent[]; // set when this is a synthetic roundup placeholder
 };
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const TARGET_WPM = 150;
+
+// Sections where multiple stories are clubbed into one roundup segment (≥2 needed).
+const ROUNDUP_SECTIONS = new Set<SectionId>(["local", "technology", "entertainment", "science"]);
 
 // Minimum score for a story to qualify — AI scores 0-10 against the user persona.
 const MIN_SCORE_THRESHOLD = 3.5;
@@ -888,12 +895,56 @@ function buildBriefingPlan(events: ClusteredEvent[], logger: Logger): ClusteredE
     add(ev, ev.section);
   }
 
+  // 3. Club roundup sections: merge ≥2 events from the same section into one placeholder
+  const roundupSectionEvents = new Map<SectionId, ClusteredEvent[]>();
+  const nonRoundupPlan: ClusteredEvent[] = [];
+
+  for (const ev of plan) {
+    const sec = ev.assignedSection as SectionId;
+    if (ROUNDUP_SECTIONS.has(sec)) {
+      const arr = roundupSectionEvents.get(sec) ?? [];
+      arr.push(ev);
+      roundupSectionEvents.set(sec, arr);
+    } else {
+      nonRoundupPlan.push(ev);
+    }
+  }
+
+  const finalPlan = [...nonRoundupPlan];
+  for (const [sec, evs] of roundupSectionEvents) {
+    if (evs.length < 2) {
+      // Only 1 story in this roundup section — keep as individual
+      finalPlan.push(...evs);
+    } else {
+      // Merge into synthetic roundup placeholder
+      const feed = FEED_MAP.get(sec);
+      const placeholder: ClusteredEvent = {
+        eventId:           `roundup-${sec}`,
+        canonicalTitle:    `${feed?.label ?? sec} Roundup`,
+        section:           sec,
+        assignedSection:   sec,
+        sourceStories:     evs.flatMap(e => e.sourceStories),
+        publisherCount:    evs.reduce((s, e) => s + e.publisherCount, 0),
+        publishers:        [...new Set(evs.flatMap(e => e.publishers))],
+        imageUrl:          evs.find(e => e.imageUrl)?.imageUrl,
+        firstPublishedAt:  evs[0].firstPublishedAt,
+        importanceScore:   Math.max(...evs.map(e => e.importanceScore)),
+        importanceReason:  `Roundup of ${evs.length} ${sec} stories`,
+        forcedByEditorial: false,
+        inHeadlinesFeed:   false,
+        roundupGroup:      evs,
+      };
+      finalPlan.push(placeholder);
+      logger(`  🗂 Roundup: ${sec} (${evs.length} stories → 1 segment)`);
+    }
+  }
+
   const bySection = new Map<string, number>();
-  for (const ev of plan) bySection.set(ev.assignedSection, (bySection.get(ev.assignedSection) ?? 0) + 1);
-  logger(`Briefing plan: ${plan.length} events (~${Math.round(plan.length * 1.5)} min listen)`);
+  for (const ev of finalPlan) bySection.set(ev.assignedSection, (bySection.get(ev.assignedSection) ?? 0) + 1);
+  logger(`Briefing plan: ${finalPlan.length} segments (~${Math.round(finalPlan.length * 1.5)} min listen)`);
   for (const [section, count] of bySection) logger(`  ${section}: ${count}`);
 
-  return plan;
+  return finalPlan;
 }
 
 // ─── Step 8: Script generation ────────────────────────────────────────────────
@@ -1035,6 +1086,68 @@ ${eventsPayload}`;
   }
 }
 
+async function scriptRoundupGroup(
+  ev: ClusteredEvent,
+  logger: Logger,
+  languages: string[],
+): Promise<ScriptedEvent> {
+  const items = ev.roundupGroup!;
+  const label = FEED_MAP.get(ev.assignedSection)?.label ?? ev.assignedSection;
+  const withTa = languages.includes("ta");
+  const withMr = languages.includes("mr");
+
+  const itemsPayload = items.map((item, i) =>
+    `${i + 1}. ${item.canonicalTitle} (${item.publisherCount} publishers)\n   ${item.sourceStories[0]?.description?.replace(/<[^>]+>/g, "").trim().slice(0, 150) ?? ""}`
+  ).join("\n\n");
+
+  const extraFields = [
+    withTa ? `"titleTa":"...","scriptTa":"..."` : "",
+    withMr ? `"titleMr":"...","scriptMr":"..."` : "",
+  ].filter(Boolean).join(",");
+
+  const prompt = `You are Khabar AI. Write a single flowing spoken-audio roundup segment for the "${label}" section covering ${items.length} brief stories.
+
+STYLE: Tight, punchy delivery. No hook/structure — just the facts with natural connectors between items.
+ ("Meanwhile in tech...", "Also worth noting...", "And finally...").
+WORD COUNT: ${items.length * 55}–${items.length * 70} words total. Each item gets 1-2 sentences max.
+NEVER start with "In ${label} news" or "${label} roundup" — jump straight into the first story.
+NEVER invent facts. Keep numbers and names precise.
+
+Also provide:
+- title: Short English label like "${label} Roundup"
+- titleHi: Hindi label in Devanagari
+- scriptHi: Full Hindi translation of the roundup script
+${withTa ? "- titleTa: Tamil label\n- scriptTa: Full Tamil translation" : ""}
+${withMr ? "- titleMr: Marathi label\n- scriptMr: Full Marathi translation" : ""}
+
+Return a single JSON object:
+{"title":"...","titleHi":"...","scriptEn":"...","scriptHi":"..."${extraFields ? "," + extraFields : ""}}
+
+Stories to cover:
+${itemsPayload}`;
+
+  try {
+    const raw = await geminiJson(prompt) as ScriptedEvent & { title?: string };
+    return {
+      title:   raw.title   || `${label} Roundup`,
+      titleHi: raw.titleHi,
+      titleTa: withTa ? raw.titleTa : undefined,
+      titleMr: withMr ? raw.titleMr : undefined,
+      scriptEn: raw.scriptEn || items.map(i => i.canonicalTitle).join(". ") + ".",
+      scriptHi: hasExpectedScript(raw.scriptHi, "hi") ? raw.scriptHi : "",
+      scriptTa: withTa && hasExpectedScript(raw.scriptTa, "ta") ? raw.scriptTa : undefined,
+      scriptMr: withMr && hasExpectedScript(raw.scriptMr, "mr") ? raw.scriptMr : undefined,
+    };
+  } catch (err: any) {
+    logger(`  ✗ Roundup script ${ev.assignedSection}: ${err.message?.slice(0, 80)}`);
+    return {
+      title:    `${label} Roundup`,
+      scriptEn: items.map(i => i.canonicalTitle).join(". ") + ".",
+      scriptHi: "",
+    };
+  }
+}
+
 /** Fix-up pass: re-translate fields that came back in wrong script. */
 async function fixScriptLanguages(
   stories: Story[],
@@ -1129,10 +1242,15 @@ async function scriptSelectedEvents(
     const emoji = FEED_MAP.get(sectionId)?.emoji ?? "📰";
     logger(`  ${emoji} ${sectionId}: scripting ${events.length} events…`);
 
-    const scripted = await scriptEventBatch(events, sectionId, logger, languages);
+    // Split events into individual vs roundup placeholders
+    const individualEvents = events.filter(ev => !ev.roundupGroup);
+    const roundupEvents    = events.filter(ev => !!ev.roundupGroup);
 
-    for (let i = 0; i < events.length; i++) {
-      const ev = events[i];
+    // Script individual events as a batch
+    const scripted = await scriptEventBatch(individualEvents, sectionId, logger, languages);
+
+    for (let i = 0; i < individualEvents.length; i++) {
+      const ev = individualEvents[i];
       const sc = scripted[i] ?? { title: ev.canonicalTitle, scriptEn: ev.canonicalTitle + ".", scriptHi: "" };
       const primary = ev.sourceStories[0];
       const sources: StorySource[] = ev.sourceStories.map(s => ({
@@ -1163,6 +1281,45 @@ async function scriptSelectedEvents(
         wordCount:         sc.scriptEn.trim().split(/\s+/).length,
         publisherCount:    ev.publisherCount,
         publishers:        ev.publishers,
+      });
+    }
+
+    // Script roundup placeholders
+    for (const ev of roundupEvents) {
+      logger(`  🗂 ${sectionId}: scripting roundup (${ev.roundupGroup!.length} items)…`);
+      const sc = await scriptRoundupGroup(ev, logger, languages);
+      const primary = ev.sourceStories[0];
+      stories.push({
+        id:                ev.eventId,
+        title:             sc.title || ev.canonicalTitle,
+        titleHi:           sc.titleHi,
+        titleTa:           sc.titleTa,
+        titleMr:           sc.titleMr,
+        source:            ev.publishers[0] ?? primary?.source ?? "",
+        link:              primary?.link ?? "",
+        publishedAt:       ev.firstPublishedAt,
+        section:           ev.assignedSection,
+        imageUrl:          ev.imageUrl,
+        description:       `${ev.roundupGroup!.length} stories`,
+        sources:           ev.sourceStories.map(s => ({ title: s.title, source: s.source, link: s.link })),
+        scriptEn:          sc.scriptEn,
+        scriptHi:          sc.scriptHi ?? "",
+        scriptTa:          sc.scriptTa,
+        scriptMr:          sc.scriptMr,
+        audioStartSec:     0,
+        importanceScore:   ev.importanceScore,
+        importanceReason:  ev.importanceReason,
+        forcedByEditorial: false,
+        wordCount:         sc.scriptEn.trim().split(/\s+/).length,
+        publisherCount:    ev.publisherCount,
+        publishers:        ev.publishers,
+        isRoundup:         true,
+        roundupItems:      ev.roundupGroup!.map(item => ({
+          title:   item.canonicalTitle,
+          titleHi: undefined,
+          titleTa: undefined,
+          titleMr: undefined,
+        })),
       });
     }
   }
