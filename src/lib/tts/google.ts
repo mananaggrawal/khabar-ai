@@ -55,14 +55,14 @@ const VOICE       = "Algieba";
 const SAMPLE_RATE = 24_000; // Hz — Gemini TTS always outputs 24 kHz PCM
 
 const STYLE_EN =
-  "Engaging, energetic male news voice. Sharp and dynamic — not a stiff broadcaster. " +
-  "Vary your pace: slow down on key facts, speed up on connective tissue. " +
-  "Let excitement and urgency come through naturally. Brief punchy pauses between sentences.";
+  "Indian English male voice. Energetic, engaging news delivery — excited about the stories. " +
+  "Vary your pace: slow down on key facts, punch through on big moments. " +
+  "Warm but sharp. Like a smart friend who just heard breaking news and can't wait to tell you.";
 
 const STYLE_HI =
-  "Energetic, engaging Hindi male voice. Dynamic delivery — not monotone. " +
-  "Let important facts land with weight. Natural pacing with punchy pauses. " +
-  "Keep English names and numbers in their original pronunciation.";
+  "Hindi male voice. Energetic, engaging delivery — excited about the stories, not monotone. " +
+  "Let important facts land with weight and emphasis. " +
+  "Keep English names, numbers, and brand names in their original pronunciation.";
 
 const GEMINI_TTS_URL = (model: string, key: string) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
