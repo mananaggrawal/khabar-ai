@@ -1088,15 +1088,16 @@ async function scriptEventBatch(
   });
 
   const eventsPayload = sectionEvents.map((ev, i) => {
-    const sources = ev.sourceStories.slice(0, 4).map(s => {
+    const sources = ev.sourceStories.slice(0, 6).map(s => {
       const desc = s.description
         ?.replace(/<[^>]+>/g, "")
         .replace(/\s+/g, " ")
         .trim()
-        .slice(0, 200);
+        .slice(0, 400);
       return `  [${s.source}] ${s.title}${desc ? `\n   → ${desc}` : ""}`;
     }).join("\n");
-    return `eventIndex ${i}: ${ev.canonicalTitle} (${ev.publisherCount} publishers)\n${sources}`;
+    const editorialHint = ev.importanceReason ? `\n  Editorial: ${ev.importanceReason}` : "";
+    return `eventIndex ${i}: ${ev.canonicalTitle} (${ev.publisherCount} publishers)${editorialHint}\n${sources}`;
   }).join("\n\n");
 
   const prompt = `You are Khabar AI — India's voice-first news briefing. Today: ${today}.
@@ -1124,12 +1125,13 @@ Write one spoken-audio script per event. These will be read aloud by a professio
    Forward-looking. What to watch for. Makes the story feel alive, not closed.
 
 ━━━ WRITING RULES ━━━
-• WORD COUNT: 130-160 words per script. Shorter is a mistake — use the full range.
+• WORD COUNT: 130-160 words per script. This is a hard floor — never go below 130 words.
 • SENTENCES: Never exceed 18 words. Mix short punchy with medium-length for rhythm.
 • VOICE: Conversational but authoritative. Sharp friend who read everything so you didn't have to.
 • NEVER: "reportedly", "it is said", "details are unclear", "sources say", "according to"
 • NEVER: bullet points, lists, parentheses, em-dashes mid-sentence
-• NEVER: invent facts. If information is thin, make the known facts vivid — don't pad.
+• NEVER: invent specific numbers, quotes, or decisions not present in the source material.
+• DO: Use your knowledge of Indian context, policy history, and likely implications to fill out the significance. If source material is thin, explain WHY this story matters, who is affected, and what the broader context is.
 • ALWAYS: full natural sentences. Flowing spoken rhythm. No cliffhangers.
 
 ━━━ TRANSLATIONS ━━━
@@ -1145,7 +1147,8 @@ Events:
 ${eventsPayload}`;
 
   try {
-    const rawResults: Array<{ eventIndex?: number } & ScriptedEvent> = await geminiJson(prompt);
+    // 16384 tokens: needed for large sections (8+ events × 4 languages × ~200 tokens each)
+    const rawResults: Array<{ eventIndex?: number } & ScriptedEvent> = await geminiJson(prompt, 16384);
     if (!Array.isArray(rawResults) || rawResults.length === 0) throw new Error("empty result");
 
     // Sort by eventIndex if present so misreordered responses still align correctly
@@ -1216,7 +1219,7 @@ Stories to cover:
 ${itemsPayload}`;
 
   try {
-    const raw = await geminiJson(prompt) as ScriptedEvent & { title?: string };
+    const raw = await geminiJson(prompt, 4096) as ScriptedEvent & { title?: string };
     return {
       title:   raw.title   || `${label} Roundup`,
       titleHi: raw.titleHi,
