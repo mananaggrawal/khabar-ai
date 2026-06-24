@@ -185,10 +185,10 @@ const SECTION_ORDER: SectionId[] = [
 
 // ─── Gemini helpers ───────────────────────────────────────────────────────────
 
-// gemini-2.0-flash: stable GA, used for clustering + scoring (large batch calls).
-// gemini-2.5-flash: used for scripting only — better writing quality.
+// gemini-2.5-flash for both clustering/scoring and scripting.
+// Single model simplifies ops; 503 spikes are handled by the retry backoff.
 const GEMINI_URL        = (key: string) =>
-  `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`;
+  `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`;
 const GEMINI_SCRIPT_URL = (key: string) =>
   `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`;
 
