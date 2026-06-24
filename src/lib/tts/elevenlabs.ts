@@ -63,9 +63,9 @@ async function synthesize(text: string, filename: string): Promise<Buffer> {
     text,
     model_id: MODEL_ID,
     voice_settings: {
-      stability:         0.5,
+      stability:         0.38,  // lower = more expressive/dynamic delivery
       similarity_boost:  0.75,
-      style:             0.0,
+      style:             0.45,  // adds energy and emphasis
       use_speaker_boost: true,
     },
   };
