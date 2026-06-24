@@ -157,13 +157,22 @@ type ClusteredEvent = {
 const TARGET_WPM = 150;
 
 // Sections where multiple stories are clubbed into one roundup segment (≥2 needed).
-const ROUNDUP_SECTIONS = new Set<SectionId>(["local", "technology", "entertainment", "science"]);
+// Health + Sports added: limits individual slot flood while guaranteeing coverage via roundup.
+const ROUNDUP_SECTIONS = new Set<SectionId>(["local", "technology", "entertainment", "science", "health", "sports"]);
 
 // Minimum score for a story to qualify — AI scores 0-10 against the user persona.
-// Score decides everything; no per-section caps.
+// Score decides everything for non-roundup, non-backfill stories.
 const MIN_SCORE_THRESHOLD = 3.5;
 // Hard safety valve only — should not be hit in normal operation.
 const MAX_TOTAL_STORIES   = 40;
+
+// Guaranteed minimum slots for key sections — backfilled even if score < threshold.
+// Ensures business/world/india never get squeezed out by a single dominant section.
+const MIN_SECTION_SLOTS: Partial<Record<SectionId, number>> = {
+  india:    4,
+  business: 2,
+  world:    2,
+};
 
 const SECTION_ORDER: SectionId[] = [
   "india", "world", "business", "technology", "sports",
@@ -788,21 +797,26 @@ SCORING GUIDE:
 
 TOPICS THAT SCORE HIGHER for this audience (all else equal):
 • National & state politics: Parliament sessions, CM decisions, party developments, by-elections
-• Economic policy: inflation, petrol/LPG prices, gold prices, FD interest rates, pension schemes
-• Governance & welfare: government schemes, subsidies, Aadhaar, ration policy
+• Economic policy: inflation, petrol/LPG prices, gold rates, FD/savings rates, pension schemes, stock market moves
+• Business & markets: RBI decisions, banking news, major corporate events affecting Indian households
+• Governance & welfare: government schemes, subsidies, Aadhaar, ration policy, senior citizen benefits
 • Judiciary: Supreme Court and High Court judgments on property, rights, civil matters
-• Health: disease outbreaks, hospital news, medicine prices, AIIMS, health schemes
-• India's foreign relations: Pakistan, China, USA, NRI policy, diaspora
+• India's foreign relations: Pakistan, China, USA, trade deals, NRI policy, diaspora
 • Infrastructure: roads, railways, airports affecting daily life
 • ISRO and national science achievements
-• Cricket — any format, any major development
+• Cricket — any format, any match result, team selection, controversies
+• Sports — Indian athletes at major international events (Olympics, World Cup, Asian Games)
 • Major religious or cultural events of national significance
+
+HEALTH SCORING — be precise:
+• Score 7-9: disease outbreaks (dengue surge, new Covid variant), medicine price hikes, hospital policy, senior health schemes, AIIMS announcements
+• Score 4-6: general health advisories that are timely and actionable (e.g. heatwave precautions in summer)
+• Score 1-3: routine wellness tips, diet advice, generic study findings with no immediate impact — these are low priority
 
 TOPICS THAT SCORE LOWER for this audience:
 • Startup funding, VC investments, unicorn valuations
 • Gadget launches, app updates, social media trends
 • Celebrity birthdays, film releases, OTT content
-• Niche sports other than cricket (unless medals/major achievement)
 • Academic conference findings with no immediate application
 
 ★ = Appeared on Google News homepage (add 0.5 bonus)
@@ -954,6 +968,20 @@ function buildBriefingPlan(events: ClusteredEvent[], logger: Logger): ClusteredE
     if (plan.length >= MAX_TOTAL_STORIES) break;
     if (ev.importanceScore < MIN_SCORE_THRESHOLD) break; // sorted desc, so can stop here
     add(ev, ev.section);
+  }
+
+  // 2b. Section minimums — backfill key sections that fell below their floor.
+  //     Takes top-scoring unused events from that section regardless of threshold.
+  //     Roundup sections are excluded (they get guaranteed coverage via clubbing).
+  for (const [sec, min] of Object.entries(MIN_SECTION_SLOTS) as [SectionId, number][]) {
+    if (ROUNDUP_SECTIONS.has(sec)) continue;
+    const have = plan.filter(ev => ev.assignedSection === sec || ev.section === sec).length;
+    if (have >= min) continue;
+    const candidates = sorted.filter(ev => !used.has(ev.eventId) && ev.section === sec);
+    for (const ev of candidates.slice(0, min - have)) {
+      logger(`  📌 backfill ${sec}: ${ev.canonicalTitle.slice(0, 50)} (score ${ev.importanceScore.toFixed(1)})`);
+      add(ev, sec);
+    }
   }
 
   // 3. Club roundup sections: merge ≥2 events from the same section into one placeholder
