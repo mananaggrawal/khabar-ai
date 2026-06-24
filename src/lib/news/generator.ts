@@ -202,9 +202,15 @@ function parseGeminiJson(raw: string): any {
 }
 
 const RETRYABLE_STATUSES   = new Set([429, 500, 502, 503, 504]);
-const GEMINI_MAX_RETRIES   = 4;
+const GEMINI_MAX_RETRIES   = 1;   // only 1 retry — saves RPD quota on failed runs
 const GEMINI_MAX_TIMEOUTS  = 1;
-const GEMINI_BASE_DELAY_MS = 30_000; // 429 rate-limit window is ~60s; start at 30s
+const GEMINI_BASE_DELAY_MS = 15_000; // 15s is enough for RPM window; RPD won't clear regardless
+
+// Global flag: set when daily quota is detected — all subsequent calls skip immediately.
+let _geminiDailyQuotaExhausted = false;
+function isGeminiDailyQuota(body: string): boolean {
+  return body.includes("per_day") || body.includes("DAILY") || body.includes("per_model_per_day");
+}
 const GEMINI_TIMEOUT_MS    = 90_000;
 
 /** Simple concurrency limiter — caps simultaneous Gemini calls to avoid 429 bursts. */
@@ -221,10 +227,11 @@ function makeConcurrencyLimiter(limit: number) {
     }
   };
 }
-const geminiLimit = makeConcurrencyLimiter(3); // max 3 concurrent Gemini calls
+const geminiLimit = makeConcurrencyLimiter(2); // max 2 concurrent Gemini calls
 
 async function geminiJson(prompt: string, maxOutputTokens = 8192): Promise<any> {
   return geminiLimit(async () => {
+  if (_geminiDailyQuotaExhausted) throw new Error("Gemini daily quota exhausted");
   let lastError: Error | null = null;
   let timeouts = 0;
 
@@ -254,8 +261,13 @@ async function geminiJson(prompt: string, maxOutputTokens = 8192): Promise<any> 
       });
 
       if (!res.ok) {
-        const body = (await res.text()).slice(0, 300);
+        const body = (await res.text()).slice(0, 500);
         lastError = new Error(`Gemini ${res.status}: ${body}`);
+        if (res.status === 429 && isGeminiDailyQuota(body)) {
+          _geminiDailyQuotaExhausted = true;
+          console.error("[gemini] Daily quota exhausted — aborting all Gemini calls");
+          throw lastError; // no point retrying
+        }
         if (RETRYABLE_STATUSES.has(res.status)) continue;
         throw lastError;
       }
