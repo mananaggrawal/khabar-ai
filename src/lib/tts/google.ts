@@ -49,6 +49,18 @@ export const resetDailyQuota = () => {
   _activeModelIdx = 0;
 };
 
+// ── RPM rate limiter — Tier 1 cap is 10 RPM ──────────────────────────────────
+// Space calls at least 6.5s apart so we never exceed 10/min even under bursts.
+const RPM_GAP_MS = 6_500;
+let _lastCallAt = 0;
+
+async function waitForRpmSlot(): Promise<void> {
+  const now  = Date.now();
+  const wait = _lastCallAt + RPM_GAP_MS - now;
+  if (wait > 0) await new Promise(r => setTimeout(r, wait));
+  _lastCallAt = Date.now();
+}
+
 // ── Config ────────────────────────────────────────────────────────────────────
 
 const VOICE       = "Algieba";
@@ -79,6 +91,7 @@ async function synthesizeRaw(script: string, style?: string, embedStyle = false)
   if (isDailyQuotaExhausted()) {
     throw new Error("Gemini TTS daily quota exhausted — skipping API call");
   }
+  await waitForRpmSlot(); // enforce ≤10 RPM (Tier 1 limit)
   const model = getActiveModel();
   // Primary: pass style as system_instruction (better voice quality).
   // Fallback (embedStyle=true): prepend style in user text when system_instruction causes 500.
