@@ -912,7 +912,6 @@ async function scoreEvents(
     }));
   }
 
-  const scoreSec = (Date.now()) ; // caller tracks timing
   logger(`Scoring done — ${scored.length} scored + ${droppedWithFallback.length} pre-filter fallbacks`);
   return [...scored, ...droppedWithFallback];
 }
@@ -1674,11 +1673,7 @@ async function generateAllTTS(
     }
 
     if (onProgress) await onProgress([...updatedStories], [...updatedSegments]);
-
-    // Google RPM guard — 1.5s is sufficient for Gemini TTS rate limits
-    if (provider === "google" && i < stories.length - 1) {
-      await new Promise(r => setTimeout(r, 1_500));
-    }
+    // Note: Google TTS RPM spacing is handled inside google.ts (waitForRpmSlot — 6.5s gap)
   }
 
   const totalChars = enChars + hiChars + taChars + mrChars;
