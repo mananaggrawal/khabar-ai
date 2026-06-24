@@ -487,15 +487,16 @@ interface ClusterGroup {
   imageIndex?:    number;
 }
 
-async function clusterSection(
+const CLUSTER_CHUNK_SIZE = 30; // max articles per Gemini clustering call (TPM budget)
+
+async function clusterSectionChunk(
   sectionStories: Story[],
   sectionId: SectionId,
-  logger: Logger,
-): Promise<ClusteredEvent[]> {
-  if (sectionStories.length === 0) return [];
-
+  indexOffset: number,
+): Promise<ClusterGroup[]> {
   const label       = FEED_MAP.get(sectionId)?.label ?? sectionId;
   const isHeadlines = sectionId === "headlines";
+  void isHeadlines; // used downstream
 
   const prompt = `You are a news editor. These ${sectionStories.length} articles are from the "${label}" section.
 
@@ -514,96 +515,144 @@ Rules:
 Articles:
 ${sectionStories.map((s, i) => `${i}. [${s.source}] ${s.title}`).join("\n")}`;
 
-  try {
-    const groups: ClusterGroup[] = await geminiJson(prompt);
-    if (!Array.isArray(groups) || groups.length === 0) throw new Error("empty result");
+  const groups: ClusterGroup[] = await geminiJson(prompt);
+  if (!Array.isArray(groups) || groups.length === 0) throw new Error("empty result");
 
-    const covered       = new Set<number>();
-    const emittedTitles = new Set<string>();
-    const events: ClusteredEvent[] = [];
+  // Remap indices to global offset
+  return groups.map(g => ({
+    ...g,
+    sourceIndices: (g.sourceIndices ?? []).map(i => i + indexOffset),
+    imageIndex:    g.imageIndex != null ? g.imageIndex + indexOffset : undefined,
+  }));
+}
 
-    for (const g of groups) {
-      const indices = (g.sourceIndices ?? []).filter(i => i >= 0 && i < sectionStories.length);
-      if (indices.length === 0) continue;
-      indices.forEach(i => covered.add(i));
+async function clusterSection(
+  sectionStories: Story[],
+  sectionId: SectionId,
+  logger: Logger,
+): Promise<ClusteredEvent[]> {
+  if (sectionStories.length === 0) return [];
 
-      const title = (g.canonicalTitle ?? "").trim();
-      if (!title || emittedTitles.has(title)) continue;
-      emittedTitles.add(title);
+  const label       = FEED_MAP.get(sectionId)?.label ?? sectionId;
+  const isHeadlines = sectionId === "headlines";
 
-      const imageIdx      = g.imageIndex != null && indices.includes(g.imageIndex) ? g.imageIndex : indices[0];
-      const primaryUrl    = sectionStories[imageIdx]?.link ?? sectionStories[indices[0]].link;
-      const publishers    = [...new Set(indices.map(i => sectionStories[i].source))];
-      const dates         = indices.map(i => sectionStories[i].publishedAt).sort();
-      const imageUrl      = indices.map(i => sectionStories[i].imageUrl).find(Boolean);
-      const sourceStories = indices.map(i => sectionStories[i]);
+  // Split into chunks to stay within TPM limits — large sections (India 104, Local 101) would
+  // otherwise send 5000+ token prompts that hit Gemini's tokens-per-minute quota.
+  let allGroups: ClusterGroup[];
+  if (sectionStories.length <= CLUSTER_CHUNK_SIZE) {
+    const prompt = `You are a news editor. These ${sectionStories.length} articles are from the "${label}" section.
 
-      // For headlines feed, inherit the best matching non-headlines section
-      const nonHeadlineSection = sourceStories
-        .map(s => s.section)
-        .find(s => s !== "headlines") ?? "india";
+Group articles that cover EXACTLY the same event or announcement.
+Different stories — even if loosely related — MUST stay in separate groups.
+When in doubt, keep separate.
 
-      events.push({
-        eventId:           storyId(primaryUrl),
-        canonicalTitle:    title,
-        section:           isHeadlines ? nonHeadlineSection : sectionId,
-        assignedSection:   isHeadlines ? nonHeadlineSection : sectionId,
-        sourceStories,
-        publisherCount:    publishers.length,
-        publishers,
-        imageUrl,
-        firstPublishedAt:  dates[0] ?? new Date().toISOString(),
-        importanceScore:   0,
-        importanceReason:  "",
-        forcedByEditorial: false,
-        inHeadlinesFeed:   isHeadlines || sourceStories.some(s => s.section === "headlines"),
-      });
+Return JSON array only:
+[{"canonicalTitle":"concise event title (max 12 words)","sourceIndices":[0,2],"imageIndex":0}]
+
+Rules:
+- Every index 0-${sectionStories.length - 1} must appear in exactly one group
+- canonicalTitle: specific and factual, state the event clearly
+- imageIndex: which sourceIndex is most likely to have an image (prefer Reuters, AP, PTI, AFP)
+
+Articles:
+${sectionStories.map((s, i) => `${i}. [${s.source}] ${s.title}`).join("\n")}`;
+
+    try {
+      const groups: ClusterGroup[] = await geminiJson(prompt);
+      if (!Array.isArray(groups) || groups.length === 0) throw new Error("empty result");
+      allGroups = groups;
+    } catch (err: any) {
+      logger(`  ✗ cluster ${sectionId}: ${err.message?.slice(0, 80)} — each article = 1 event`);
+      return sectionStories.map(s => soloEvent(s, sectionId, isHeadlines));
     }
-
-    // Uncovered stories → solo events
-    for (let i = 0; i < sectionStories.length; i++) {
-      if (covered.has(i)) continue;
-      const s = sectionStories[i];
-      const nonHLSection = s.section !== "headlines" ? s.section : "india";
-      events.push({
-        eventId:           s.id,
-        canonicalTitle:    s.title.replace(/\s*[-–|]\s*[^-–|]{1,40}$/, "").trim(),
-        section:           isHeadlines ? nonHLSection : sectionId,
-        assignedSection:   isHeadlines ? nonHLSection : sectionId,
-        sourceStories:     [s],
-        publisherCount:    1,
-        publishers:        [s.source],
-        imageUrl:          s.imageUrl,
-        firstPublishedAt:  s.publishedAt,
-        importanceScore:   0,
-        importanceReason:  "",
-        forcedByEditorial: false,
-        inHeadlinesFeed:   isHeadlines,
-      });
+  } else {
+    // Chunked clustering — split large sections to stay within TPM limits
+    const chunks: Story[][] = [];
+    for (let i = 0; i < sectionStories.length; i += CLUSTER_CHUNK_SIZE) {
+      chunks.push(sectionStories.slice(i, i + CLUSTER_CHUNK_SIZE));
     }
+    logger(`    ↳ ${sectionId}: ${sectionStories.length} articles → ${chunks.length} chunks of ≤${CLUSTER_CHUNK_SIZE}`);
+    allGroups = [];
+    for (let ci = 0; ci < chunks.length; ci++) {
+      const offset = ci * CLUSTER_CHUNK_SIZE;
+      try {
+        const chunkGroups = await clusterSectionChunk(chunks[ci], sectionId, offset);
+        allGroups.push(...chunkGroups);
+      } catch (err: any) {
+        logger(`  ✗ cluster ${sectionId} chunk ${ci}: ${err.message?.slice(0, 60)} — soloing chunk`);
+        // Solo-event fallback for this chunk only
+        for (const s of chunks[ci]) allGroups.push({ canonicalTitle: s.title, sourceIndices: [sectionStories.indexOf(s)] });
+      }
+    }
+  }
 
-    return events;
-  } catch (err: any) {
-    logger(`  ✗ cluster ${sectionId}: ${err.message?.slice(0, 80)} — each article = 1 event`);
-    return sectionStories.map(s => {
-      const nonHLSection = s.section !== "headlines" ? s.section : "india";
-      return {
-        eventId:           s.id,
-        canonicalTitle:    s.title.replace(/\s*[-–|]\s*[^-–|]{1,40}$/, "").trim(),
-        section:           isHeadlines ? nonHLSection : sectionId,
-        assignedSection:   isHeadlines ? nonHLSection : sectionId,
-        sourceStories:     [s],
-        publisherCount:    1,
-        publishers:        [s.source],
-        imageUrl:          s.imageUrl,
-        firstPublishedAt:  s.publishedAt,
-        importanceScore:   0,
-        importanceReason:  "",
-        forcedByEditorial: false,
-        inHeadlinesFeed:   sectionId === "headlines",
-      };
+  // Build ClusteredEvent objects from groups (same logic for both paths)
+  const covered       = new Set<number>();
+  const emittedTitles = new Set<string>();
+  const events: ClusteredEvent[] = [];
+
+  for (const g of allGroups) {
+    const indices = (g.sourceIndices ?? []).filter(i => i >= 0 && i < sectionStories.length);
+    if (indices.length === 0) continue;
+    indices.forEach(i => covered.add(i));
+
+    const title = (g.canonicalTitle ?? "").trim();
+    if (!title || emittedTitles.has(title)) continue;
+    emittedTitles.add(title);
+
+    const imageIdx      = g.imageIndex != null && indices.includes(g.imageIndex) ? g.imageIndex : indices[0];
+    const primaryUrl    = sectionStories[imageIdx]?.link ?? sectionStories[indices[0]].link;
+    const publishers    = [...new Set(indices.map(i => sectionStories[i].source))];
+    const dates         = indices.map(i => sectionStories[i].publishedAt).sort();
+    const imageUrl      = indices.map(i => sectionStories[i].imageUrl).find(Boolean);
+    const sourceStories = indices.map(i => sectionStories[i]);
+
+    const nonHeadlineSection = sourceStories
+      .map(s => s.section)
+      .find(s => s !== "headlines") ?? "india";
+
+    events.push({
+      eventId:           storyId(primaryUrl),
+      canonicalTitle:    title,
+      section:           isHeadlines ? nonHeadlineSection : sectionId,
+      assignedSection:   isHeadlines ? nonHeadlineSection : sectionId,
+      sourceStories,
+      publisherCount:    publishers.length,
+      publishers,
+      imageUrl,
+      firstPublishedAt:  dates[0] ?? new Date().toISOString(),
+      importanceScore:   0,
+      importanceReason:  "",
+      forcedByEditorial: false,
+      inHeadlinesFeed:   isHeadlines || sourceStories.some(s => s.section === "headlines"),
     });
   }
+
+  // Uncovered stories → solo events
+  for (let i = 0; i < sectionStories.length; i++) {
+    if (!covered.has(i)) events.push(soloEvent(sectionStories[i], sectionId, isHeadlines));
+  }
+
+  return events;
+}
+
+function soloEvent(s: Story, sectionId: SectionId, isHeadlines: boolean): ClusteredEvent {
+  const nonHLSection = s.section !== "headlines" ? s.section : "india";
+  return {
+    eventId:           s.id,
+    canonicalTitle:    s.title.replace(/\s*[-–|]\s*[^-–|]{1,40}$/, "").trim(),
+    section:           isHeadlines ? nonHLSection : sectionId,
+    assignedSection:   isHeadlines ? nonHLSection : sectionId,
+    sourceStories:     [s],
+    publisherCount:    1,
+    publishers:        [s.source],
+    imageUrl:          s.imageUrl,
+    firstPublishedAt:  s.publishedAt,
+    importanceScore:   0,
+    importanceReason:  "",
+    forcedByEditorial: false,
+    inHeadlinesFeed:   isHeadlines,
+  };
 }
 
 /** Deduplicate clustered events across sections by title token overlap. */
