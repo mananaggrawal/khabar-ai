@@ -215,9 +215,9 @@ function parseGeminiJson(raw: string): any {
 }
 
 const RETRYABLE_STATUSES   = new Set([429, 500, 502, 503, 504]);
-const GEMINI_MAX_RETRIES   = 1;   // only 1 retry — saves RPD quota on failed runs
-const GEMINI_MAX_TIMEOUTS  = 1;
-const GEMINI_BASE_DELAY_MS = 15_000; // 15s is enough for RPM window; RPD won't clear regardless
+const GEMINI_MAX_RETRIES   = 4;   // 503 demand spikes need patience — up to 4 retries
+const GEMINI_MAX_TIMEOUTS  = 2;
+const GEMINI_BASE_DELAY_MS = 20_000; // 20s → 40s → 80s → 160s exponential backoff
 
 // Global flag: set when daily quota is detected — all subsequent calls skip immediately.
 let _geminiDailyQuotaExhausted = false;
@@ -281,7 +281,11 @@ async function geminiJson(prompt: string, maxOutputTokens = 8192): Promise<any> 
           console.error("[gemini] Daily quota exhausted — aborting all Gemini calls");
           throw lastError; // no point retrying
         }
-        if (RETRYABLE_STATUSES.has(res.status)) continue;
+        if (RETRYABLE_STATUSES.has(res.status)) {
+          const nextDelay = GEMINI_BASE_DELAY_MS * Math.pow(2, attempt);
+          console.warn(`[gemini] ${res.status} — will retry in ${nextDelay / 1000}s (attempt ${attempt + 1}/${GEMINI_MAX_RETRIES})`);
+          continue;
+        }
         throw lastError;
       }
 
