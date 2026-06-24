@@ -160,21 +160,9 @@ const TARGET_WPM = 150;
 const ROUNDUP_SECTIONS = new Set<SectionId>(["local", "technology", "entertainment", "science"]);
 
 // Minimum score for a story to qualify — AI scores 0-10 against the user persona.
+// Score decides everything; no per-section caps.
 const MIN_SCORE_THRESHOLD = 3.5;
-// Per-section soft ceilings — reflect what matters most to the 60+ Indian audience.
-const MAX_PER_SECTION: Partial<Record<SectionId, number>> & { _default: number } = {
-  india:         10,  // politics, state news, governance — primary interest
-  business:       8,  // economy, markets, inflation, gold — high priority
-  world:          7,  // India's foreign relations, geopolitics
-  sports:         4,  // cricket-heavy but bounded
-  health:         3,  // relevant but was flooding — keep it tight
-  technology:     2,
-  entertainment:  2,
-  science:        2,
-  local:          2,
-  _default:       3,
-};
-// Hard safety valve — should never be hit in normal operation.
+// Hard safety valve only — should not be hit in normal operation.
 const MAX_TOTAL_STORIES   = 40;
 
 const SECTION_ORDER: SectionId[] = [
@@ -214,12 +202,29 @@ function parseGeminiJson(raw: string): any {
 }
 
 const RETRYABLE_STATUSES   = new Set([429, 500, 502, 503, 504]);
-const GEMINI_MAX_RETRIES   = 3;
+const GEMINI_MAX_RETRIES   = 4;
 const GEMINI_MAX_TIMEOUTS  = 1;
-const GEMINI_BASE_DELAY_MS = 5_000;
+const GEMINI_BASE_DELAY_MS = 30_000; // 429 rate-limit window is ~60s; start at 30s
 const GEMINI_TIMEOUT_MS    = 90_000;
 
+/** Simple concurrency limiter — caps simultaneous Gemini calls to avoid 429 bursts. */
+function makeConcurrencyLimiter(limit: number) {
+  let running = 0;
+  const queue: Array<() => void> = [];
+  return async function<T>(fn: () => Promise<T>): Promise<T> {
+    if (running >= limit) await new Promise<void>(res => queue.push(res));
+    running++;
+    try { return await fn(); }
+    finally {
+      running--;
+      queue.shift()?.();
+    }
+  };
+}
+const geminiLimit = makeConcurrencyLimiter(3); // max 3 concurrent Gemini calls
+
 async function geminiJson(prompt: string, maxOutputTokens = 8192): Promise<any> {
+  return geminiLimit(async () => {
   let lastError: Error | null = null;
   let timeouts = 0;
 
@@ -275,6 +280,7 @@ async function geminiJson(prompt: string, maxOutputTokens = 8192): Promise<any> 
   }
 
   throw lastError ?? new Error("Gemini request failed after retries");
+  }); // geminiLimit
 }
 
 // ─── Language metadata ────────────────────────────────────────────────────────
@@ -867,15 +873,13 @@ async function scoreEvents(
 function buildBriefingPlan(events: ClusteredEvent[], logger: Logger): ClusteredEvent[] {
   // Sort purely by importance score — the AI already weighted for the user persona
   const sorted = [...events].sort((a, b) => b.importanceScore - a.importanceScore);
-  const used         = new Set<string>();
+  const used = new Set<string>();
   const plan: ClusteredEvent[] = [];
-  const sectionCount = new Map<string, number>();
 
   const add = (ev: ClusteredEvent, section: string) => {
     ev.assignedSection = section;
     plan.push(ev);
     used.add(ev.eventId);
-    sectionCount.set(section, (sectionCount.get(section) ?? 0) + 1);
   };
 
   // 1. mustInclude events always air — no cap, no section limit
@@ -885,13 +889,11 @@ function buildBriefingPlan(events: ClusteredEvent[], logger: Logger): ClusteredE
   }
 
   // 2. Include all events scoring >= MIN_SCORE_THRESHOLD, ranked by score.
-  //    Only constraint: soft per-section diversity cap & absolute safety ceiling.
+  //    No per-section caps — score decides everything.
   for (const ev of sorted) {
     if (used.has(ev.eventId)) continue;
     if (plan.length >= MAX_TOTAL_STORIES) break;
     if (ev.importanceScore < MIN_SCORE_THRESHOLD) break; // sorted desc, so can stop here
-    const sectionCap = MAX_PER_SECTION[ev.section as SectionId] ?? MAX_PER_SECTION._default;
-    if ((sectionCount.get(ev.section) ?? 0) >= sectionCap) continue;
     add(ev, ev.section);
   }
 
