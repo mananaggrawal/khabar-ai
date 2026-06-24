@@ -185,10 +185,12 @@ const SECTION_ORDER: SectionId[] = [
 
 // ─── Gemini helpers ───────────────────────────────────────────────────────────
 
-// gemini-2.0-flash: stable GA model, far fewer 503 demand spikes than 2.5-flash.
-// Plenty capable for clustering, scoring, and scripting.
-const GEMINI_URL = (key: string) =>
+// gemini-2.0-flash: stable GA, used for clustering + scoring (large batch calls).
+// gemini-2.5-flash: used for scripting only — better writing quality.
+const GEMINI_URL        = (key: string) =>
   `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`;
+const GEMINI_SCRIPT_URL = (key: string) =>
+  `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`;
 
 function getGeminiKey(): string {
   const k = process.env.GEMINI_API_KEY;
@@ -244,7 +246,7 @@ function makeConcurrencyLimiter(limit: number) {
 }
 const geminiLimit = makeConcurrencyLimiter(1); // sequential — prevents burst 429s
 
-async function geminiJson(prompt: string, maxOutputTokens = 8192): Promise<any> {
+async function geminiJson(prompt: string, maxOutputTokens = 8192, useScriptModel = false): Promise<any> {
   return geminiLimit(async () => {
   if (_geminiDailyQuotaExhausted) throw new Error("Gemini daily quota exhausted");
   let lastError: Error | null = null;
@@ -259,9 +261,10 @@ async function geminiJson(prompt: string, maxOutputTokens = 8192): Promise<any> 
 
     const ctrl  = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), GEMINI_TIMEOUT_MS);
+    const apiUrl = useScriptModel ? GEMINI_SCRIPT_URL(getGeminiKey()) : GEMINI_URL(getGeminiKey());
 
     try {
-      const res = await fetch(GEMINI_URL(getGeminiKey()), {
+      const res = await fetch(apiUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: ctrl.signal,
@@ -1059,6 +1062,86 @@ interface ScriptedEvent {
   scriptMr?: string;
 }
 
+/** Validate that an English script is usable — not empty, not too short, no foreign script leaked in. */
+function isValidEnScript(text: string | undefined): boolean {
+  if (!text || text.trim().length < 10) return false;
+  const words = text.trim().split(/\s+/).length;
+  if (words < 100) return false;
+  // Reject if Devanagari or Tamil leaked into the English field
+  if (/[ऀ-ॿ஀-௿]/.test(text)) return false;
+  return true;
+}
+
+/** Script a single event using gemini-2.5-flash for writing quality. One focused call per story. */
+async function scriptOneEvent(
+  ev: ClusteredEvent,
+  label: string,
+  today: string,
+  langRules: string,
+  jsonShape: string,
+): Promise<ScriptedEvent> {
+  const sources = ev.sourceStories.slice(0, 6).map(s => {
+    const desc = s.description
+      ?.replace(/<[^>]+>/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 400);
+    return `  [${s.source}] ${s.title}${desc ? `\n   -> ${desc}` : ""}`;
+  }).join("\n");
+
+  const editorialHint = ev.importanceReason
+    ? `\nEditorial context: ${ev.importanceReason}` : "";
+
+  const prompt = `You are Khabar AI's scriptwriter. Date: ${today}. Section: ${label}.
+
+Write a complete spoken-audio radio news script for this ONE story. It will be read aloud by a voice actor.
+
+STORY
+${ev.canonicalTitle} (${ev.publisherCount} source${ev.publisherCount !== 1 ? "s" : ""})
+${sources}${editorialHint}
+
+SCRIPT STRUCTURE
+1. OPENING LINE (1 sentence, 15-20 words)
+   Lead with the most significant or surprising fact. Pull the listener in immediately.
+   FORBIDDEN openers: "Today", "In a", "According to", "The", "A new", "India's", "It is"
+   Good: "Your home loan EMI stays put - the RBI has held rates for the sixth time running."
+   Good: "Five people are dead after a warehouse roof came down in Kolkata this morning."
+   Good: "Petrol prices dropped overnight in four major cities, and more reductions may follow."
+
+2. FULL STORY (4-6 sentences)
+   Every relevant fact: names, numbers, dates, locations. Context and backstory.
+   Who did what, why, and what it means. State things clearly. No hedging.
+
+3. WHY IT MATTERS (2 sentences)
+   How does this affect a retired Indian in a tier-1 or tier-2 city?
+   Think: savings, pension, family safety, cost of living, governance.
+
+4. WHAT IS NEXT (1 sentence)
+   What should the listener watch for? Keep the story alive.
+
+WRITING RULES
+- WORD COUNT: 160-200 words. Hard floor. Shorter = rejected and retried.
+- Use your full knowledge of Indian news, history, and context - not just what is in the source.
+- If source material is thin, explain the background, significance, and implications you know.
+- Do NOT fabricate specific quotes or numbers that contradict the source.
+- FORBIDDEN: "reportedly", "it is said", "sources say", "according to", "details are unclear"
+- FORBIDDEN: bullet points, numbered lists, parentheses, em-dashes mid-sentence
+- Sentences: max 18 words. Mix short punchy lines with medium-length ones.
+- Write for the ear. Flow naturally when spoken aloud.
+
+TRANSLATIONS
+${langRules}
+- Keep proper nouns, acronyms, numbers, brand names in their original form.
+- NEVER romanise Hindi, Tamil, or Marathi words - native script only.
+- Each translation must be a full, complete spoken script - same depth and energy as English.
+
+Return exactly ONE JSON object:
+${jsonShape}`;
+
+  const raw = await geminiJson(prompt, 4096, true /* useScriptModel: gemini-2.5-flash */);
+  return raw as ScriptedEvent;
+}
+
 async function scriptEventBatch(
   sectionEvents: ClusteredEvent[],
   sectionId: SectionId,
@@ -1067,128 +1150,76 @@ async function scriptEventBatch(
 ): Promise<ScriptedEvent[]> {
   if (sectionEvents.length === 0) return [];
 
-  const label    = sectionId === "headlines" ? "Top Stories" : (FEED_MAP.get(sectionId)?.label ?? sectionId);
-  const withTa   = languages.includes("ta");
-  const withMr   = languages.includes("mr");
-
-  const langRules = [
-    `- scriptHi: Translate scriptEn into Hindi. ${LANG_META.hi.scriptNote}`,
-    withTa ? `- scriptTa: Translate scriptEn into Tamil. ${LANG_META.ta.scriptNote}` : "",
-    withMr ? `- scriptMr: Translate scriptEn into Marathi. ${LANG_META.mr.scriptNote}` : "",
-    `- titleHi: Translate English title to Hindi (Devanagari).`,
-    withTa ? `- titleTa: Translate English title to Tamil script.` : "",
-    withMr ? `- titleMr: Translate English title to Marathi (Devanagari).` : "",
-  ].filter(Boolean).join("\n");
-
-  const extraTitleFields = [
-    withTa ? `"titleTa":"..."` : "",
-    withMr ? `"titleMr":"..."` : "",
-  ].filter(Boolean).join(",");
-
-  const extraScriptFields = [
-    withTa ? `"scriptTa":"..."` : "",
-    withMr ? `"scriptMr":"..."` : "",
-  ].filter(Boolean).join(",");
-
-  const jsonShape = `[{"eventIndex":0,"title":"...","titleHi":"..."${extraTitleFields ? "," + extraTitleFields : ""},"scriptEn":"...","scriptHi":"..."${extraScriptFields ? "," + extraScriptFields : ""}}]`;
+  const label  = sectionId === "headlines" ? "Top Stories" : (FEED_MAP.get(sectionId)?.label ?? sectionId);
+  const withTa = languages.includes("ta");
+  const withMr = languages.includes("mr");
 
   const today = new Date().toLocaleDateString("en-IN", {
     weekday: "long", year: "numeric", month: "long", day: "numeric",
     timeZone: "Asia/Kolkata",
   });
 
-  const eventsPayload = sectionEvents.map((ev, i) => {
-    const sources = ev.sourceStories.slice(0, 6).map(s => {
-      const desc = s.description
-        ?.replace(/<[^>]+>/g, "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 400);
-      return `  [${s.source}] ${s.title}${desc ? `\n   → ${desc}` : ""}`;
-    }).join("\n");
-    const editorialHint = ev.importanceReason ? `\n  Editorial: ${ev.importanceReason}` : "";
-    return `eventIndex ${i}: ${ev.canonicalTitle} (${ev.publisherCount} publishers)${editorialHint}\n${sources}`;
-  }).join("\n\n");
+  const langRules = [
+    `scriptHi: Full Hindi translation of scriptEn. ${LANG_META.hi.scriptNote}`,
+    `titleHi: Hindi translation of the title. Devanagari script.`,
+    withTa ? `scriptTa: Full Tamil translation of scriptEn. ${LANG_META.ta.scriptNote}` : "",
+    withTa ? `titleTa: Tamil translation of the title.` : "",
+    withMr ? `scriptMr: Full Marathi translation of scriptEn. ${LANG_META.mr.scriptNote}` : "",
+    withMr ? `titleMr: Marathi translation of the title. Devanagari script.` : "",
+  ].filter(Boolean).join("\n");
 
-  const prompt = `You are Khabar AI's senior scriptwriter. Today: ${today}.
-You are scripting the "${label}" section — ${sectionEvents.length} stories.
+  const extraTitle  = [withTa ? `"titleTa":"..."` : "", withMr ? `"titleMr":"..."` : ""].filter(Boolean).join(",");
+  const extraScript = [withTa ? `"scriptTa":"..."` : "", withMr ? `"scriptMr":"..."` : ""].filter(Boolean).join(",");
+  const jsonShape   = `{"title":"...","titleHi":"..."${extraTitle ? "," + extraTitle : ""},"scriptEn":"...","scriptHi":"..."${extraScript ? "," + extraScript : ""}}`;
 
-These scripts are spoken aloud. Think All India Radio meets a sharp, well-read friend. Complete. Engaging. Never thin.
+  const results: ScriptedEvent[] = [];
 
-━━━ SCRIPT STRUCTURE (follow for every story) ━━━
+  for (const ev of sectionEvents) {
+    let scripted: ScriptedEvent | null = null;
 
-1. OPENING LINE — 1 sentence, 15-20 words.
-   Hook immediately. Lead with the most surprising or consequential fact.
-   NEVER begin with: "Today", "In a", "According to", "The", "A new", "India's"
-   ✓ "Your home loan EMI stays put — the RBI has held rates for the sixth time running."
-   ✓ "Something shifted quietly on India's northern border, and it matters."
-   ✓ "Petrol just got cheaper in four major cities, and more may follow."
+    // Two attempts per story — independent calls, no shared state
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const raw = await scriptOneEvent(ev, label, today, langRules, jsonShape);
 
-2. THE FULL STORY — 4-6 sentences.
-   • Name everyone relevant. Quote every number.
-   • Explain what led to this — context and backstory matter.
-   • Who is doing what, and why.
-   • State things clearly. No hedging. No vagueness.
+        if (!isValidEnScript(raw.scriptEn)) {
+          const words = (raw.scriptEn ?? "").trim().split(/\s+/).length;
+          const hasDevanagari = /[ऀ-ॿ]/.test(raw.scriptEn ?? "");
+          throw new Error(`scriptEn invalid: ${words} words${hasDevanagari ? ", contains Devanagari" : ""}`);
+        }
 
-3. WHY IT MATTERS — 2 sentences.
-   Make it personal. How does this affect a retired Indian in a tier-1 or tier-2 city?
-   Think: savings, family, pension, cost of living, safety, governance.
+        scripted = {
+          title:    (raw.title   || ev.canonicalTitle).trim(),
+          titleHi:  hasExpectedScript(raw.titleHi, "hi")  ? raw.titleHi  : undefined,
+          titleTa:  hasExpectedScript(raw.titleTa, "ta")  ? raw.titleTa  : undefined,
+          titleMr:  hasExpectedScript(raw.titleMr, "mr")  ? raw.titleMr  : undefined,
+          scriptEn: raw.scriptEn.trim(),
+          scriptHi: hasExpectedScript(raw.scriptHi, "hi") ? raw.scriptHi : "",
+          scriptTa: hasExpectedScript(raw.scriptTa, "ta") ? raw.scriptTa : undefined,
+          scriptMr: hasExpectedScript(raw.scriptMr, "mr") ? raw.scriptMr : undefined,
+        };
+        const wc = scripted.scriptEn.split(/\s+/).length;
+        logger(`    ok ${wc}w: ${ev.canonicalTitle.slice(0, 55)}`);
+        break;
+      } catch (err: any) {
+        logger(`    x attempt ${attempt}/2: ${err.message?.slice(0, 100)}`);
+      }
+    }
 
-4. WHAT'S NEXT — 1 sentence.
-   What should the listener keep an eye on? Leave them informed, not anxious.
+    if (!scripted) {
+      // Last-resort fallback — raw source text stitched together
+      const descParts = ev.sourceStories.slice(0, 3)
+        .map(s => s.description?.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim())
+        .filter(Boolean);
+      const fallbackScript = [ev.canonicalTitle + ".", ...descParts].join(" ");
+      scripted = { title: ev.canonicalTitle, scriptEn: fallbackScript, scriptHi: "" };
+      logger(`    ! fallback: ${ev.canonicalTitle.slice(0, 55)}`);
+    }
 
-━━━ WRITING RULES ━━━
-• WORD COUNT: 160-200 words. Non-negotiable. Shorter is a failure. Use the full range.
-• Use your knowledge of Indian news, history, and context freely. If source material is sparse, draw on everything you know about this story, its background, and its implications.
-• Do NOT fabricate specific quotes, unverified votes, or numbers that contradict the source. But DO write with authority about context, history, significance, and implications.
-• VOICE: Warm, confident, conversational. Like a knowledgeable friend — not a newsreader robot.
-• FORBIDDEN: "reportedly", "it is said", "sources say", "according to", "details are unclear"
-• FORBIDDEN: bullet points, numbered lists, parentheses, em-dashes mid-sentence
-• SENTENCES: Max 18 words. Vary rhythm — some short and punchy, some medium-length.
-• ALWAYS flow naturally when spoken aloud. No awkward written-language constructions.
-
-━━━ TRANSLATIONS ━━━
-${langRules}
-• Proper nouns, numbers, acronyms, brand names — keep in original form.
-• NEVER romanise native-language words.
-• Each translation is a complete spoken script in the target language — same depth and energy.
-
-Return JSON only (${sectionEvents.length} objects, same order as input):
-${jsonShape}
-
-STORIES TO SCRIPT:
-${eventsPayload}`;
-
-  try {
-    // 16384 tokens: needed for large sections (8+ events × 4 languages × ~200 tokens each)
-    const rawResults: Array<{ eventIndex?: number } & ScriptedEvent> = await geminiJson(prompt, 16384);
-    if (!Array.isArray(rawResults) || rawResults.length === 0) throw new Error("empty result");
-
-    // Sort by eventIndex if present so misreordered responses still align correctly
-    const byIndex = new Map(rawResults.map(r => [r.eventIndex ?? -1, r]));
-    const results = sectionEvents.map((_, i) => byIndex.get(i) ?? rawResults[i] ?? {});
-
-    return sectionEvents.map((ev, i) => {
-      const r = results[i] ?? {};
-      return {
-        title:    r.title    || ev.canonicalTitle,
-        titleHi:  hasExpectedScript(r.titleHi, "hi") ? r.titleHi : undefined,
-        titleTa:  hasExpectedScript(r.titleTa, "ta") ? r.titleTa : undefined,
-        titleMr:  hasExpectedScript(r.titleMr, "mr") ? r.titleMr : undefined,
-        scriptEn: r.scriptEn || ev.canonicalTitle + ".",
-        scriptHi: hasExpectedScript(r.scriptHi, "hi") ? r.scriptHi : "",
-        scriptTa: hasExpectedScript(r.scriptTa, "ta") ? r.scriptTa : undefined,
-        scriptMr: hasExpectedScript(r.scriptMr, "mr") ? r.scriptMr : undefined,
-      };
-    });
-  } catch (err: any) {
-    logger(`  ✗ Script ${sectionId}: ${err.message?.slice(0, 80)} — using fallback`);
-    return sectionEvents.map(ev => ({
-      title:    ev.canonicalTitle,
-      scriptEn: ev.canonicalTitle + ". " + (ev.sourceStories[0]?.description?.replace(/<[^>]+>/g, "").slice(0, 200) ?? ""),
-      scriptHi: "",
-    }));
+    results.push(scripted);
   }
+
+  return results;
 }
 
 async function scriptRoundupGroup(
