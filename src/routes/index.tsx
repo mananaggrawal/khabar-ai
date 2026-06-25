@@ -344,10 +344,11 @@ function HomePage() {
                 <button
                   key={id}
                   onClick={() => setActiveSection(id)}
-                  className="shrink-0 rounded-full px-3.5 py-1 text-xs font-semibold transition-all whitespace-nowrap"
-                  style={isActive
-                    ? { background: "rgba(255,255,255,0.92)", color: "#0c0717" }
-                    : { background: "transparent", color: "rgba(255,255,255,0.45)" }}
+                  className={`shrink-0 rounded-full border px-3.5 py-1 text-xs font-semibold transition-all whitespace-nowrap ${
+                    isActive
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border bg-muted/60 text-muted-foreground hover:text-foreground"
+                  }`}
                 >
                   {label}
                 </button>
