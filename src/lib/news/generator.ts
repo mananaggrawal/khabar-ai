@@ -272,8 +272,10 @@ function getOpenAIKey(): string {
   return k;
 }
 
-// gpt-4o for scripting — strong instruction following + JSON mode
-const OPENAI_SCRIPT_MODEL = "gpt-4o";
+// gpt-4o for scripting — configurable via OPENAI_SCRIPT_MODEL env var
+function getOpenAIScriptModel(): string {
+  return process.env.OPENAI_SCRIPT_MODEL ?? "gpt-4o";
+}
 
 const openaiLimit = makeConcurrencyLimiter(3); // allow some parallelism (OpenAI has higher RPM)
 
@@ -286,7 +288,7 @@ async function openaiJson(prompt: string, maxTokens = 4096): Promise<any> {
         "Authorization": `Bearer ${getOpenAIKey()}`,
       },
       body: JSON.stringify({
-        model: OPENAI_SCRIPT_MODEL,
+        model: getOpenAIScriptModel(),
         response_format: { type: "json_object" },
         max_tokens: maxTokens,
         messages: [{ role: "user", content: prompt }],

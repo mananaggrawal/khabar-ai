@@ -42,9 +42,17 @@ export async function handleGenerate(request: Request): Promise<Response> {
     try { writer.write(enc.encode(`data: ${JSON.stringify(data)}\n\n`)); } catch {}
   };
 
-  const reqUrl  = new URL(request.url, "http://localhost");
-  const provider = (reqUrl.searchParams.get("provider") ?? "google") as TtsProvider;
-  const languages = (reqUrl.searchParams.get("languages") ?? "en,hi").split(",").map(l => l.trim()).filter(Boolean);
+  const reqUrl       = new URL(request.url, "http://localhost");
+  const provider     = (reqUrl.searchParams.get("provider") ?? "google") as TtsProvider;
+  const languages    = (reqUrl.searchParams.get("languages") ?? "en,hi").split(",").map(l => l.trim()).filter(Boolean);
+  const scriptProvider = reqUrl.searchParams.get("scriptProvider");
+  const scriptModel    = reqUrl.searchParams.get("scriptModel");
+  const ttsModel       = reqUrl.searchParams.get("ttsModel");
+
+  // Apply per-request model overrides via env vars (safe: generation is gated to one job at a time)
+  if (scriptProvider) process.env.SCRIPT_PROVIDER   = scriptProvider;
+  if (scriptModel)    process.env.OPENAI_SCRIPT_MODEL = scriptModel;
+  if (ttsModel)       process.env.OPENAI_TTS_MODEL    = ttsModel;
 
   generating = true;
   runningJob = `generate:${provider}`;
@@ -254,8 +262,10 @@ export async function handlePatchTTS(request: Request): Promise<Response> {
     try { writer.write(enc.encode(`data: ${JSON.stringify(data)}\n\n`)); } catch {}
   };
 
-  const patchReqUrl = new URL(request.url, "http://localhost");
+  const patchReqUrl   = new URL(request.url, "http://localhost");
   const patchProvider = (patchReqUrl.searchParams.get("provider") ?? "google") as TtsProvider;
+  const patchTtsModel = patchReqUrl.searchParams.get("ttsModel");
+  if (patchTtsModel) process.env.OPENAI_TTS_MODEL = patchTtsModel;
 
   generating = true;
   runningJob = `patch-tts:${patchProvider}`;

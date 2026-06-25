@@ -509,6 +509,34 @@ function adminPage(supabaseUrl, supabaseKey) {
     /* Spinner */
     @keyframes spin { to { transform: rotate(360deg); } }
     .spin { animation: spin 0.8s linear infinite; display: inline-block; }
+
+    /* Config row — pill-style selector */
+    .config-row {
+      display: flex; align-items: center; gap: 6px;
+      margin-bottom: 10px; flex-wrap: wrap;
+    }
+    .config-label {
+      font-size: 10px; font-weight: 600; letter-spacing: .08em;
+      text-transform: uppercase; color: var(--muted);
+      min-width: 70px; flex-shrink: 0;
+    }
+    .config-row label {
+      display: inline-flex; align-items: center; gap: 0;
+      cursor: pointer; font-size: 12px; font-weight: 500;
+      padding: 5px 11px; border-radius: 999px;
+      border: 1px solid var(--border); color: var(--muted);
+      transition: all 0.15s; user-select: none;
+    }
+    .config-row label:has(input:checked) {
+      background: var(--primary); color: var(--primary-fg);
+      border-color: transparent;
+    }
+    .config-row label:hover:not(:has(input:checked)) {
+      color: var(--fg); border-color: oklch(1 0 0 / 18%);
+    }
+    .config-row input[type="radio"],
+    .config-row input[type="checkbox"] { display: none; }
+    .config-note { font-size: 11px; color: var(--muted); margin-left: 4px; }
   </style>
 </head>
 <body>
@@ -572,45 +600,36 @@ function adminPage(supabaseUrl, supabaseKey) {
       </div>
       <div style="height:16px;"></div>
       <div class="group">
-        <div class="gen-sub">Regenerate today's briefing if missing or outdated.</div>
-        <div style="display:flex;align-items:center;gap:16px;margin-bottom:10px;font-size:13px;flex-wrap:wrap;">
-          <span style="color:var(--muted);font-weight:600;letter-spacing:.04em;text-transform:uppercase;font-size:11px;">TTS</span>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-            <input type="radio" name="tts-provider" value="edge" checked style="accent-color:#6366f1;">
-            <span>Edge <span style="color:var(--muted);font-size:11px;">(free)</span></span>
-          </label>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-            <input type="radio" name="tts-provider" value="kokoro" style="accent-color:#6366f1;">
-            <span>Kokoro <span style="color:var(--muted);font-size:11px;">(free, EN only)</span></span>
-          </label>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-            <input type="radio" name="tts-provider" value="google" style="accent-color:#6366f1;">
-            <span>Google</span>
-          </label>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-            <input type="radio" name="tts-provider" value="elevenlabs" style="accent-color:#6366f1;">
-            <span>ElevenLabs</span>
-          </label>
+        <div class="gen-sub">Regenerate today's briefing from scratch.</div>
+
+        <!-- Scripting provider -->
+        <div class="config-row">
+          <span class="config-label">Scripting</span>
+          <label><input type="radio" name="script-provider" value="gemini" checked><span>Gemini Flash <span class="config-note">(free)</span></span></label>
+          <label><input type="radio" name="script-provider" value="openai-4o"><span>GPT-4o</span></label>
+          <label><input type="radio" name="script-provider" value="openai-4omini"><span>GPT-4o Mini</span></label>
         </div>
-        <div style="display:flex;align-items:center;gap:16px;margin-bottom:14px;font-size:13px;flex-wrap:wrap;">
-          <span style="color:var(--muted);font-weight:600;letter-spacing:.04em;text-transform:uppercase;font-size:11px;">Languages</span>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-            <input type="checkbox" name="gen-lang" value="en" checked style="accent-color:#6366f1;">
-            <span>English</span>
-          </label>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-            <input type="checkbox" name="gen-lang" value="hi" checked style="accent-color:#6366f1;">
-            <span>हिंदी</span>
-          </label>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-            <input type="checkbox" name="gen-lang" value="ta" style="accent-color:#6366f1;">
-            <span>தமிழ் <span style="color:var(--muted);font-size:11px;">(Edge only)</span></span>
-          </label>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-            <input type="checkbox" name="gen-lang" value="mr" style="accent-color:#6366f1;">
-            <span>मराठी <span style="color:var(--muted);font-size:11px;">(Edge only)</span></span>
-          </label>
+
+        <!-- TTS provider -->
+        <div class="config-row">
+          <span class="config-label">TTS</span>
+          <label><input type="radio" name="tts-provider" value="edge" checked><span>Edge <span class="config-note">(free)</span></span></label>
+          <label><input type="radio" name="tts-provider" value="openai-tts1"><span>OpenAI TTS-1</span></label>
+          <label><input type="radio" name="tts-provider" value="openai-ttsHD"><span>OpenAI TTS-HD</span></label>
+          <label><input type="radio" name="tts-provider" value="google"><span>Google</span></label>
+          <label><input type="radio" name="tts-provider" value="elevenlabs"><span>ElevenLabs</span></label>
+          <label><input type="radio" name="tts-provider" value="kokoro"><span>Kokoro <span class="config-note">(EN)</span></span></label>
         </div>
+
+        <!-- Languages -->
+        <div class="config-row" style="margin-bottom:16px;">
+          <span class="config-label">Languages</span>
+          <label><input type="checkbox" name="gen-lang" value="en" checked><span>EN</span></label>
+          <label><input type="checkbox" name="gen-lang" value="hi" checked><span>HI</span></label>
+          <label><input type="checkbox" name="gen-lang" value="ta"><span>TA</span></label>
+          <label><input type="checkbox" name="gen-lang" value="mr"><span>MR</span></label>
+        </div>
+
         <button class="btn-primary" id="gen-btn" onclick="runGenerate()">Generate now</button>
         <div id="gen-log" class="log-terminal"></div>
       </div>
@@ -628,25 +647,15 @@ function adminPage(supabaseUrl, supabaseKey) {
       </div>
       <div style="height:12px;"></div>
       <div class="group">
-        <div class="gen-sub">Generate audio for stories that already have scripts but no audio (e.g. after a quota reset).</div>
-        <div style="display:flex;align-items:center;gap:16px;margin-bottom:10px;font-size:13px;">
-          <span style="color:var(--muted);font-weight:600;letter-spacing:.04em;text-transform:uppercase;font-size:11px;">TTS</span>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-            <input type="radio" name="tts-patch-provider" value="edge" checked style="accent-color:#6366f1;">
-            <span>Edge <span style="color:var(--muted);font-size:11px;">(free)</span></span>
-          </label>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-            <input type="radio" name="tts-patch-provider" value="kokoro" style="accent-color:#6366f1;">
-            <span>Kokoro <span style="color:var(--muted);font-size:11px;">(free, EN only)</span></span>
-          </label>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-            <input type="radio" name="tts-patch-provider" value="google" style="accent-color:#6366f1;">
-            <span>Google</span>
-          </label>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-            <input type="radio" name="tts-patch-provider" value="elevenlabs" style="accent-color:#6366f1;">
-            <span>ElevenLabs</span>
-          </label>
+        <div class="gen-sub">Generate audio for stories that have scripts but no audio (e.g. after quota reset).</div>
+        <div class="config-row" style="margin-bottom:14px;">
+          <span class="config-label">TTS</span>
+          <label><input type="radio" name="tts-patch-provider" value="edge" checked><span>Edge <span class="config-note">(free)</span></span></label>
+          <label><input type="radio" name="tts-patch-provider" value="openai-tts1"><span>OpenAI TTS-1</span></label>
+          <label><input type="radio" name="tts-patch-provider" value="openai-ttsHD"><span>OpenAI TTS-HD</span></label>
+          <label><input type="radio" name="tts-patch-provider" value="google"><span>Google</span></label>
+          <label><input type="radio" name="tts-patch-provider" value="elevenlabs"><span>ElevenLabs</span></label>
+          <label><input type="radio" name="tts-patch-provider" value="kokoro"><span>Kokoro <span class="config-note">(EN)</span></span></label>
         </div>
         <button class="btn-primary" id="tts-btn" onclick="runPatchTTS()">Patch missing TTS</button>
         <div id="tts-log" class="log-terminal"></div>
@@ -908,14 +917,25 @@ function adminPage(supabaseUrl, supabaseKey) {
     startPolling();
 
     try {
-      const provider = document.querySelector('input[name="tts-provider"]:checked')?.value ?? 'edge';
+      // Script provider + model
+      const scriptRaw = document.querySelector('input[name="script-provider"]:checked')?.value ?? 'gemini';
+      const scriptProvider = scriptRaw.startsWith('openai') ? 'openai' : 'gemini';
+      const scriptModel = scriptRaw === 'openai-4o' ? 'gpt-4o' : scriptRaw === 'openai-4omini' ? 'gpt-4o-mini' : 'gemini-2.5-flash';
+
+      // TTS provider + model
+      const ttsRaw = document.querySelector('input[name="tts-provider"]:checked')?.value ?? 'edge';
+      const ttsProvider = ttsRaw.startsWith('openai') ? 'openai' : ttsRaw;
+      const ttsModel = ttsRaw === 'openai-tts1' ? 'tts-1' : ttsRaw === 'openai-ttsHD' ? 'tts-1-hd' : '';
+
       const selectedLangs = [...document.querySelectorAll('input[name="gen-lang"]:checked')].map(el => el.value);
       if (selectedLangs.length === 0) {
         appendLog('error', 'Select at least one language before generating.');
         btn.disabled = false; btn.textContent = 'Generate now';
         return;
       }
-      const r = await fetch('/api/admin/generate?provider=' + provider + '&languages=' + selectedLangs.join(','), { method: 'POST', headers: { 'x-admin-key': AKEY } });
+      const params = new URLSearchParams({ provider: ttsProvider, languages: selectedLangs.join(','), scriptProvider, scriptModel });
+      if (ttsModel) params.set('ttsModel', ttsModel);
+      const r = await fetch('/api/admin/generate?' + params, { method: 'POST', headers: { 'x-admin-key': AKEY } });
       if (r.status === 409) {
         appendLog('log', 'Generation already in progress — check back in a few minutes.');
         btn.disabled = false; btn.textContent = 'Regenerate';
@@ -1121,8 +1141,12 @@ function adminPage(supabaseUrl, supabaseKey) {
     startPolling();
 
     try {
-      const patchProvider = document.querySelector('input[name="tts-patch-provider"]:checked')?.value ?? 'google';
-      const r = await fetch('/api/admin/patch-tts?provider=' + patchProvider, { method: 'POST', headers: { 'x-admin-key': AKEY } });
+      const ttsPatchRaw = document.querySelector('input[name="tts-patch-provider"]:checked')?.value ?? 'edge';
+      const ttsPatchProvider = ttsPatchRaw.startsWith('openai') ? 'openai' : ttsPatchRaw;
+      const ttsPatchModel = ttsPatchRaw === 'openai-tts1' ? 'tts-1' : ttsPatchRaw === 'openai-ttsHD' ? 'tts-1-hd' : '';
+      const patchParams = new URLSearchParams({ provider: ttsPatchProvider });
+      if (ttsPatchModel) patchParams.set('ttsModel', ttsPatchModel);
+      const r = await fetch('/api/admin/patch-tts?' + patchParams, { method: 'POST', headers: { 'x-admin-key': AKEY } });
       if (r.status === 409) {
         appendTTSLog('log', 'Generation already in progress — check back shortly.');
         btn.disabled = false; btn.textContent = 'Patch missing TTS';

@@ -7,7 +7,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Play, Pause, SkipBack, SkipForward } from "lucide-react";
 import { VoiceOrb } from "@/components/VoiceOrb";
 
-import { StoryCard, SECTION_COLOR } from "@/components/StoryCard";
+import { StoryCard } from "@/components/StoryCard";
 import { PlayerScreen }      from "@/components/PlayerScreen";
 import { StoryDetailSheet }  from "@/components/StoryDetailSheet";
 import { BottomNav }         from "@/components/BottomNav";
@@ -311,9 +311,8 @@ function HomePage() {
             style={{ scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}
           >
             {(["all", ...storiesBySection.map(g => g.sectionId)] as const).map((id) => {
-              const feed   = id === "all" ? null : FEED_MAP.get(id);
-              const label  = id === "all" ? "All" : (feed?.label ?? id);
-              const accent = id === "all" ? "#7B5CF0" : (SECTION_COLOR[id] ?? "#7B5CF0");
+              const feed     = id === "all" ? null : FEED_MAP.get(id);
+              const label    = id === "all" ? "All" : (feed?.label ?? id);
               const isActive = activeSection === id;
               return (
                 <button
@@ -321,8 +320,8 @@ function HomePage() {
                   onClick={() => setActiveSection(id)}
                   className="shrink-0 rounded-full px-3.5 py-1 text-xs font-semibold transition-all whitespace-nowrap"
                   style={isActive
-                    ? { background: accent, color: "#fff" }
-                    : { background: "transparent", color: accent }}
+                    ? { background: "rgba(255,255,255,0.92)", color: "#0c0717" }
+                    : { background: "transparent", color: "rgba(255,255,255,0.45)" }}
                 >
                   {label}
                 </button>
