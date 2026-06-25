@@ -541,14 +541,7 @@ function mergeDuplicateEvents(events: SelectedEvent[]): { merged: SelectedEvent[
       if (titlesSimilar(toks, keptTokens[i])) { target = i; break; }
     }
     if (target >= 0) {
-      const k = kept[target];
-      const seen = new Set(k.sourceStories.map(s => s.id));
-      for (const s of ev.sourceStories) if (!seen.has(s.id)) k.sourceStories.push(s);
-      k.publishers      = [...new Set(k.sourceStories.map(s => s.source))];
-      k.publisherCount  = k.publishers.length;
-      if (!k.imageUrl) k.imageUrl = ev.imageUrl;
-      k.inHeadlinesFeed = k.inHeadlinesFeed || ev.inHeadlinesFeed;
-      if (!k.whyImportant && ev.whyImportant) k.whyImportant = ev.whyImportant;
+      foldEventInto(kept[target], ev);
       // Accumulate tokens so later variants of the same story still match the cluster
       for (const w of toks) keptTokens[target].add(w);
       removed++;
@@ -558,6 +551,64 @@ function mergeDuplicateEvents(events: SelectedEvent[]): { merged: SelectedEvent[
     }
   }
   return { merged: kept, removed };
+}
+
+/** Fold dup's sources/metadata into keep (in place). */
+function foldEventInto(keep: SelectedEvent, dup: SelectedEvent): void {
+  const seen = new Set(keep.sourceStories.map(s => s.id));
+  for (const s of dup.sourceStories) if (!seen.has(s.id)) { keep.sourceStories.push(s); seen.add(s.id); }
+  keep.publishers      = [...new Set(keep.sourceStories.map(s => s.source))];
+  keep.publisherCount  = keep.publishers.length;
+  if (!keep.imageUrl) keep.imageUrl = dup.imageUrl;
+  keep.inHeadlinesFeed = keep.inHeadlinesFeed || dup.inHeadlinesFeed;
+  if (!keep.whyImportant && dup.whyImportant) keep.whyImportant = dup.whyImportant;
+}
+
+/**
+ * Second-pass semantic dedupe: a focused LLM call over the selected titles.
+ * Title-token overlap misses same-event stories worded very differently (e.g.
+ * the same flooding reported five ways). This asks the model to group ONLY
+ * true same-event duplicates — different cities/cases stay separate.
+ */
+async function llmDedupeEvents(events: SelectedEvent[], logger: Logger): Promise<SelectedEvent[]> {
+  if (events.length < 3) return events;
+  const list = events.map((e, i) => `${i}. [${e.section}] ${e.title}`).join("\n");
+  const prompt = `Below are ${events.length} news headlines selected for one briefing. Some are the SAME news event reported by different outlets or worded differently — those are duplicates.
+
+Group the indices that refer to the SAME single event (same incident, ruling, announcement, statement, match, or disaster).
+
+STRICT: only group TRUE duplicates of one event. Do NOT group stories that merely share a topic but are different events — e.g. heavy rain in two DIFFERENT cities, two DIFFERENT court cases, separate accidents, or different companies' results are all DISTINCT and must stay separate.
+
+Return JSON only: {"groups": [[2,7],[4,9,12]]} — include only groups of 2+ indices that are the same event. If there are no duplicates, return {"groups": []}.
+
+Headlines:
+${list}`;
+
+  let raw: any;
+  try {
+    raw = await aiJson(prompt, CLUSTER_MODEL, 4096);
+  } catch (err: any) {
+    logger(`  dedupe pass skipped: ${err.message?.slice(0, 60)}`);
+    return events;
+  }
+  const groups: any[] = Array.isArray(raw?.groups) ? raw.groups : [];
+  if (groups.length === 0) return events;
+
+  const removed = new Set<number>();
+  for (const g of groups) {
+    if (!Array.isArray(g)) continue;
+    const idxs = [...new Set(g.filter((i: any) => Number.isInteger(i) && i >= 0 && i < events.length && !removed.has(i)))]
+      .sort((a: number, b: number) => a - b);
+    if (idxs.length < 2) continue;
+    const keep = events[idxs[0]];
+    for (let j = 1; j < idxs.length; j++) {
+      foldEventInto(keep, events[idxs[j]]);
+      removed.add(idxs[j]);
+    }
+  }
+  if (removed.size === 0) return events;
+  logger(`LLM dedupe merged ${removed.size} duplicate event(s)`);
+  return events.filter((_, i) => !removed.has(i));
 }
 
 // ─── Step 4: Cluster same-event articles (single AI call) ────────────────────
@@ -702,12 +753,15 @@ ${articleList}`;
     }
   }
 
-  // Deterministic near-duplicate merge (safety net for missed clustering)
+  // Deterministic near-duplicate merge (cheap safety net for missed clustering)
   const { merged, removed } = mergeDuplicateEvents(events);
   if (removed > 0) logger(`Merged ${removed} near-duplicate event(s) by title overlap`);
 
+  // Second pass: focused LLM dedupe catches same-event stories worded differently
+  const deduped = await llmDedupeEvents(merged, logger);
+
   // Hard cap — keep the most important after de-duping
-  const capped = merged.slice(0, maxStories);
+  const capped = deduped.slice(0, maxStories);
   logger(`Clustered into ${capped.length} events (target: ${maxStories}, ~${Math.round(capped.length * WORDS_PER_STORY / WORDS_PER_MINUTE)} min)`);
   return capped;
 }
