@@ -7,7 +7,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Play, Pause, SkipBack, SkipForward } from "lucide-react";
 import { VoiceOrb } from "@/components/VoiceOrb";
 
-import { StoryCard }         from "@/components/StoryCard";
+import { StoryCard, SECTION_COLOR } from "@/components/StoryCard";
 import { PlayerScreen }      from "@/components/PlayerScreen";
 import { StoryDetailSheet }  from "@/components/StoryDetailSheet";
 import { BottomNav }         from "@/components/BottomNav";
@@ -307,23 +307,22 @@ function HomePage() {
           {/* Section pills */}
           <div
             ref={pillsRef}
-            className="flex gap-1.5 overflow-x-auto px-4 pb-3 scrollbar-none"
-            style={{ scrollbarWidth: "none" }}
+            className="flex gap-2 overflow-x-auto px-4 pb-3"
+            style={{ scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}
           >
             {(["all", ...storiesBySection.map(g => g.sectionId)] as const).map((id) => {
-              const feed = id === "all" ? null : FEED_MAP.get(id);
-              const label = id === "all" ? "All" : (feed?.label ?? id);
+              const feed   = id === "all" ? null : FEED_MAP.get(id);
+              const label  = id === "all" ? "All" : (feed?.label ?? id);
+              const accent = id === "all" ? "#7B5CF0" : (SECTION_COLOR[id] ?? "#7B5CF0");
               const isActive = activeSection === id;
               return (
                 <button
                   key={id}
                   onClick={() => setActiveSection(id)}
-                  className={[
-                    "shrink-0 rounded-full px-3.5 py-1 text-xs font-medium transition-all whitespace-nowrap",
-                    isActive
-                      ? "bg-foreground text-background"
-                      : "bg-muted text-muted-foreground hover:text-foreground",
-                  ].join(" ")}
+                  className="shrink-0 rounded-full px-3.5 py-1 text-xs font-semibold transition-all whitespace-nowrap"
+                  style={isActive
+                    ? { background: accent, color: "#fff" }
+                    : { background: `${accent}18`, color: accent }}
                 >
                   {label}
                 </button>
