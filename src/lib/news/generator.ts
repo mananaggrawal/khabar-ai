@@ -1116,8 +1116,9 @@ SCRIPT STRUCTURE
    How does this affect a retired Indian in a tier-1 or tier-2 city?
    Think: savings, pension, family safety, cost of living, governance.
 
-4. WHAT IS NEXT (1 sentence)
-   What should the listener watch for? Keep the story alive.
+4. CLOSING LINE (1 sentence)
+   End with a grounded, factual observation — what this means or what comes next.
+   FORBIDDEN endings: "Watch for updates", "Stay tuned", "Keep an eye out", "We'll bring you", "Follow updates", "More details to follow", "Tune in", any call-to-action or tease.
 
 WRITING RULES
 - WORD COUNT: 160-200 words. Hard floor. Shorter = rejected and retried.
