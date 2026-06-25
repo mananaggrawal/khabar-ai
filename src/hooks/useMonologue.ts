@@ -415,6 +415,47 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
     }
   }, [state, play, pause, resume]);
 
+  // ── MediaSession API — enables background audio on iOS PWA ────────────────
+  // Without this, iOS suspends audio the moment you switch apps.
+  // With it, playback continues and Lock Screen / Control Centre controls work.
+
+  useEffect(() => {
+    if (!("mediaSession" in navigator)) return;
+    if (!currentStory) {
+      navigator.mediaSession.metadata = null;
+      return;
+    }
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title:  getStoryTitle(currentStory, language),
+      artist: currentFeed?.label ?? "Khabar AI",
+      album:  "Khabar AI — Today's Briefing",
+      artwork: currentStory.imageUrl
+        ? [{ src: currentStory.imageUrl, sizes: "512x512", type: "image/jpeg" }]
+        : [{ src: "/icon-512.png", sizes: "512x512", type: "image/png" }],
+    });
+  }, [currentStory, language, currentFeed]);
+
+  useEffect(() => {
+    if (!("mediaSession" in navigator)) return;
+    navigator.mediaSession.setActionHandler("play",          () => resume());
+    navigator.mediaSession.setActionHandler("pause",         () => pause());
+    navigator.mediaSession.setActionHandler("nexttrack",     () => next());
+    navigator.mediaSession.setActionHandler("previoustrack", () => prev());
+    navigator.mediaSession.setActionHandler("stop",          () => stop());
+    return () => {
+      (["play", "pause", "nexttrack", "previoustrack", "stop"] as const).forEach(a => {
+        try { navigator.mediaSession.setActionHandler(a, null); } catch {}
+      });
+    };
+  }, [resume, pause, next, prev, stop]);
+
+  useEffect(() => {
+    if (!("mediaSession" in navigator)) return;
+    navigator.mediaSession.playbackState =
+      state === "playing" ? "playing" :
+      state === "paused"  ? "paused"  : "none";
+  }, [state]);
+
   useEffect(() => () => {
     audioRef.current?.pause();
   }, []);
