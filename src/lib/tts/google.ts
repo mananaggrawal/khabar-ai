@@ -95,7 +95,7 @@ async function synthesizeRaw(script: string, style?: string, embedStyle = false)
   const model = getActiveModel();
   // Primary: pass style as system_instruction (better voice quality).
   // Fallback (embedStyle=true): prepend style in user text when system_instruction causes 500.
-  const text = (embedStyle && style) ? `${style}\n\n${script}` : script;
+  const text = (embedStyle && style) ? `[Voice style: ${style}]\n\n${script}` : script;
   const body: Record<string, unknown> = {
     contents: [{ parts: [{ text }], role: "user" }],
     generationConfig: {
@@ -233,25 +233,11 @@ export async function googleTTS(
     const pcm = await synthesizeWithRetry(script, filename, style, 3, false);
     return saveWav(pcmToWav(pcm), filename);
   } catch (err: any) {
-    if (isOtherErr(err)) {
-      // Safety filter — skip straight to bare (no style makes content less likely to trigger)
-      console.warn(`[tts/google] ${filename}: safety filter (OTHER) on styled request, trying bare…`);
-    } else if (is5xxErr(err)) {
-      // Server error — try embedded style next
-      console.warn(`[tts/google] ${filename}: system_instruction failed (5xx), trying embedded style…`);
-      try {
-        const pcm = await synthesizeWithRetry(script, filename, style, 2, true);
-        return saveWav(pcmToWav(pcm), filename);
-      } catch (err2: any) {
-        if (!is5xxErr(err2) && !isOtherErr(err2)) throw err2;
-        console.warn(`[tts/google] ${filename}: embedded style failed, trying bare…`);
-      }
-    } else {
-      throw err;
-    }
+    if (!isOtherErr(err) && !is5xxErr(err)) throw err;
+    console.warn(`[tts/google] ${filename}: system_instruction failed (${isOtherErr(err) ? "OTHER" : "5xx"}), trying embedded style…`);
   }
 
-  // Final attempt: bare (no style — lowest chance of safety filter / server errors)
-  const pcm = await synthesizeWithRetry(script, filename, undefined, 2, false);
+  // Attempt 2: style embedded in text — always keep Indian English style, never go bare
+  const pcm = await synthesizeWithRetry(script, filename, style, 3, true);
   return saveWav(pcmToWav(pcm), filename);
 }
