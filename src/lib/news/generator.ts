@@ -495,6 +495,71 @@ async function fetchArticleText(url: string): Promise<string> {
   } catch { return ""; }
 }
 
+// ─── Near-duplicate event merge (deterministic safety net) ───────────────────
+// LLM clustering can miss same-event articles, and uncovered articles get
+// appended as solo events — so the same story can slip through several times.
+// This merges events whose titles overlap heavily (same story, different
+// wording/publisher), keeping the earlier/more-important one and folding in the
+// other's sources. Runs regardless of what the model returned.
+
+const TITLE_STOPWORDS = new Set([
+  "the","a","an","of","to","in","on","for","and","or","is","are","as","at","by","with",
+  "from","after","over","amid","into","be","will","its","it","this","that","new","says",
+  "said","say","not","no","up","out","off","than","then","but","has","have","had","was",
+  "were","who","what","why","how","amp","get","gets","may","can",
+]);
+
+function titleTokens(title: string): Set<string> {
+  return new Set(
+    title.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/)
+      .filter(w => w.length > 2 && !TITLE_STOPWORDS.has(w)),
+  );
+}
+
+function titlesSimilar(a: Set<string>, b: Set<string>): boolean {
+  if (a.size === 0 || b.size === 0) return false;
+  let inter = 0;
+  for (const w of a) if (b.has(w)) inter++;
+  if (inter < 2) return false; // need at least 2 shared content words
+  const union       = a.size + b.size - inter;
+  const jaccard     = inter / union;
+  const containment = inter / Math.min(a.size, b.size);
+  // Same story worded differently → high token overlap, or one title's content
+  // words are mostly contained in the other's.
+  return jaccard >= 0.5 || containment >= 0.6;
+}
+
+function mergeDuplicateEvents(events: SelectedEvent[]): { merged: SelectedEvent[]; removed: number } {
+  const kept: SelectedEvent[] = [];
+  const keptTokens: Set<string>[] = [];
+  let removed = 0;
+
+  for (const ev of events) {
+    const toks = titleTokens(ev.title);
+    let target = -1;
+    for (let i = 0; i < kept.length; i++) {
+      if (titlesSimilar(toks, keptTokens[i])) { target = i; break; }
+    }
+    if (target >= 0) {
+      const k = kept[target];
+      const seen = new Set(k.sourceStories.map(s => s.id));
+      for (const s of ev.sourceStories) if (!seen.has(s.id)) k.sourceStories.push(s);
+      k.publishers      = [...new Set(k.sourceStories.map(s => s.source))];
+      k.publisherCount  = k.publishers.length;
+      if (!k.imageUrl) k.imageUrl = ev.imageUrl;
+      k.inHeadlinesFeed = k.inHeadlinesFeed || ev.inHeadlinesFeed;
+      if (!k.whyImportant && ev.whyImportant) k.whyImportant = ev.whyImportant;
+      // Accumulate tokens so later variants of the same story still match the cluster
+      for (const w of toks) keptTokens[target].add(w);
+      removed++;
+    } else {
+      kept.push(ev);
+      keptTokens.push(toks);
+    }
+  }
+  return { merged: kept, removed };
+}
+
 // ─── Step 4: Cluster same-event articles (single AI call) ────────────────────
 
 async function clusterAndSelect(
@@ -516,8 +581,8 @@ Here are ${stories.length} articles from today's Google News feeds (India, World
 ★ = appeared on Google's homepage — stronger editorial signal.
 
 TASK:
-1. Group articles that cover the EXACT same event or announcement into clusters.
-2. Cover as many DISTINCT events as possible — up to ${maxStories}. Aim to include every unique story; only leave one out if you've hit the limit. Never drop a unique event just to keep the list short.
+1. Group every article about the same underlying event into ONE cluster — even when the headlines are worded differently or come from different publishers. Be aggressive about merging: if two headlines describe the same ruling, announcement, incident, or statement, they are the SAME event and must share one cluster. Put every article index covering that event in its sourceIndices.
+2. Cover as many genuinely DISTINCT events as possible — up to ${maxStories}. Include every unique story, but never list the same event twice.
 3. Order from most to least important.
 4. Balance sections — aim for at least 4 events per section where news exists; no single section should exceed ${perSectionCap} events.
 
@@ -623,8 +688,9 @@ ${articleList}`;
     });
   }
 
-  // Uncovered stories → append as solo events (only if still under cap)
-  for (let i = 0; i < stories.length && events.length < maxStories; i++) {
+  // Uncovered stories → append as solo events (dedupe pass below removes any
+  // that are really the same story the model already clustered)
+  for (let i = 0; i < stories.length; i++) {
     if (!covered.has(i)) {
       const s = stories[i];
       events.push({
@@ -636,8 +702,12 @@ ${articleList}`;
     }
   }
 
-  // Hard cap — AI may return slightly more than requested
-  const capped = events.slice(0, maxStories);
+  // Deterministic near-duplicate merge (safety net for missed clustering)
+  const { merged, removed } = mergeDuplicateEvents(events);
+  if (removed > 0) logger(`Merged ${removed} near-duplicate event(s) by title overlap`);
+
+  // Hard cap — keep the most important after de-duping
+  const capped = merged.slice(0, maxStories);
   logger(`Clustered into ${capped.length} events (target: ${maxStories}, ~${Math.round(capped.length * WORDS_PER_STORY / WORDS_PER_MINUTE)} min)`);
   return capped;
 }
