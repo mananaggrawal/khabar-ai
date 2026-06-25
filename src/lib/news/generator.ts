@@ -156,26 +156,25 @@ type ClusteredEvent = {
 
 const TARGET_WPM = 150;
 
-// No roundup clubbing — every story gets its own full script.
-const ROUNDUP_SECTIONS = new Set<SectionId>([]);
+// Minor sections clubbed into one roundup segment each.
+// If only 1 story passes in a roundup section it stays individual.
+const ROUNDUP_SECTIONS = new Set<SectionId>(["health", "entertainment", "science", "local"]);
 
-// Score threshold — lowered to let more stories through.
-// Full day coverage is the goal; score is a deprioritisation tool, not a gate.
+// Score threshold — low enough to not miss anything real.
 const MIN_SCORE_THRESHOLD = 1.5;
-// Hard safety valve only.
-const MAX_TOTAL_STORIES   = 60;
 
-// Guaranteed minimum slots per section — backfilled even if score < threshold.
+// Pre-clubbing cap. Post-clubbing lands ~30 segments (≈15-18 min listen).
+const MAX_TOTAL_STORIES = 55;
+
+// Guaranteed individual slots — India/Business/World get the most.
+// Roundup sections (health/entertainment/science/local) handled by ROUNDUP_SECTIONS.
 const MIN_SECTION_SLOTS: Partial<Record<SectionId, number>> = {
-  india:         5,
-  business:      3,
-  world:         3,
-  sports:        2,
-  health:        2,
-  technology:    2,
-  entertainment: 1,
-  science:       1,
-  local:         1,
+  headlines:  5,
+  india:      5,
+  business:   5,
+  world:      5,
+  sports:     3,
+  technology: 3,
 };
 
 const SECTION_ORDER: SectionId[] = [
@@ -1256,13 +1255,15 @@ async function scriptRoundupGroup(
   logger: Logger,
   languages: string[],
 ): Promise<ScriptedEvent> {
-  const items = ev.roundupGroup!;
+  // Cap at 4 items max for roundup — keeps it punchy and under 30s
+  const allItems = ev.roundupGroup!;
+  const items = allItems.slice(0, 4);
   const label = FEED_MAP.get(ev.assignedSection)?.label ?? ev.assignedSection;
   const withTa = languages.includes("ta");
   const withMr = languages.includes("mr");
 
   const itemsPayload = items.map((item, i) =>
-    `${i + 1}. ${item.canonicalTitle} (${item.publisherCount} publishers)\n   ${item.sourceStories[0]?.description?.replace(/<[^>]+>/g, "").trim().slice(0, 150) ?? ""}`
+    `${i + 1}. ${item.canonicalTitle} (score: ${item.importanceScore.toFixed(1)})\n   ${item.sourceStories[0]?.description?.replace(/<[^>]+>/g, "").trim().slice(0, 200) ?? ""}`
   ).join("\n\n");
 
   const extraFields = [
@@ -1270,13 +1271,13 @@ async function scriptRoundupGroup(
     withMr ? `"titleMr":"...","scriptMr":"..."` : "",
   ].filter(Boolean).join(",");
 
-  const prompt = `You are Khabar AI. Write a single flowing spoken-audio roundup segment for the "${label}" section covering ${items.length} brief stories.
+  const prompt = `You are Khabar AI. Write a quick spoken roundup for the "${label}" section. Aaj Tak style — rapid-fire, zero fluff.
 
-STYLE: Tight, punchy delivery. No hook/structure — just the facts with natural connectors between items.
- ("Meanwhile in tech...", "Also worth noting...", "And finally...").
-WORD COUNT: ${items.length * 55}–${items.length * 70} words total. Each item gets 1-2 sentences max.
-NEVER start with "In ${label} news" or "${label} roundup" — jump straight into the first story.
-NEVER invent facts. Keep numbers and names precise.
+Cover these ${items.length} stories in 55-75 words total. Each story gets 1 punchy sentence — just the key fact.
+Use natural connectors: "Also,", "Meanwhile,", "And," — keep it flowing, not a list.
+NEVER open with "In ${label}" or "${label} roundup" — jump straight into the first fact.
+FORBIDDEN: "reportedly", "sources say", tease endings, demographic mentions.
+NEVER invent facts.
 
 Also provide:
 - title: Short English label like "${label} Roundup"
