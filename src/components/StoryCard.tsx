@@ -1,40 +1,41 @@
-import { Play, Pause, Globe, TrendingUp, Trophy, Zap, LandmarkIcon } from "lucide-react";
+import { Play, Flame, LandmarkIcon, Globe, TrendingUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Story } from "@/lib/news/generator";
 import { FEED_MAP, type SectionId } from "@/lib/news/sources";
 import { getStoryTitle } from "@/hooks/useMonologue";
 
-// Per-section accent colors — used for left border + label
+// Per-section accent colors
 export const SECTION_COLOR: Record<SectionId, string> = {
-  politics: "#E05A2B",
-  world:    "#0D9488",
-  business: "#16A34A",
-  sports:   "#DC2626",
-  techlife: "#7B5CF0",
+  headlines: "#EF4444",
+  india:     "#F97316",
+  world:     "#0D9488",
+  business:  "#16A34A",
 };
 
-// Legacy section names → new section (for briefings generated before the taxonomy change)
+// Legacy section names → new section (backward compat for old briefings)
 const LEGACY_SECTION: Record<string, SectionId> = {
-  headlines: "politics",
-  india:     "politics",
-  local:     "politics",
-  technology:"techlife",
-  entertainment:"techlife",
-  science:   "techlife",
-  health:    "techlife",
+  politics:      "india",
+  local:         "india",
+  sports:        "india",
+  techlife:      "india",
+  technology:    "india",
+  entertainment: "india",
+  science:       "india",
+  health:        "india",
 };
 
 function resolveSection(s: string): SectionId {
-  return LEGACY_SECTION[s] ?? (s as SectionId);
+  if (s in LEGACY_SECTION) return LEGACY_SECTION[s];
+  if (["headlines", "india", "world", "business"].includes(s)) return s as SectionId;
+  return "india";
 }
 
 // Lucide icon per section
 const SECTION_ICON: Record<SectionId, React.ReactNode> = {
-  politics: <LandmarkIcon className="size-5" />,
-  world:    <Globe        className="size-5" />,
-  business: <TrendingUp   className="size-5" />,
-  sports:   <Trophy       className="size-5" />,
-  techlife: <Zap          className="size-5" />,
+  headlines: <Flame        className="size-5" />,
+  india:     <LandmarkIcon className="size-5" />,
+  world:     <Globe        className="size-5" />,
+  business:  <TrendingUp   className="size-5" />,
 };
 
 function WaveformIcon() {
@@ -74,10 +75,10 @@ interface StoryCardProps {
 
 export function StoryCard({ story, isPlaying, hasAudio, language = "en", onPlay, onPause, onTap }: StoryCardProps) {
   const section = resolveSection(story.section);
-  const feed = FEED_MAP.get(section);
-  const accent = SECTION_COLOR[section] ?? "#7B5CF0";
-  const displayTitle = getStoryTitle(story, language ?? "en");
-  const sectionLabel = language === "hi" ? (feed?.labelHi ?? feed?.label ?? story.section) : (feed?.label ?? story.section);
+  const feed    = FEED_MAP.get(section);
+  const accent  = SECTION_COLOR[section] ?? "#EF4444";
+  const displayTitle  = getStoryTitle(story, language ?? "en");
+  const sectionLabel  = language === "hi" ? (feed?.labelHi ?? feed?.label ?? story.section) : (feed?.label ?? story.section);
 
   return (
     <div
@@ -94,7 +95,7 @@ export function StoryCard({ story, isPlaying, hasAudio, language = "en", onPlay,
       )}
       style={{ borderLeftColor: accent }}
     >
-      {/* Thumbnail — left */}
+      {/* Thumbnail */}
       {story.imageUrl ? (
         <div className="shrink-0">
           <img
@@ -124,12 +125,9 @@ export function StoryCard({ story, isPlaying, hasAudio, language = "en", onPlay,
         </div>
       )}
 
-      {/* Text — centre */}
+      {/* Text */}
       <div className="min-w-0 flex-1">
-        <p
-          className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]"
-          style={{ color: accent }}
-        >
+        <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]" style={{ color: accent }}>
           {sectionLabel}
         </p>
         <p className="text-sm font-medium leading-snug text-foreground line-clamp-2">
@@ -137,9 +135,8 @@ export function StoryCard({ story, isPlaying, hasAudio, language = "en", onPlay,
         </p>
       </div>
 
-      {/* Right actions */}
+      {/* Play button */}
       <div className="flex shrink-0 flex-col items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-        {/* Play / pause */}
         {hasAudio && (
           <button
             onClick={() => isPlaying ? onPause() : onPlay()}
@@ -152,9 +149,7 @@ export function StoryCard({ story, isPlaying, hasAudio, language = "en", onPlay,
             )}
             style={isPlaying ? { backgroundColor: accent } : undefined}
           >
-            {isPlaying
-              ? <WaveformIcon />
-              : <Play className="size-3.5 fill-current ml-0.5" />}
+            {isPlaying ? <WaveformIcon /> : <Play className="size-3.5 fill-current ml-0.5" />}
           </button>
         )}
       </div>

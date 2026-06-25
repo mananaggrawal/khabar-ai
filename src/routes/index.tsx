@@ -127,7 +127,10 @@ function HeroCard({
   const displayStory = mono.currentStory ?? briefing.stories[0];
 
   const withAudio = briefing.stories.filter((s) => !!getAudioUrl(s, mono.language));
-  const listenMins = Math.max(1, Math.round(withAudio.length * 1.5)); // ~1.5 min/story → 20 stories ≈ 30 min
+  // Use meta duration if available, else estimate from word counts (~150 WPM)
+  const listenMins = briefing.meta?.estimatedDurationSec
+    ? Math.max(1, Math.round(briefing.meta.estimatedDurationSec / 60))
+    : Math.max(1, Math.round(withAudio.reduce((n, s) => n + (s.wordCount ?? 115), 0) / 150));
   const today = new Date().toLocaleDateString("en-IN", {
     weekday: "short", day: "numeric", month: "long",
   });
@@ -243,13 +246,17 @@ function HomePage() {
 
   // Legacy section → new display section mapping (for old briefings)
   const LEGACY_SECTION: Record<string, SectionId> = {
-    headlines: "politics", india: "politics", local: "politics",
-    technology: "techlife", entertainment: "techlife", science: "techlife", health: "techlife",
+    politics: "india", local: "india", sports: "india",
+    techlife: "india", technology: "india", entertainment: "india", science: "india", health: "india",
   };
-  const resolveSection = (s: string): SectionId => (LEGACY_SECTION[s] ?? s) as SectionId;
+  const resolveSection = (s: string): SectionId => {
+    if (s in LEGACY_SECTION) return LEGACY_SECTION[s];
+    if (["headlines", "india", "world", "business"].includes(s)) return s as SectionId;
+    return "india";
+  };
 
   // Group stories by section in display order
-  const SECTION_DISPLAY_ORDER: SectionId[] = ["politics", "world", "business", "sports", "techlife"];
+  const SECTION_DISPLAY_ORDER: SectionId[] = ["headlines", "india", "world", "business"];
   const storiesBySection = SECTION_DISPLAY_ORDER
     .map(sectionId => ({
       sectionId,

@@ -71,7 +71,6 @@ export async function handleGenerate(request: Request): Promise<Response> {
         stories:     briefing.stories.length,
         elapsedSec:  rs?.elapsedSec    ?? 0,
         clusterSec:  rs?.clusterSec   ?? 0,
-        scoreSec:    rs?.scoreSec     ?? 0,
         scriptSec:   rs?.scriptSec    ?? 0,
         ttsSec:      rs?.ttsSec       ?? 0,
         rawStories:  rs?.rawStories   ?? 0,
