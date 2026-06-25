@@ -43,8 +43,8 @@ export async function handleGenerate(request: Request): Promise<Response> {
   };
 
   const reqUrl       = new URL(request.url, "http://localhost");
-  const provider     = (reqUrl.searchParams.get("provider") ?? "google") as TtsProvider;
-  const languages    = (reqUrl.searchParams.get("languages") ?? "en,hi").split(",").map(l => l.trim()).filter(Boolean);
+  const provider     = (reqUrl.searchParams.get("provider") ?? "edge") as TtsProvider;
+  const languages    = (reqUrl.searchParams.get("languages") ?? "en").split(",").map(l => l.trim()).filter(Boolean);
   const scriptProvider = reqUrl.searchParams.get("scriptProvider");
   const scriptModel    = reqUrl.searchParams.get("scriptModel");
   const ttsModel       = reqUrl.searchParams.get("ttsModel");

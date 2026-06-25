@@ -2,7 +2,7 @@
 
 A daily AI-powered news briefing app that delivers spoken news in a warm, conversational voice — like a smart friend catching you up on what happened today. Built as a personal tool for iPhone use.
 
-Pulls from Google News RSS feeds across 10 topic sections, merges related stories using Gemini, writes scripts in up to 4 Indian languages, and converts them to speech using Edge TTS (free) or Google Gemini TTS.
+Pulls from Google News RSS across 4 focused feeds, merges articles about the same event with a single LLM call, writes narrative English scripts with GPT-4o, and converts them to speech with Edge TTS (free) by default.
 
 ---
 
@@ -10,14 +10,16 @@ Pulls from Google News RSS feeds across 10 topic sections, merges related storie
 
 Khabar AI generates a daily briefing on demand (or via cron):
 
-1. Fetches headlines from Google News RSS across 10 sections (headlines, India, world, business, technology, entertainment, sports, science, health, local)
-2. Deduplicates stories across feeds, then groups related ones using Gemini Flash — so 5 articles on the same event become one richer story
-3. Writes conversational 70–100 word scripts per story in up to 4 languages: English, Hindi, Tamil, Marathi
-4. Validates each non-English script for correct unicode script (Devanagari / Tamil) and runs a fix-up pass for any that came back in the wrong language
-5. Converts scripts to speech — per-story per-language audio files stored in Supabase Storage
-6. Fetches OG images from source articles (in parallel with scripting) for visual cards
+1. Fetches 4 Google News RSS feeds in parallel — Top Stories (headlines), India, World, Business
+2. Deduplicates by URL hash + title prefix; articles on Google's homepage feed are flagged (★) as a stronger editorial signal
+3. Clusters articles about the same event and selects the top ~33 distinct events in one `gpt-4o-mini` call, ordered by importance and balanced across sections (target run length is `TARGET_MINUTES`, default 25)
+4. Writes a narrative ~110–130 word English script per event with `gpt-4o`, using the live-fetched body text of the top sources (NPR "Up First" tone, strict style rules, no invented facts)
+5. Converts each script to speech and stores per-story audio (Supabase Storage, or local files in `LOCAL_MODE`)
+6. Fetches OG images from source articles (in parallel with clustering) for visual cards
 
-Open the app, tap a section, and listen. Language is switchable on the fly from Settings. Tap any story card to see all the source articles it was assembled from.
+Open the app, tap a section, and listen. Tap any story card to see all the source articles it was assembled from.
+
+> **Scope note (v5):** the pipeline generates **English only**. Hindi/Tamil/Marathi voices exist in the TTS layer and the data model reserves fields for them, but scripting and audio are English in this version. Requesting other languages is ignored (and logged).
 
 ---
 
@@ -29,29 +31,21 @@ Open the app, tap a section, and listen. Language is switchable on the fly from 
 | Language | TypeScript |
 | Styling | Tailwind CSS v4 |
 | Auth | Supabase (Google OAuth) |
-| LLM | Google Gemini 2.5 Flash (scripting) |
-| TTS (default) | Microsoft Edge TTS via `msedge-tts` (free, 4 Indian language voices) |
-| TTS (quality) | Google Gemini 2.5 Flash TTS (paid, EN+HI only) |
-| TTS (legacy) | ElevenLabs Flash v2.5 (paid, EN+HI only) |
-| TTS (local) | Kokoro 82M ONNX (offline, EN only, delegates HI to Edge) |
-| Storage | Supabase Storage |
+| Scripting LLM | OpenAI `gpt-4o` (scripts) + `gpt-4o-mini` (clustering) — default |
+| Scripting fallback | Google Gemini 2.5 Flash (set `SCRIPT_PROVIDER=gemini`) |
+| TTS (default) | Microsoft Edge TTS via `msedge-tts` (free, no API key) |
+| TTS (options) | OpenAI TTS, Google Gemini TTS, ElevenLabs, Kokoro (local) |
+| Storage | Supabase Storage (or local files in `LOCAL_MODE`) |
 | Deployment | Render |
 | Cron | cron-job.org (external trigger) |
 
 ---
 
-## Languages & Voices
+## Provider Routing
 
-Four languages supported, all using Edge TTS by default:
-
-| Language | Voice A | Voice B |
-|---|---|---|
-| English | `en-IN-PrabhatNeural` | `en-IN-NeerjaExpressiveNeural` |
-| Hindi | `hi-IN-MadhurNeural` | `hi-IN-SwaraNeural` |
-| Tamil | `ta-IN-ValluvarNeural` | `ta-IN-PallaviNeural` |
-| Marathi | `mr-IN-ManoharNeural` | `mr-IN-AarohiNeural` |
-
-Voice A/B is split 50/50 per story, deterministically by story ID (first hex digit 0–7 → A, 8–f → B). This enables A/B quality comparison across a single briefing.
+- **Clustering + scripting** go through `aiJson`, which routes by `SCRIPT_PROVIDER` (`openai` default, or `gemini`). Both calls have a 90s timeout and exponential-backoff retry on 429/5xx.
+- **TTS** is selected per request via the `provider` option: `edge` (default, free), `openai`, `google`, `elevenlabs`, `kokoro`.
+- Edge TTS splits between two Indian-English voices (`en-IN-PrabhatNeural` / `en-IN-NeerjaExpressiveNeural`) deterministically by story ID, enabling A/B comparison within one briefing.
 
 ---
 
@@ -91,30 +85,34 @@ src/
 ## Generation Pipeline
 
 ```
-POST /api/admin/generate  (x-admin-key: <ADMIN_KEY>)
+POST /api/admin/generate?provider=edge&languages=en   (x-admin-key: <ADMIN_KEY>)
     │
-    ├── fetchAllFeeds()         -- all 10 Google News RSS sections in parallel
+    ├── fetchAllFeeds()         -- 4 Google News RSS feeds in parallel
     │                              (falls back to search URL if topic ID expired)
-    ├── buildStories()          -- dedup by URL hash + title prefix
+    ├── buildRawStories()       -- dedup by URL hash + title prefix; flag ★ homepage stories
     │
     ├── [parallel]
-    │   ├── fetchAllOgImages()  -- iPhone Safari UA, 8s timeout, 40KB read cap
-    │   └── scriptAllStories()  -- one Gemini call per section
-    │       └── per section:
-    │           ├── Gemini: group related stories + write EN/HI/TA/MR scripts
-    │           ├── validate unicode scripts (Devanagari / Tamil block check)
-    │           ├── fix-up pass (re-translate wrong-script fields)
-    │           └── partial save after each section
+    │   ├── fetchAllOgImages()  -- iPhone Safari UA, 8s timeout, 40KB read cap, 10 concurrent
+    │   └── clusterAndSelect()  -- one gpt-4o-mini call: group same-event articles,
+    │                              pick top ~33 events, order by importance, balance sections
     │
-    ├── applyTimeGuard()        -- trim secondary sections if > 30 min estimated
+    ├── saveBriefing()          -- early checkpoint (events, no scripts yet)
+    │
+    ├── scriptAllEvents()       -- up to 10 events end-to-end at once (gated by scriptLimit)
+    │   └── per event:
+    │       ├── fetch top-3 source article bodies (6s timeout each)
+    │       ├── gpt-4o: write a 110–130 word English narrative script
+    │       ├── validate (>=40 words, no Devanagari/Tamil) + 1 retry
+    │       └── fallback to title+description if both attempts fail
+    │
     ├── saveBriefing()          -- scripts checkpoint before TTS
     │
-    └── generateAllTTS()        -- per story × per language
-        └── edgeTTS() / googleTTS() / elevenLabsTTS() / kokoroTTS()
-            └── saveBriefing()  -- checkpoint after every story
+    └── generateAllTTS()        -- per story, English; 5 concurrent
+        └── edgeTTS() / openaiTTS() / googleTTS() / elevenLabsTTS() / kokoroTTS()
+            └── saveBriefing()  -- serialized checkpoint after every story
 ```
 
-Gemini scripting has exponential backoff retry: up to 4 retries, 5→10→20→40s delays for 429/500/502/503/504.
+Both the cluster call and each script call have a 90s timeout and exponential-backoff retry (2→4→8s) on 429/500/502/503/504. A `Stop` (abort) is honored after fetch, after clustering, and at the start of each event's scripting.
 
 ---
 
@@ -136,8 +134,9 @@ Available at `/admin.html` (served by `server.mjs`):
 
 - Node.js 20+
 - A Supabase project (or use `LOCAL_MODE=true` to skip auth)
-- A Gemini API key — free at [aistudio.google.com](https://aistudio.google.com)
+- An OpenAI API key — required for scripting and clustering
 - Edge TTS requires no API key (uses `msedge-tts` npm package)
+- A Gemini key is optional — only needed for `SCRIPT_PROVIDER=gemini` or the `google` TTS provider
 
 ### Setup
 
@@ -154,22 +153,26 @@ Create a `.env` file:
 SUPABASE_URL="https://your-project.supabase.co"
 SUPABASE_SERVICE_ROLE_KEY="eyJ..."
 VITE_SUPABASE_URL="https://your-project.supabase.co"
-VITE_SUPABASE_PROJECT_ID="your-project-id"
 VITE_SUPABASE_PUBLISHABLE_KEY="sb_publishable_..."
 
-# Gemini (scripting + optional TTS)
-GEMINI_API_KEY="AIza..."
+# OpenAI — REQUIRED (scripting + clustering, and the `openai` TTS provider)
+OPENAI_API_KEY="sk-..."
+# OPENAI_SCRIPT_MODEL="gpt-4o"   # optional override
+# OPENAI_TTS_MODEL="tts-1"       # optional override (openai TTS)
+
+# Optional: scripting provider + length
+# SCRIPT_PROVIDER="openai"       # or "gemini"
+# GEMINI_API_KEY="AIza..."       # required only if SCRIPT_PROVIDER=gemini or provider=google
+# TARGET_MINUTES="25"            # controls how many events are selected (~33 at 25 min)
 
 # ElevenLabs (optional TTS provider)
-ELEVENLABS_API_KEY="sk_..."
-ELEVENLABS_VOICE_ID="nwj0s2LU9bDWRKND5yzA"       # English voice
-ELEVENLABS_VOICE_ID_HI="WuePGPKIAIKI8COZpzce"    # Hindi voice
+# ELEVENLABS_API_KEY="sk_..."
+# ELEVENLABS_VOICE_ID="nwj0s2LU9bDWRKND5yzA"
 
 # App
 ADMIN_KEY="your-secret-key"
 LOCAL_MODE=true        # skips Supabase auth; saves audio + briefing to local files
 VITE_LOCAL_MODE=true
-BRIEFING_HOME=in       # "in" for India-focused feeds
 ```
 
 ```bash
@@ -178,19 +181,19 @@ npm run dev
 
 ### Generate a briefing locally
 
+Options are passed as **query parameters** (the endpoint does not read a JSON body). Defaults: `provider=edge`, `languages=en`.
+
 ```bash
-# Default: Edge TTS, English + Hindi, Mumbai local news
-curl -X POST http://localhost:5173/api/admin/generate \
+# Default: Edge TTS, English
+curl -X POST "http://localhost:5173/api/admin/generate" \
   -H "x-admin-key: your-secret-key"
 
 # With options
-curl -X POST http://localhost:5173/api/admin/generate \
-  -H "x-admin-key: your-secret-key" \
-  -H "Content-Type: application/json" \
-  -d '{"provider":"edge","languages":["en","hi","ta","mr"],"city":"Chennai"}'
+curl -X POST "http://localhost:5173/api/admin/generate?provider=openai&scriptProvider=openai&scriptModel=gpt-4o" \
+  -H "x-admin-key: your-secret-key"
 ```
 
-Takes 5–15 minutes. Generated audio goes to `public/audio/` and briefing JSON to `.local-data/briefings.json`.
+Recognized query params: `provider`, `languages`, `scriptProvider`, `scriptModel`, `ttsModel`. Takes ~5–15 minutes. In `LOCAL_MODE`, audio goes to `public/audio/` and the briefing JSON to `.local-data/briefings.json`.
 
 ---
 
@@ -211,15 +214,13 @@ Connect your GitHub repo at [render.com](https://render.com). Add these environm
 | `SUPABASE_URL` | Your Supabase project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | Service role JWT |
 | `VITE_SUPABASE_URL` | Same as `SUPABASE_URL` |
-| `VITE_SUPABASE_PROJECT_ID` | Your project ref ID |
 | `VITE_SUPABASE_PUBLISHABLE_KEY` | Publishable key |
-| `GEMINI_API_KEY` | Your Gemini API key |
+| `OPENAI_API_KEY` | **Required** — scripting + clustering |
 | `ADMIN_KEY` | A secret string protecting the generate endpoint |
 | `LOCAL_MODE` | `false` |
 | `VITE_LOCAL_MODE` | `false` |
-| `BRIEFING_HOME` | `in` |
 
-ElevenLabs keys are optional — Edge TTS works without any API key.
+Optional: `GEMINI_API_KEY` (only for `SCRIPT_PROVIDER=gemini` or the `google` TTS provider), `ELEVENLABS_API_KEY`, `TARGET_MINUTES`. Edge TTS works without any API key.
 
 ### 3. Google OAuth
 
@@ -234,10 +235,9 @@ In Supabase → Authentication → URL Configuration:
 ### 4. Daily cron
 
 At [cron-job.org](https://cron-job.org), create a job:
-- URL: `https://your-app.onrender.com/api/admin/generate`
+- URL: `https://your-app.onrender.com/api/admin/generate?provider=edge&languages=en`
 - Method: POST
 - Header: `x-admin-key: your-admin-key`
-- Body: `{"provider":"edge","languages":["en","hi"]}`
 - Schedule: `30 1 * * *` (1:30 AM UTC = 7 AM IST)
 
 ---

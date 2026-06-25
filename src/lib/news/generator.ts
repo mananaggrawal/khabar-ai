@@ -146,6 +146,16 @@ function makeConcurrencyLimiter(limit: number) {
   };
 }
 
+// FIFO serializer — chains async calls so they never overlap (e.g. read-modify-write saves)
+function makeSerializer() {
+  let tail: Promise<unknown> = Promise.resolve();
+  return function<T>(fn: () => Promise<T>): Promise<T> {
+    const run = tail.then(fn, fn);
+    tail = run.catch(() => {});
+    return run;
+  };
+}
+
 // Script calls: 10 concurrent (GPT-4o handles this fine at tier 1+)
 const scriptLimit = makeConcurrencyLimiter(10);
 
@@ -246,26 +256,53 @@ function getScriptModel(): string {
 // GPT-4o-mini for cluster/select — classification only, cost-effective.
 const CLUSTER_MODEL = "gpt-4o-mini";
 
+const OPENAI_RETRYABLE   = new Set([429, 500, 502, 503, 504]);
+const OPENAI_MAX_RETRIES = 3;
+const OPENAI_BASE_DELAY_MS = 2_000;
+const OPENAI_TIMEOUT_MS  = 90_000;
+
 async function openaiJson(prompt: string, model: string, maxTokens = 8192): Promise<any> {
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${getOpenAIKey()}`,
-    },
-    body: JSON.stringify({
-      model,
-      response_format: { type: "json_object" },
-      max_tokens: maxTokens,
-      messages: [{ role: "user", content: prompt }],
-    }),
-  });
-  if (!res.ok) throw new Error(`OpenAI ${res.status}: ${(await res.text()).slice(0, 400)}`);
-  const data = await res.json();
-  const text = data.choices?.[0]?.message?.content ?? "{}";
-  try { return JSON.parse(text); } catch {
-    throw new Error(`OpenAI JSON parse failed: ${text.slice(0, 200)}`);
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt <= OPENAI_MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      const delay = OPENAI_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+      await new Promise(r => setTimeout(r, delay));
+    }
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), OPENAI_TIMEOUT_MS);
+    try {
+      const res = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        signal: ctrl.signal,
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${getOpenAIKey()}`,
+        },
+        body: JSON.stringify({
+          model,
+          response_format: { type: "json_object" },
+          max_tokens: maxTokens,
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res.text()).slice(0, 400);
+        lastError = new Error(`OpenAI ${res.status}: ${body}`);
+        if (OPENAI_RETRYABLE.has(res.status)) continue;
+        throw lastError;
+      }
+      const data = await res.json();
+      const text = data.choices?.[0]?.message?.content ?? "{}";
+      try { return JSON.parse(text); } catch {
+        throw new Error(`OpenAI JSON parse failed: ${text.slice(0, 200)}`);
+      }
+    } catch (err: any) {
+      if (err.name === "AbortError") { lastError = new Error("OpenAI timed out"); continue; }
+      throw err;
+    } finally { clearTimeout(timer); }
   }
+  throw lastError ?? new Error("OpenAI failed after retries");
 }
 
 /**
@@ -617,6 +654,11 @@ async function scriptEvent(
   ev: SelectedEvent,
   logger: Logger,
 ): Promise<{ title: string; scriptEn: string }> {
+  // Short-circuit if the run was aborted — avoids dozens of wasted fetches + API calls
+  if (isAbortRequested()) {
+    return { title: ev.title, scriptEn: "" };
+  }
+
   // Fetch article bodies for top 3 sources in parallel
   const topStories   = ev.sourceStories.slice(0, 3);
   const articleTexts = await Promise.all(topStories.map(s => fetchArticleText(s.link)));
@@ -672,7 +714,7 @@ Return ONLY valid JSON: {"title": "...", "scriptEn": "..."}`;
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const raw = await scriptLimit(() => openaiJson(prompt, getScriptModel(), 4096));
+      const raw = await aiJson(prompt, getScriptModel(), 4096);
       const title    = (raw.title    || ev.title).trim();
       const scriptEn = (raw.scriptEn || "").trim();
       if (!isValidScript(scriptEn)) {
@@ -697,9 +739,10 @@ async function scriptAllEvents(
 ): Promise<Story[]> {
   logger(`Scripting ${events.length} events in parallel (up to 10 concurrent)…`);
 
-  // Fire all in parallel, respecting the concurrency limiter inside scriptEvent
+  // Gate the WHOLE event (article-body fetches + AI call) behind scriptLimit so at
+  // most 10 events run end-to-end at once — bounds outbound fetches to ~30, not ~100.
   const results = await Promise.all(
-    events.map(async (ev) => {
+    events.map((ev) => scriptLimit(async () => {
       const { title, scriptEn } = await scriptEvent(ev, logger);
       const primary = ev.sourceStories[0];
       return {
@@ -720,7 +763,7 @@ async function scriptAllEvents(
         publisherCount:  ev.publisherCount,
         publishers:      ev.publishers,
       } satisfies Story;
-    }),
+    })),
   );
 
   logger(`Scripting done — ${results.length} stories`);
@@ -753,6 +796,13 @@ async function generateAllTTS(
   // 5 concurrent for TTS — Edge has no rate limit; others are conservative
   const ttsLimit = makeConcurrencyLimiter(5);
 
+  // Serialize checkpoint saves so concurrent TTS tasks don't interleave the
+  // read-modify-write in saveBriefing (lost updates / corrupt JSON in LOCAL_MODE).
+  const saveQueue = makeSerializer();
+  const safeProgress = onProgress
+    ? (s: Story[]) => saveQueue(() => onProgress(s))
+    : undefined;
+
   await Promise.all(
     stories.map((story, i) =>
       ttsLimit(async () => {
@@ -773,7 +823,7 @@ async function generateAllTTS(
           logger(`  ✗ [${i + 1}/${stories.length}]: ${err.message?.slice(0, 60)}`);
         }
 
-        if (onProgress) await onProgress([...updated]);
+        if (safeProgress) await safeProgress([...updated]);
       }),
     ),
   );
@@ -873,12 +923,22 @@ export async function generateDailyBriefing(
 
   log(`Starting briefing v5 — ${date} | city: ${city} | TTS: ${ttsProvider}`);
 
+  // v5 generates English audio only. Report exactly what's produced so the app
+  // never advertises a language that has no scripts or audio behind it.
+  const extraLangs = languages.filter(l => l !== "en");
+  if (extraLangs.length) {
+    log(`Note: v5 generates English only — ignoring requested language(s): ${extraLangs.join(", ")}`);
+  }
+  const generatedLanguages = ["en"];
+
   // Step 1: Fetch
   const t0 = Date.now();
   log(`Fetching ${FEEDS.length} Google News feeds…`);
   const feedMap  = await fetchAllFeeds(city);
   const rawTotal = [...feedMap.values()].reduce((n, v) => n + v.length, 0);
   log(`Fetched ${rawTotal} raw items from ${feedMap.size} feeds (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
+
+  if (isAbortRequested()) throw new Error("Aborted by user");
 
   // Step 2: Dedup
   const { stories: rawStories, headlineIds } = buildRawStories(feedMap);
@@ -906,9 +966,11 @@ export async function generateDailyBriefing(
 
   log(`${selectedEvents.length} events — est. ~${Math.round(selectedEvents.length * WORDS_PER_STORY / WORDS_PER_MINUTE)} min briefing`);
 
+  if (isAbortRequested()) throw new Error("Aborted by user");
+
   // Early save
   await saveBriefing({
-    date, generatedAt: new Date().toISOString(), generatedLanguages: languages,
+    date, generatedAt: new Date().toISOString(), generatedLanguages,
     stories: selectedEvents.map(ev => ({
       id: ev.eventId, title: ev.title, source: ev.publishers[0] ?? "",
       link: ev.sourceStories[0]?.link ?? "", publishedAt: ev.firstPublishedAt,
@@ -934,14 +996,14 @@ export async function generateDailyBriefing(
   };
 
   // Save with scripts
-  await saveBriefing({ date, generatedAt: new Date().toISOString(), stories, meta, generatedLanguages: languages });
+  await saveBriefing({ date, generatedAt: new Date().toISOString(), stories, meta, generatedLanguages });
   log(`Pre-TTS checkpoint: ${stories.length} stories saved`);
 
   // Step 6: TTS
   const t3 = Date.now();
   const { stories: withAudio, costInfo } = await generateAllTTS(
     stories, date, ttsProvider, log,
-    async (s) => saveBriefing({ date, generatedAt: new Date().toISOString(), stories: s, meta, generatedLanguages: languages }),
+    async (s) => saveBriefing({ date, generatedAt: new Date().toISOString(), stories: s, meta, generatedLanguages }),
   );
   const ttsSec     = (Date.now() - t3) / 1000;
   const elapsedSec = (Date.now() - runStart) / 1000;
@@ -959,7 +1021,7 @@ export async function generateDailyBriefing(
 
   const briefing: DailyBriefing & { runSummary?: RunSummary } = {
     date, generatedAt: new Date().toISOString(),
-    stories: withAudio, meta, generatedLanguages: languages, runSummary,
+    stories: withAudio, meta, generatedLanguages, runSummary,
   };
 
   await saveBriefing(briefing);
