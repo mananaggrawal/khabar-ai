@@ -87,24 +87,35 @@ const server = createServer(async (req, res) => {
   const pathname = url.pathname;
 
   // ── Static file serving ────────────────────────────────────────────────
-  const isStatic =
-    pathname.startsWith("/assets/") ||
+  // Icons and manifests — never cache so updates show immediately
+  const isIcon =
     pathname === "/favicon.ico" ||
     pathname === "/favicon.svg" ||
     pathname === "/favicon.png" ||
+    pathname === "/favicon-v2.png" ||
     pathname === "/icon-192.png" ||
+    pathname === "/icon-192-v2.png" ||
     pathname === "/icon-512.png" ||
+    pathname === "/icon-512-v2.png" ||
     pathname === "/apple-touch-icon.png" ||
+    pathname === "/apple-touch-icon-v2.png" ||
     pathname === "/manifest.webmanifest" ||
     pathname === "/robots.txt" ||
     pathname === "/site.webmanifest";
+
+  const isStatic = pathname.startsWith("/assets/") || isIcon;
 
   if (isStatic) {
     const filePath = join(CLIENT_DIR, pathname);
     if (existsSync(filePath) && statSync(filePath).isFile()) {
       const mime = MIME[extname(filePath)] || "application/octet-stream";
       res.setHeader("Content-Type", mime);
-      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      // Icons/manifests: no-cache so PWA and browser always get latest
+      // Hashed assets (JS/CSS in /assets/): immutable 1-year cache
+      const cacheControl = isIcon
+        ? "no-cache, no-store, must-revalidate"
+        : "public, max-age=31536000, immutable";
+      res.setHeader("Cache-Control", cacheControl);
       createReadStream(filePath).pipe(res);
       return;
     }
