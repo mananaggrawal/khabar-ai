@@ -46,10 +46,14 @@ function estimateMp3Duration(bytes: number): number {
   return bytes / (96_000 / 8);
 }
 
+// Speak a bit faster than default for a snappier, news-anchor pace.
+// Relative percentage per SSML prosody rate. Override via EDGE_TTS_RATE.
+const TTS_RATE = process.env.EDGE_TTS_RATE ?? "+12%";
+
 async function synthesize(script: string, voice: string): Promise<Buffer> {
   const tts = new MsEdgeTTS();
   await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3);
-  const { audioStream } = tts.toStream(script);
+  const { audioStream } = tts.toStream(script, { rate: TTS_RATE });
 
   const chunks: Buffer[] = [];
   await new Promise<void>((resolve, reject) => {

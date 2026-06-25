@@ -2,7 +2,7 @@
 
 A daily AI-powered news briefing app that delivers spoken news in a warm, conversational voice — like a smart friend catching you up on what happened today. Built as a personal tool for iPhone use.
 
-Pulls from Google News RSS across 4 focused feeds, merges articles about the same event with a single LLM call, writes narrative English scripts with GPT-4o, and converts them to speech with Edge TTS (free) by default.
+Pulls from Google News RSS across 5 focused feeds, merges articles about the same event with a single LLM call, writes very quick factual English scripts with GPT-4o, and converts them to speech with Edge TTS (free) by default.
 
 ---
 
@@ -10,10 +10,10 @@ Pulls from Google News RSS across 4 focused feeds, merges articles about the sam
 
 Khabar AI generates a daily briefing on demand (or via cron):
 
-1. Fetches 4 Google News RSS feeds in parallel — Top Stories (headlines), India, World, Business
+1. Fetches 5 Google News RSS feeds in parallel — Top Stories (headlines), India, World, Business, Local (city-scoped via the `city` option)
 2. Deduplicates by URL hash + title prefix; articles on Google's homepage feed are flagged (★) as a stronger editorial signal
-3. Clusters articles about the same event and selects the top ~33 distinct events in one `gpt-4o-mini` call, ordered by importance and balanced across sections (target run length is `TARGET_MINUTES`, default 25)
-4. Writes a narrative ~110–130 word English script per event with `gpt-4o`, using the live-fetched body text of the top sources (NPR "Up First" tone, strict style rules, no invented facts)
+3. Clusters articles about the same event and selects as many distinct events as fit in one `gpt-4o-mini` call, ordered by importance and balanced across sections (count derives from `TARGET_MINUTES`, default 25 → ~63 stories)
+4. Writes a very quick ~45–65 word factual English script per event with `gpt-4o` — headline + key facts, no interpretation — using the live-fetched body text of the top sources
 5. Converts each script to speech and stores per-story audio (Supabase Storage, or local files in `LOCAL_MODE`)
 6. Fetches OG images from source articles (in parallel with clustering) for visual cards
 
@@ -45,7 +45,7 @@ Open the app, tap a section, and listen. Tap any story card to see all the sourc
 
 - **Clustering + scripting** go through `aiJson`, which routes by `SCRIPT_PROVIDER` (`openai` default, or `gemini`). Both calls have a 90s timeout and exponential-backoff retry on 429/5xx.
 - **TTS** is selected per request via the `provider` option: `edge` (default, free), `openai`, `google`, `elevenlabs`, `kokoro`.
-- Edge TTS splits between two Indian-English voices (`en-IN-PrabhatNeural` / `en-IN-NeerjaExpressiveNeural`) deterministically by story ID, enabling A/B comparison within one briefing.
+- Edge TTS splits between two Indian-English voices (`en-IN-PrabhatNeural` / `en-IN-NeerjaExpressiveNeural`) deterministically by story ID, enabling A/B comparison within one briefing. It reads ~12% faster than default for a snappier pace — tune with `EDGE_TTS_RATE` (e.g. `+20%`).
 
 ---
 
@@ -85,23 +85,23 @@ src/
 ## Generation Pipeline
 
 ```
-POST /api/admin/generate?provider=edge&languages=en   (x-admin-key: <ADMIN_KEY>)
+POST /api/admin/generate?provider=edge&languages=en&city=Mumbai   (x-admin-key: <ADMIN_KEY>)
     │
-    ├── fetchAllFeeds()         -- 4 Google News RSS feeds in parallel
+    ├── fetchAllFeeds()         -- 5 Google News RSS feeds in parallel (incl. city-scoped Local)
     │                              (falls back to search URL if topic ID expired)
     ├── buildRawStories()       -- dedup by URL hash + title prefix; flag ★ homepage stories
     │
     ├── [parallel]
     │   ├── fetchAllOgImages()  -- iPhone Safari UA, 8s timeout, 40KB read cap, 10 concurrent
     │   └── clusterAndSelect()  -- one gpt-4o-mini call: group same-event articles,
-    │                              pick top ~33 events, order by importance, balance sections
+    │                              cover as many distinct events as fit, balance sections
     │
     ├── saveBriefing()          -- early checkpoint (events, no scripts yet)
     │
     ├── scriptAllEvents()       -- up to 10 events end-to-end at once (gated by scriptLimit)
     │   └── per event:
     │       ├── fetch top-3 source article bodies (6s timeout each)
-    │       ├── gpt-4o: write a 110–130 word English narrative script
+    │       ├── gpt-4o: write a very quick 45–65 word factual script (no interpretation)
     │       ├── validate (>=40 words, no Devanagari/Tamil) + 1 retry
     │       └── fallback to title+description if both attempts fail
     │
@@ -193,7 +193,7 @@ curl -X POST "http://localhost:5173/api/admin/generate?provider=openai&scriptPro
   -H "x-admin-key: your-secret-key"
 ```
 
-Recognized query params: `provider`, `languages`, `scriptProvider`, `scriptModel`, `ttsModel`. Takes ~5–15 minutes. In `LOCAL_MODE`, audio goes to `public/audio/` and the briefing JSON to `.local-data/briefings.json`.
+Recognized query params: `provider`, `languages`, `scriptProvider`, `scriptModel`, `ttsModel`, `city` (scopes the Local feed; defaults to Mumbai). Takes ~5–15 minutes. In `LOCAL_MODE`, audio goes to `public/audio/` and the briefing JSON to `.local-data/briefings.json`.
 
 ---
 

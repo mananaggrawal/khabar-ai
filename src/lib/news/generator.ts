@@ -2,11 +2,11 @@
  * Khabar AI Briefing Generator — v5
  *
  * Pipeline:
- *  1. Fetch 4 Google News RSS feeds in parallel (headlines, india, world, business)
+ *  1. Fetch 5 Google News RSS feeds in parallel (headlines, india, world, business, local)
  *  2. URL/title dedup → flat raw stories; headlines feed marks inHeadlinesFeed signal
  *  3. OG image fetching [parallel with step 4]
  *  4. Single AI call: cluster same-event articles → all distinct events, ordered by importance
- *  5. Script generation: ~115 words each, narrative quality (GPT-4o), 10 concurrent
+ *  5. Script generation: ~60 words each, headline+gist (GPT-4o), 10 concurrent
  *  6. TTS: Edge (English), 5 concurrent
  *  7. Save DailyBriefing to Supabase Storage
  */
@@ -31,8 +31,9 @@ const LOCAL_MODE = process.env.LOCAL_MODE === "true";
 // ─── Briefing duration config ─────────────────────────────────────────────────
 
 const WORDS_PER_MINUTE  = 150;
-const WORDS_PER_STORY   = 115;
-// Override via TARGET_MINUTES env var (default: 25 min → ~33 stories)
+// Very quick headline+gist scripts (~60 words) → maximize story coverage per minute.
+const WORDS_PER_STORY   = 60;
+// Override via TARGET_MINUTES env var (default: 25 min → ~63 stories)
 const TARGET_MINUTES    = Number(process.env.TARGET_MINUTES ?? 25);
 const MAX_STORIES       = Math.round(TARGET_MINUTES * WORDS_PER_MINUTE / WORDS_PER_STORY);
 
@@ -381,7 +382,7 @@ function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]
   }
 
   // Process topical feeds first
-  for (const feedId of ["india", "world", "business"] as SectionId[]) {
+  for (const feedId of ["india", "world", "business", "local"] as SectionId[]) {
     for (const item of feedMap.get(feedId) ?? []) {
       const id  = storyId(item.link);
       const key = normalize(item.title).slice(0, 60);
@@ -506,17 +507,17 @@ async function clusterAndSelect(
     `${i}. [${s.source}]${headlineIds.has(s.id) ? " ★" : ""} [${s.section}] ${s.title}`
   ).join("\n");
 
-  // Per-section soft cap: at most ~50% of total from any one section
-  const perSectionCap = Math.ceil(maxStories * 0.5);
+  // Per-section soft cap: at most ~60% of total from any one section
+  const perSectionCap = Math.ceil(maxStories * 0.6);
 
   const prompt = `You are the news editor for Khabar AI — India's top audio news briefing.
 
-Here are ${stories.length} articles from today's Google News feeds (India, World, Business, Headlines).
+Here are ${stories.length} articles from today's Google News feeds (India, World, Business, Local, Headlines).
 ★ = appeared on Google's homepage — stronger editorial signal.
 
 TASK:
 1. Group articles that cover the EXACT same event or announcement into clusters.
-2. Select the top ${maxStories} most important distinct events for an informed Indian audience.
+2. Cover as many DISTINCT events as possible — up to ${maxStories}. Aim to include every unique story; only leave one out if you've hit the limit. Never drop a unique event just to keep the list short.
 3. Order from most to least important.
 4. Balance sections — aim for at least 4 events per section where news exists; no single section should exceed ${perSectionCap} events.
 
@@ -530,7 +531,7 @@ Return a JSON object with a single key "events":
 {"events": [
   {
     "title": "specific, factual event title — max 10 words",
-    "section": "headlines|india|world|business",
+    "section": "headlines|india|world|business|local",
     "sourceIndices": [0, 4, 12],
     "imageIndex": 0,
     "whyImportant": "one sentence — the key reason this matters"
@@ -540,7 +541,7 @@ Return a JSON object with a single key "events":
 RULES:
 - Return exactly ${maxStories} events (or fewer if total distinct events is less)
 - Every index used in sourceIndices must be in range 0–${stories.length - 1}
-- section: assign based on content — "headlines" for major cross-cutting stories, else india/world/business
+- section: assign based on content — "headlines" for major cross-cutting stories, "local" for city/regional news, else india/world/business
 - imageIndex: which sourceIndex is most likely to have a good image (Reuters, AP, PTI, AFP > others)
 - Keep clusters tight — only group articles covering the SAME specific event
 
@@ -598,7 +599,7 @@ ${articleList}`;
     const title    = (g.title ?? "").trim();
     if (!title) continue;
 
-    const section  = (["headlines", "india", "world", "business"].includes(g.section)
+    const section  = (["headlines", "india", "world", "business", "local"].includes(g.section)
       ? g.section : stories[indices[0]].section) as SectionId;
 
     const imageIdx      = (g.imageIndex != null && indices.includes(g.imageIndex)) ? g.imageIndex : indices[0];
@@ -645,7 +646,7 @@ ${articleList}`;
 
 function isValidScript(text: string | undefined): boolean {
   if (!text || text.trim().length < 10) return false;
-  if (text.trim().split(/\s+/).length < 40) return false;
+  if (text.trim().split(/\s+/).length < 25) return false;
   if (/[ऀ-ॿ஀-௿]/.test(text)) return false; // no foreign script in English field
   return true;
 }
@@ -676,36 +677,32 @@ async function scriptEvent(
     ].filter(Boolean).join("\n");
   }).join("\n\n");
 
-  const editorialHint = ev.whyImportant ? `\nEditorial note: ${ev.whyImportant}` : "";
+  const prompt = `You are the lead scriptwriter for Khabar AI — India's fast, factual audio news briefing.
 
-  const prompt = `You are the lead scriptwriter for Khabar AI — India's most thoughtful audio news briefing.
+Write a spoken script for this ${sectionLabel} story. Target: 45-65 words — very quick, headline + key facts only. This will be read aloud.
 
-Write a spoken script for this ${sectionLabel} story. Target: 110-130 words. This will be read aloud.
-
-Think NPR "Up First" meets BBC World Service — not a news ticker. Narrative. The listener should feel like a well-read, trusted friend is explaining this story to them over coffee.${editorialHint}
+Think a wire-service brief read aloud: state only the facts the sources report — what happened, who, when, where, and the key numbers. Report; do not interpret. No analysis, no speculation, no opinion, no "why it matters," no significance or framing. Warm and clear, but fast and neutral.
 
 STORY: ${ev.title}
 SECTION: ${sectionLabel}
 SOURCES (${ev.publisherCount} publisher${ev.publisherCount !== 1 ? "s" : ""}${ev.inHeadlinesFeed ? ", ★ on Google homepage" : ""}):
 ${sourcesText}
 
-NARRATIVE STRUCTURE:
-- Open with the single most interesting or consequential fact — vivid, specific, not vague
-- Middle: the context that makes the opening fact make sense
-- Close: what happens next, or the deeper significance — one sharp, resonant line
+STRUCTURE (very short):
+- Sentence 1: the headline fact — what happened, with the concrete specifics (who/what/when/where)
+- Sentence 2-3: the remaining key facts or numbers straight from the sources, then stop
 
 VOICE & STYLE:
-- Warm, authoritative, conversational — confident but never pompous
+- Plain, factual, neutral — like a newsreader, not a columnist
 - Active voice throughout
-- Specific details over generalities — use real numbers, names, places from the sources
-- Sentences flow naturally into each other; no abrupt topic shifts
-- Vary sentence length — short punchy statements mixed with longer explanatory ones
-- If the story has an irony, tension, or human angle — surface it
+- Use the real numbers, names, dates and places from the sources; nothing vague
+- State facts directly; do not characterize them as good, bad, surprising, or important
 
 HARD RULES:
 - FORBIDDEN openers: "Today", "In a significant development", "According to", "A new", "The", "In what"
 - FORBIDDEN endings: "Stay tuned", "Watch this space", "Keep an eye on", any tease or CTA
-- FORBIDDEN words: "reportedly", "sources say", "it is said", "stakeholders"
+- FORBIDDEN: interpretation, analysis, predictions, or editorializing — facts only
+- FORBIDDEN words: "reportedly", "sources say", "it is said", "stakeholders", "signals", "could mean", "experts say", "analysts"
 - NO demographic mentions: "Indians", "citizens", "the public", "people"
 - NO bullet points, no parentheses, no lists
 - NEVER invent facts — only use what is in the sources
@@ -855,9 +852,9 @@ export async function saveBriefing(briefing: DailyBriefing): Promise<void> {
 
 function mapOldSection(cat: string): SectionId {
   const m: Record<string, SectionId> = {
-    headlines: "headlines", india: "india", world: "world", business: "business",
+    headlines: "headlines", india: "india", world: "world", business: "business", local: "local",
     // old taxonomy → nearest new section
-    politics: "india", local: "india",
+    politics: "india",
     sports: "india", techlife: "india", technology: "india",
     entertainment: "india", science: "india", health: "india",
     // legacy v2/v3

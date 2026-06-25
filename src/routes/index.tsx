@@ -1,6 +1,6 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createPortal } from "react-dom";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { motion, AnimatePresence } from "motion/react";
@@ -20,6 +20,18 @@ import type { Story } from "@/lib/news/generator";
 // ── Route ─────────────────────────────────────────────────────────────────────
 
 const LOCAL_MODE = import.meta.env.VITE_LOCAL_MODE === "true";
+
+// Section display order + legacy mapping — shared by playback ordering and grouping
+const SECTION_DISPLAY_ORDER: SectionId[] = ["headlines", "india", "world", "business", "local"];
+const LEGACY_SECTION: Record<string, SectionId> = {
+  politics: "india", sports: "india",
+  techlife: "india", technology: "india", entertainment: "india", science: "india", health: "india",
+};
+function resolveSection(s: string): SectionId {
+  if (s in LEGACY_SECTION) return LEGACY_SECTION[s];
+  if (SECTION_DISPLAY_ORDER.includes(s as SectionId)) return s as SectionId;
+  return "india";
+}
 
 export const Route = createFileRoute("/")({
   head: () => ({ meta: [{ title: "Khabar AI" }] }),
@@ -214,7 +226,22 @@ function HomePage() {
     staleTime: 5 * 60_000,
   });
 
-  const briefing = briefingQuery.data ?? null;
+  const rawBriefing = briefingQuery.data ?? null;
+
+  // Order stories by section (stable, preserving importance within a section) so that
+  // playback order matches the on-screen grouping instead of jumping around.
+  const briefing = useMemo(() => {
+    if (!rawBriefing) return null;
+    const rank = (s: Story) => {
+      const i = SECTION_DISPLAY_ORDER.indexOf(resolveSection(s.section));
+      return i < 0 ? SECTION_DISPLAY_ORDER.length : i;
+    };
+    const stories = rawBriefing.stories
+      .map((s, i) => ({ s, i }))
+      .sort((a, b) => rank(a.s) - rank(b.s) || a.i - b.i)
+      .map((x) => x.s);
+    return { ...rawBriefing, stories };
+  }, [rawBriefing]);
 
   const mono = useMonologue({ briefing });
   const savedStories = useSavedStories();
@@ -244,19 +271,7 @@ function HomePage() {
     if (mono.state === "idle") setPlayerOpen(false);
   }, [mono.state]);
 
-  // Legacy section → new display section mapping (for old briefings)
-  const LEGACY_SECTION: Record<string, SectionId> = {
-    politics: "india", local: "india", sports: "india",
-    techlife: "india", technology: "india", entertainment: "india", science: "india", health: "india",
-  };
-  const resolveSection = (s: string): SectionId => {
-    if (s in LEGACY_SECTION) return LEGACY_SECTION[s];
-    if (["headlines", "india", "world", "business"].includes(s)) return s as SectionId;
-    return "india";
-  };
-
-  // Group stories by section in display order
-  const SECTION_DISPLAY_ORDER: SectionId[] = ["headlines", "india", "world", "business"];
+  // Group stories by section in display order (helpers are module-scope)
   const storiesBySection = SECTION_DISPLAY_ORDER
     .map(sectionId => ({
       sectionId,
@@ -265,10 +280,10 @@ function HomePage() {
     }))
     .filter(g => g.stories.length > 0);
 
-  // Stories filtered by active pill
-  const visibleStories = activeSection === "all"
-    ? storiesBySection.flatMap(g => g.stories)
-    : (storiesBySection.find(g => g.sectionId === activeSection)?.stories ?? []);
+  // Section groups to render — all sections, or just the active pill
+  const groupsToRender = activeSection === "all"
+    ? storiesBySection
+    : storiesBySection.filter(g => g.sectionId === activeSection);
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
@@ -340,26 +355,56 @@ function HomePage() {
             })}
           </div>
 
-          {/* Story list — filtered by active pill */}
+          {/* Story list — grouped by section, filtered by active pill */}
           <div
-            className="flex-1 overflow-y-auto px-4 pb-4 space-y-2"
+            className="flex-1 overflow-y-auto px-4 pb-4"
             style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 148px)" }}
           >
-            {visibleStories.map((story) => {
-              const hasAudio = !!getAudioUrl(story, mono.language);
-              const storyIdx = mono.storiesWithAudio.findIndex((s) => s.id === story.id);
-              const isActive = mono.currentStory?.id === story.id;
+            {groupsToRender.map(({ sectionId, feed, stories }) => {
+              const label = feed?.label ?? sectionId;
+              const sectionPlaying =
+                mono.state === "playing" && mono.currentStory?.section === sectionId;
               return (
-                <StoryCard
-                  key={story.id}
-                  story={story}
-                  language={mono.language}
-                  isPlaying={isActive && mono.state === "playing"}
-                  hasAudio={hasAudio}
-                  onPlay={() => storyIdx >= 0 && mono.playFrom(storyIdx)}
-                  onPause={mono.pause}
-                  onTap={() => setDetailStory(story)}
-                />
+                <section key={sectionId} className="mb-5">
+                  {/* Section header + play-section button */}
+                  <div className="flex items-center justify-between px-1 pt-2 pb-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="text-sm">{feed?.emoji}</span>
+                      <h2 className="truncate text-sm font-semibold text-foreground">{label}</h2>
+                      <span className="text-[11px] text-muted-foreground">{stories.length}</span>
+                    </div>
+                    <button
+                      onClick={() => (sectionPlaying ? mono.pause() : mono.playSection(sectionId))}
+                      aria-label={sectionPlaying ? `Pause ${label}` : `Play ${label}`}
+                      className="flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary transition-transform active:scale-95"
+                    >
+                      {sectionPlaying
+                        ? <><Pause className="size-3 fill-current" />Pause</>
+                        : <><Play className="size-3 fill-current ml-0.5" />Play section</>}
+                    </button>
+                  </div>
+
+                  {/* Stories in this section */}
+                  <div className="space-y-2">
+                    {stories.map((story) => {
+                      const hasAudio = !!getAudioUrl(story, mono.language);
+                      const storyIdx = mono.storiesWithAudio.findIndex((s) => s.id === story.id);
+                      const isActive = mono.currentStory?.id === story.id;
+                      return (
+                        <StoryCard
+                          key={story.id}
+                          story={story}
+                          language={mono.language}
+                          isPlaying={isActive && mono.state === "playing"}
+                          hasAudio={hasAudio}
+                          onPlay={() => storyIdx >= 0 && mono.playFrom(storyIdx)}
+                          onPause={mono.pause}
+                          onTap={() => setDetailStory(story)}
+                        />
+                      );
+                    })}
+                  </div>
+                </section>
               );
             })}
           </div>
