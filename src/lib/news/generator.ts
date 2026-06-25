@@ -163,11 +163,11 @@ const ROUNDUP_SECTIONS = new Set<SectionId>(["health", "entertainment", "science
 // Score threshold — low enough to not miss anything real.
 const MIN_SCORE_THRESHOLD = 1.5;
 
-// Pre-clubbing cap. Post-clubbing lands ~30 segments (≈15-18 min listen).
-const MAX_TOTAL_STORIES = 55;
+// Hard ceiling — prevents any one section from flooding the briefing.
+// Post-clubbing this yields ~30 segments ≈ 13-15 min listen.
+const MAX_TOTAL_STORIES = 40;
 
-// Guaranteed individual slots — India/Business/World get the most.
-// Roundup sections (health/entertainment/science/local) handled by ROUNDUP_SECTIONS.
+// Guaranteed minimum slots per section (backfilled even below threshold).
 const MIN_SECTION_SLOTS: Partial<Record<SectionId, number>> = {
   headlines:  5,
   india:      5,
@@ -175,6 +175,24 @@ const MIN_SECTION_SLOTS: Partial<Record<SectionId, number>> = {
   world:      5,
   sports:     3,
   technology: 3,
+};
+
+// Hard per-section caps — no section exceeds this regardless of score.
+const MAX_SECTION_SLOTS: Partial<Record<SectionId, number>> = {
+  headlines:  7,
+  india:      7,
+  business:   6,
+  world:      6,
+  sports:     4,
+  technology: 4,
+};
+
+// Guaranteed stories fed into each roundup section (top N by score, always included).
+const MIN_ROUNDUP_ITEMS: Partial<Record<SectionId, number>> = {
+  health:        3,
+  entertainment: 3,
+  science:       3,
+  local:         3,
 };
 
 const SECTION_ORDER: SectionId[] = [
@@ -944,25 +962,39 @@ function buildBriefingPlan(events: ClusteredEvent[], logger: Logger): ClusteredE
     used.add(ev.eventId);
   };
 
-  // 1. Include all events scoring >= MIN_SCORE_THRESHOLD, ranked by score.
-  //    Pure score ordering — no editorial overrides.
+  // Helper: count how many stories a section already has in the plan
+  const sectionCount = (sec: SectionId) =>
+    plan.filter(ev => (ev.assignedSection ?? ev.section) === sec).length;
+
+  // 1. Fill by score — respect per-section cap and total cap.
   for (const ev of sorted) {
     if (used.has(ev.eventId)) continue;
     if (plan.length >= MAX_TOTAL_STORIES) break;
-    if (ev.importanceScore < MIN_SCORE_THRESHOLD) break; // sorted desc, so can stop here
-    add(ev, ev.section);
+    if (ev.importanceScore < MIN_SCORE_THRESHOLD) break;
+    const sec = ev.section as SectionId;
+    const cap = MAX_SECTION_SLOTS[sec] ?? (ROUNDUP_SECTIONS.has(sec) ? 6 : 99);
+    if (sectionCount(sec) >= cap) continue; // section is full — skip, keep filling others
+    add(ev, sec);
   }
 
-  // 2b. Section minimums — backfill key sections that fell below their floor.
-  //     Takes top-scoring unused events from that section regardless of threshold.
-  //     Roundup sections are excluded (they get guaranteed coverage via clubbing).
+  // 2. Backfill: ensure every non-roundup section hits its minimum.
   for (const [sec, min] of Object.entries(MIN_SECTION_SLOTS) as [SectionId, number][]) {
-    if (ROUNDUP_SECTIONS.has(sec)) continue;
-    const have = plan.filter(ev => ev.assignedSection === sec || ev.section === sec).length;
+    const have = sectionCount(sec);
     if (have >= min) continue;
     const candidates = sorted.filter(ev => !used.has(ev.eventId) && ev.section === sec);
     for (const ev of candidates.slice(0, min - have)) {
       logger(`  📌 backfill ${sec}: ${ev.canonicalTitle.slice(0, 50)} (score ${ev.importanceScore.toFixed(1)})`);
+      add(ev, sec);
+    }
+  }
+
+  // 3. Guarantee roundup sections always have enough items to form a roundup.
+  for (const [sec, min] of Object.entries(MIN_ROUNDUP_ITEMS) as [SectionId, number][]) {
+    const have = sectionCount(sec);
+    if (have >= min) continue;
+    const candidates = sorted.filter(ev => !used.has(ev.eventId) && ev.section === sec);
+    for (const ev of candidates.slice(0, min - have)) {
+      logger(`  📌 roundup-backfill ${sec}: ${ev.canonicalTitle.slice(0, 50)} (score ${ev.importanceScore.toFixed(1)})`);
       add(ev, sec);
     }
   }
@@ -1013,7 +1045,7 @@ function buildBriefingPlan(events: ClusteredEvent[], logger: Logger): ClusteredE
 
   const bySection = new Map<string, number>();
   for (const ev of finalPlan) bySection.set(ev.assignedSection, (bySection.get(ev.assignedSection) ?? 0) + 1);
-  logger(`Briefing plan: ${finalPlan.length} segments (~${Math.round(finalPlan.length * 1.5)} min listen)`);
+  logger(`Briefing plan: ${finalPlan.length} segments (~${Math.round(finalPlan.length * 0.4)} min listen)`);
   for (const [section, count] of bySection) logger(`  ${section}: ${count}`);
 
   return finalPlan;
