@@ -348,25 +348,12 @@ function HomePage() {
           >
             {groupsToRender.map(({ sectionId, feed, stories }) => {
               const label = feed?.label ?? sectionId;
-              const sectionPlaying =
-                mono.state === "playing" && mono.currentStory?.section === sectionId;
               return (
                 <section key={sectionId} className="mb-5">
-                  {/* Section header + play-section button */}
-                  <div className="flex items-center justify-between px-1 pt-2 pb-2">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <h2 className="truncate text-sm font-semibold text-foreground">{label}</h2>
-                      <span className="text-[11px] text-muted-foreground">{stories.length}</span>
-                    </div>
-                    <button
-                      onClick={() => (sectionPlaying ? mono.pause() : mono.playSection(sectionId))}
-                      aria-label={sectionPlaying ? `Pause ${label}` : `Play ${label}`}
-                      className="flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary transition-transform active:scale-95"
-                    >
-                      {sectionPlaying
-                        ? <><Pause className="size-3 fill-current" />Pause</>
-                        : <><Play className="size-3 fill-current ml-0.5" />Play section</>}
-                    </button>
+                  {/* Section header */}
+                  <div className="flex items-center gap-2 px-1 pt-2 pb-2">
+                    <h2 className="truncate text-sm font-semibold text-foreground">{label}</h2>
+                    <span className="text-[11px] text-muted-foreground">{stories.length}</span>
                   </div>
 
                   {/* Stories in this section */}
