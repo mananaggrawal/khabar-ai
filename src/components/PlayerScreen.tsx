@@ -1,14 +1,16 @@
 /**
  * PlayerScreen — full-screen player sheet (Spotify-style).
  */
+import { useState } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
 import {
   ChevronDown, SkipBack, SkipForward, Play, Pause,
-  RotateCcw, RotateCw, Bookmark,
+  RotateCcw, RotateCw, Bookmark, FileText,
   Flame, LandmarkIcon, Globe, TrendingUp, MapPin,
 } from "lucide-react";
 import { VoiceOrb } from "./VoiceOrb";
+import { StoryDetailSheet } from "./StoryDetailSheet";
 import type { useMonologue } from "@/hooks/useMonologue";
 import { getStoryTitle } from "@/hooks/useMonologue";
 import type { SectionId } from "@/lib/news/sources";
@@ -57,6 +59,8 @@ function formatTime(sec: number): string {
 }
 
 export function PlayerScreen({ mono, visible, onClose, isSaved, onSave }: PlayerScreenProps) {
+  const [showDetails, setShowDetails] = useState(false);
+
   if (typeof document === "undefined") return null;
 
   const {
@@ -79,6 +83,7 @@ export function PlayerScreen({ mono, visible, onClose, isSaved, onSave }: Player
   const orbState = state === "playing" ? "speaking" : "idle";
 
   return createPortal(
+    <>
     <AnimatePresence>
       {visible && (
         <motion.div
@@ -98,10 +103,16 @@ export function PlayerScreen({ mono, visible, onClose, isSaved, onSave }: Player
             <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/60">
               Today's Briefing
             </span>
-            <button onClick={onSave} aria-label={isSaved ? "Unsave" : "Save"}
-              className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-black/5 transition-colors">
-              <Bookmark className="size-4" fill={isSaved ? "currentColor" : "none"} style={isSaved ? { color: accent } : undefined} />
-            </button>
+            <div className="flex items-center gap-1">
+              <button onClick={() => currentStory && setShowDetails(true)} aria-label="Summary & sources" disabled={!currentStory}
+                className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-black/5 hover:text-foreground transition-colors disabled:opacity-40">
+                <FileText className="size-4" />
+              </button>
+              <button onClick={onSave} aria-label={isSaved ? "Unsave" : "Save"}
+                className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-black/5 transition-colors">
+                <Bookmark className="size-4" fill={isSaved ? "currentColor" : "none"} style={isSaved ? { color: accent } : undefined} />
+              </button>
+            </div>
           </div>
 
           {/* Artwork / Orb */}
@@ -136,8 +147,12 @@ export function PlayerScreen({ mono, visible, onClose, isSaved, onSave }: Player
             )}
           </div>
 
-          {/* Story info */}
-          <div className="px-6 pb-2">
+          {/* Story info — tap to open summary, sources & dive deeper */}
+          <div
+            role={currentStory ? "button" : undefined}
+            onClick={() => currentStory && setShowDetails(true)}
+            className="px-6 pb-2 cursor-pointer"
+          >
             <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.08em] mb-1.5" style={{ color: accent }}>
               {currentFeed && <span>{language === "hi" ? currentFeed.labelHi : currentFeed.label}</span>}
               {sectionStories.length > 0 && (
@@ -152,8 +167,8 @@ export function PlayerScreen({ mono, visible, onClose, isSaved, onSave }: Player
             <p className="font-serif text-xl leading-snug text-foreground line-clamp-3">
               {(currentStory ? getStoryTitle(currentStory, language) : null) ?? "—"}
             </p>
-            <p className="mt-1.5 text-xs text-muted-foreground">
-              Today's news, <em className="font-semibold italic">spoken.</em>
+            <p className="mt-1.5 inline-flex items-center gap-1 text-xs text-primary font-medium">
+              <FileText className="size-3" /> Summary, sources & more
             </p>
           </div>
 
@@ -199,7 +214,20 @@ export function PlayerScreen({ mono, visible, onClose, isSaved, onSave }: Player
           </div>
         </motion.div>
       )}
-    </AnimatePresence>,
+    </AnimatePresence>
+
+    {/* Same detail popup as the home screen — summary, sources & dive deeper */}
+    <StoryDetailSheet
+      story={showDetails ? currentStory : null}
+      language={language}
+      onClose={() => setShowDetails(false)}
+      onPlay={() => {}}
+      isPlaying={isPlaying}
+      isSaved={isSaved}
+      onSave={onSave}
+      elevated
+    />
+    </>,
     document.body,
   );
 }

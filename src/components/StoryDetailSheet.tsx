@@ -18,6 +18,8 @@ interface StoryDetailSheetProps {
   isPlaying: boolean;
   isSaved?: boolean;
   onSave?: () => void;
+  /** Render above the full-screen player (which sits at z-60) */
+  elevated?: boolean;
 }
 
 function timeAgo(iso: string): string {
@@ -85,8 +87,13 @@ export function StoryDetailSheet({
   isPlaying,
   isSaved,
   onSave,
+  elevated = false,
 }: StoryDetailSheetProps) {
   if (typeof document === "undefined") return null;
+
+  // Above the full-screen player (z-60) when opened from it; default otherwise.
+  const backdropZ = elevated ? "z-[65]" : "z-[55]";
+  const sheetZ    = elevated ? "z-[66]" : "z-[56]";
 
   const feed = story ? FEED_MAP.get(story.section) : null;
   const accent = story ? (SECTION_COLOR[story.section] ?? "#7B5CF0") : "#7B5CF0";
@@ -107,7 +114,7 @@ export function StoryDetailSheet({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[55] bg-black/30 backdrop-blur-sm"
+            className={`fixed inset-0 ${backdropZ} bg-black/30 backdrop-blur-sm`}
             onClick={onClose}
           />
 
@@ -118,7 +125,7 @@ export function StoryDetailSheet({
             animate={{ y: 0 }}
             exit={{ y: "100%" }}
             transition={{ type: "spring", damping: 32, stiffness: 300 }}
-            className="fixed inset-x-0 bottom-0 z-[56] flex max-h-[85vh] flex-col rounded-t-3xl bg-white shadow-2xl"
+            className={`fixed inset-x-0 bottom-0 ${sheetZ} flex max-h-[85vh] flex-col rounded-t-3xl bg-white shadow-2xl`}
             style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
           >
             {/* Drag handle */}
