@@ -795,61 +795,38 @@ function scoringPrompt(events: ClusteredEvent[]): string {
     (ev.inHeadlinesFeed ? " ★" : "")
   ).join("\n");
 
-  return `You are Khabar AI's editorial director. Your audience is retired Indians aged 60+, living in tier-1 and tier-2 cities. They are educated, politically aware, and deeply interested in how governance, policy, and the economy affect their daily lives and their children's futures. They follow cricket. They care about health. They are not interested in startup funding rounds, celebrity gossip, or gadget launches unless these have clear national significance.
+  return `You are Khabar AI's news editor. Score each event purely by how newsworthy and significant it is for an informed Indian audience today.
 
-Score each news event 0-10 by importance to THIS audience.
+SCORING GUIDE (0-10):
+10 = Unmissable breaking news — election result, budget, major disaster, war
+8-9 = Major national story everyone will be talking about today
+6-7 = Significant governance, policy, economy, or civic news
+4-5 = Worth knowing, not urgent
+2-3 = Niche, regional, low-stakes
+0-1 = PR fluff, startup funding, celebrity gossip, gadget launches
 
-SCORING GUIDE:
-10 = Directly and immediately affects their lives (budget, election result, major disaster, health emergency)
-8-9 = Major national event they will want to discuss with family today
-6-7 = Significant governance, policy, or civic news an informed citizen should know
-4-5 = Relevant but not urgent — worth mentioning
-2-3 = Niche, regional with limited impact, or low-stakes
-0-1 = Celebrity gossip, product launches, startup funding — no civic significance
+SCORE HIGHER:
+• National politics: Parliament, PM/Cabinet decisions, party developments, elections
+• Economy: RBI decisions, inflation, petrol/LPG/gold prices, stock market moves, trade
+• India's foreign relations: Pakistan, China, USA, border, diplomacy
+• Judiciary: Supreme Court and High Court judgments on major public matters
+• Disasters, accidents, security incidents with significant casualties
+• Cricket and Indian athletes at major international events
+• Infrastructure, governance, welfare schemes with direct public impact
+• Science and space: ISRO, major research breakthroughs
 
-TOPICS THAT SCORE HIGHER for this audience (all else equal):
-• National & state politics: Parliament sessions, CM decisions, party developments, by-elections
-• Economic policy: inflation, petrol/LPG prices, gold rates, FD/savings rates, pension schemes, stock market moves
-• Business & markets: RBI decisions, banking news, major corporate events affecting Indian households
-• Governance & welfare: government schemes, subsidies, Aadhaar, ration policy, senior citizen benefits
-• Judiciary: Supreme Court and High Court judgments on property, rights, civil matters
-• India's foreign relations: Pakistan, China, USA, trade deals, NRI policy, diaspora
-• Infrastructure: roads, railways, airports affecting daily life
-• ISRO and national science achievements
-• Cricket — any format, any match result, team selection, controversies
-• Sports — Indian athletes at major international events (Olympics, World Cup, Asian Games)
-• Major religious or cultural events of national significance
-
-HEALTH SCORING — be precise:
-• Score 7-9: disease outbreaks (dengue surge, new Covid variant), medicine price hikes, hospital policy, senior health schemes, AIIMS announcements
-• Score 4-6: general health advisories that are timely and actionable (e.g. heatwave precautions in summer)
-• Score 1-3: routine wellness tips, diet advice, generic study findings with no immediate impact — these are low priority
-
-TOPICS THAT SCORE LOWER for this audience:
-• Startup funding, VC investments, unicorn valuations
+SCORE LOWER:
+• Startup funding, VC rounds, unicorn valuations
 • Gadget launches, app updates, social media trends
-• Celebrity birthdays, film releases, OTT content
-• Academic conference findings with no immediate application
+• Routine celebrity news, film releases, OTT drops
+• Generic wellness tips, diet studies, routine health advisories
 
-★ = Appeared on Google News homepage (add 0.5 bonus)
+★ = Appeared on Google News homepage — strong signal of national significance, score +0.5
 
-Compare events against each other — scores must reflect relative importance to this specific audience.
-
-MANDATORY COVERAGE — set mustInclude: true regardless of score:
-• Any decision, statement, or action by the PM, Cabinet, or President of India
-• Supreme Court judgments affecting public life
-• Union Budget announcements or major fiscal policy
-• Natural disasters with casualties (earthquake, cyclone, major floods)
-• Terror attacks or major security incidents in India or involving Indians
-• RBI policy decisions (repo rate, monetary policy committee)
-• National or state election results
-• Major airline crashes or industrial disasters
-• Pandemic or health emergency declarations
-• Any event affecting pension, PF, or senior citizen schemes
-Use your judgment — when in doubt, set mustInclude: false and let the score decide.
+Scores must reflect relative importance — compare events against each other, not in isolation.
 
 Return a JSON array (same order as input, ${events.length} items):
-[{"importance": 7.5, "reason": "one clear sentence why this matters to a retired Indian", "confidence": "high", "breaking": false, "mustInclude": false}]
+[{"importance": 7.5, "reason": "one clear sentence on why this is significant"}]
 
 Events:
 ${eventList}`;
@@ -907,7 +884,7 @@ async function scoreEvents(
           ...ev,
           importanceScore:   Math.max(0, Math.min(10, Number(r.importance) || 3)),
           importanceReason:  String(r.reason ?? "").slice(0, 200),
-          forcedByEditorial: Boolean(r.mustInclude),
+          forcedByEditorial: false,
         };
       });
     } else {
@@ -924,12 +901,12 @@ async function scoreEvents(
         try {
           const results = await scoreOneBatch(batch);
           batchScored.push(...batch.map((ev, i) => {
-            const r = results[i] ?? { importance: 3, reason: "No score", confidence: "low", mustInclude: false };
+            const r = results[i] ?? { importance: 3, reason: "No score" };
             return {
               ...ev,
               importanceScore:   Math.max(0, Math.min(10, Number(r.importance) || 3)),
               importanceReason:  String(r.reason ?? "").slice(0, 200),
-              forcedByEditorial: Boolean(r.mustInclude),
+              forcedByEditorial: false,
             };
           }));
         } catch {
@@ -967,14 +944,8 @@ function buildBriefingPlan(events: ClusteredEvent[], logger: Logger): ClusteredE
     used.add(ev.eventId);
   };
 
-  // 1. mustInclude events always air — no cap, no section limit
-  for (const ev of sorted) {
-    if (!ev.forcedByEditorial) continue;
-    add(ev, ev.section);
-  }
-
-  // 2. Include all events scoring >= MIN_SCORE_THRESHOLD, ranked by score.
-  //    No per-section caps — score decides everything.
+  // 1. Include all events scoring >= MIN_SCORE_THRESHOLD, ranked by score.
+  //    Pure score ordering — no editorial overrides.
   for (const ev of sorted) {
     if (used.has(ev.eventId)) continue;
     if (plan.length >= MAX_TOTAL_STORIES) break;
@@ -1939,9 +1910,7 @@ export async function generateDailyBriefing(
   const scoreSec = (Date.now() - t2) / 1000;
   log(`Scoring done in ${scoreSec.toFixed(1)}s`);
 
-  // Step 6: mustInclude events are already flagged by scoreEvents() via AI judgment
-  const forced = scoredEvents.filter(e => e.forcedByEditorial).length;
-  if (forced > 0) log(`AI editorial flags: ${forced} events marked mustInclude`);
+  // Step 6: Planning driven purely by score — no editorial overrides
 
   // Step 7: Briefing plan
   const selectedEvents = buildBriefingPlan(scoredEvents, log);
