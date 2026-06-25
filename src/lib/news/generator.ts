@@ -1024,7 +1024,7 @@ function buildBriefingPlan(events: ClusteredEvent[], logger: Logger): ClusteredE
       const feed = FEED_MAP.get(sec);
       const placeholder: ClusteredEvent = {
         eventId:           `roundup-${sec}`,
-        canonicalTitle:    `${feed?.label ?? sec} Roundup`,
+        canonicalTitle:    feed?.label ?? sec,
         section:           sec,
         assignedSection:   sec,
         sourceStories:     evs.flatMap(e => e.sourceStories),
@@ -1274,18 +1274,18 @@ async function scriptRoundupGroup(
     withMr ? `"titleMr":"...","scriptMr":"..."` : "",
   ].filter(Boolean).join(",");
 
-  const prompt = `You are Khabar AI. Write a quick spoken roundup for the "${label}" section. Aaj Tak style — rapid-fire, zero fluff.
+  const prompt = `You are Khabar AI. Write a quick spoken update covering the "${label}" section. Aaj Tak style — rapid-fire, zero fluff.
 
 Cover these ${items.length} stories in 55-75 words total. Each story gets 1 punchy sentence — just the key fact.
 Use natural connectors: "Also,", "Meanwhile,", "And," — keep it flowing, not a list.
-NEVER open with "In ${label}" or "${label} roundup" — jump straight into the first fact.
-FORBIDDEN: "reportedly", "sources say", tease endings, demographic mentions.
+NEVER open with "In ${label}" or any section name — jump straight into the first fact.
+FORBIDDEN: "roundup", "wrap", "wrap-up", "reportedly", "sources say", tease endings, demographic mentions.
 NEVER invent facts.
 
 Also provide:
-- title: Short English label like "${label} Roundup"
+- title: Short English section label like "${label}"
 - titleHi: Hindi label in Devanagari
-- scriptHi: Full Hindi translation of the roundup script
+- scriptHi: Full Hindi translation of the script
 ${withTa ? "- titleTa: Tamil label\n- scriptTa: Full Tamil translation" : ""}
 ${withMr ? "- titleMr: Marathi label\n- scriptMr: Full Marathi translation" : ""}
 
@@ -1298,7 +1298,7 @@ ${itemsPayload}`;
   try {
     const raw = await geminiJson(prompt, 4096) as ScriptedEvent & { title?: string };
     return {
-      title:   raw.title   || `${label} Roundup`,
+      title:   raw.title   || label,
       titleHi: raw.titleHi,
       titleTa: withTa ? raw.titleTa : undefined,
       titleMr: withMr ? raw.titleMr : undefined,
@@ -1310,7 +1310,7 @@ ${itemsPayload}`;
   } catch (err: any) {
     logger(`  ✗ Roundup script ${ev.assignedSection}: ${err.message?.slice(0, 80)}`);
     return {
-      title:    `${label} Roundup`,
+      title:    label,
       scriptEn: items.map(i => i.canonicalTitle).join(". ") + ".",
       scriptHi: "",
     };
