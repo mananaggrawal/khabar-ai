@@ -218,6 +218,8 @@ function HomePage() {
 
   const [playerOpen, setPlayerOpen] = useState(false);
   const [detailStory, setDetailStory] = useState<Story | null>(null);
+  const [activeSection, setActiveSection] = useState<SectionId | "all">("all");
+  const pillsRef = useRef<HTMLDivElement>(null);
 
   // Persist which languages are available in this briefing to localStorage
   useEffect(() => {
@@ -251,6 +253,11 @@ function HomePage() {
       stories: (briefing?.stories ?? []).filter(s => s.section === sectionId),
     }))
     .filter(g => g.stories.length > 0);
+
+  // Stories filtered by active pill
+  const visibleStories = activeSection === "all"
+    ? storiesBySection.flatMap(g => g.stories)
+    : (storiesBySection.find(g => g.sectionId === activeSection)?.stories ?? []);
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
@@ -297,30 +304,57 @@ function HomePage() {
           {/* Hero card */}
           <HeroCard briefing={briefing} mono={mono} />
 
-          {/* Flat story list */}
+          {/* Section pills */}
+          <div
+            ref={pillsRef}
+            className="flex gap-2 overflow-x-auto px-4 pb-3 scrollbar-none"
+            style={{ scrollbarWidth: "none" }}
+          >
+            <button
+              onClick={() => setActiveSection("all")}
+              className="shrink-0 rounded-full px-4 py-1.5 text-xs font-semibold transition-all"
+              style={activeSection === "all"
+                ? { background: "#7B5CF0", color: "#fff" }
+                : { background: "rgba(123,92,240,0.10)", color: "#7B5CF0" }}
+            >
+              All
+            </button>
+            {storiesBySection.map(({ sectionId, feed }) => (
+              <button
+                key={sectionId}
+                onClick={() => setActiveSection(sectionId)}
+                className="shrink-0 rounded-full px-4 py-1.5 text-xs font-semibold transition-all"
+                style={activeSection === sectionId
+                  ? { background: "#7B5CF0", color: "#fff" }
+                  : { background: "rgba(123,92,240,0.10)", color: "#7B5CF0" }}
+              >
+                {feed?.label ?? sectionId}
+              </button>
+            ))}
+          </div>
+
+          {/* Story list — filtered by active pill */}
           <div
             className="flex-1 overflow-y-auto px-4 pb-4 space-y-2"
             style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 148px)" }}
           >
-            {storiesBySection.flatMap(({ sectionId, stories }) =>
-              stories.map((story) => {
-                const hasAudio = !!getAudioUrl(story, mono.language);
-                const storyIdx = mono.storiesWithAudio.findIndex((s) => s.id === story.id);
-                const isActive = mono.currentStory?.id === story.id;
-                return (
-                  <StoryCard
-                    key={story.id}
-                    story={story}
-                    language={mono.language}
-                    isPlaying={isActive && mono.state === "playing"}
-                    hasAudio={hasAudio}
-                    onPlay={() => storyIdx >= 0 && mono.playFrom(storyIdx)}
-                    onPause={mono.pause}
-                    onTap={() => setDetailStory(story)}
-                  />
-                );
-              })
-            )}
+            {visibleStories.map((story) => {
+              const hasAudio = !!getAudioUrl(story, mono.language);
+              const storyIdx = mono.storiesWithAudio.findIndex((s) => s.id === story.id);
+              const isActive = mono.currentStory?.id === story.id;
+              return (
+                <StoryCard
+                  key={story.id}
+                  story={story}
+                  language={mono.language}
+                  isPlaying={isActive && mono.state === "playing"}
+                  hasAudio={hasAudio}
+                  onPlay={() => storyIdx >= 0 && mono.playFrom(storyIdx)}
+                  onPause={mono.pause}
+                  onTap={() => setDetailStory(story)}
+                />
+              );
+            })}
           </div>
         </>
       )}

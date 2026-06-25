@@ -161,7 +161,7 @@ const ROUNDUP_SECTIONS = new Set<SectionId>([]);
 
 // Score threshold — lowered to let more stories through.
 // Full day coverage is the goal; score is a deprioritisation tool, not a gate.
-const MIN_SCORE_THRESHOLD = 2.5;
+const MIN_SCORE_THRESHOLD = 1.5;
 // Hard safety valve only.
 const MAX_TOTAL_STORIES   = 60;
 
@@ -1103,7 +1103,7 @@ async function fetchArticleText(url: string): Promise<string> {
 function isValidEnScript(text: string | undefined): boolean {
   if (!text || text.trim().length < 10) return false;
   const words = text.trim().split(/\s+/).length;
-  if (words < 100) return false;
+  if (words < 40) return false;
   // Reject if Devanagari or Tamil leaked into the English field
   if (/[ऀ-ॿ஀-௿]/.test(text)) return false;
   return true;
@@ -1137,51 +1137,32 @@ async function scriptOneEvent(
   const editorialHint = ev.importanceReason
     ? `\nEditorial context: ${ev.importanceReason}` : "";
 
-  const prompt = `You are Khabar AI's scriptwriter. Date: ${today}. Section: ${label}.
+  const prompt = `You are a scriptwriter for Khabar AI — India's fastest news briefing. Date: ${today}. Section: ${label}.
 
-Write a complete spoken-audio radio news script for this ONE story. It will be read aloud by a voice actor.
+Write a SHORT, PUNCHY spoken script for this ONE story. Think Aaj Tak "Aaj Ki Taaza Khabar" energy — rapid-fire, sharp, zero fluff. Like a smart friend who just read the news and is telling you the headline in 30 seconds.
 
 STORY
 ${ev.canonicalTitle} (${ev.publisherCount} source${ev.publisherCount !== 1 ? "s" : ""})
 ${sources}${editorialHint}
 
-SCRIPT STRUCTURE
-1. OPENING LINE (1 sentence, 15-20 words)
-   Lead with the most significant or surprising fact. Pull the listener in immediately.
-   FORBIDDEN openers: "Today", "In a", "According to", "The", "A new", "India's", "It is"
-   Good: "Your home loan EMI stays put - the RBI has held rates for the sixth time running."
-   Good: "Five people are dead after a warehouse roof came down in Kolkata this morning."
-   Good: "Petrol prices dropped overnight in four major cities, and more reductions may follow."
-
-2. FULL STORY (4-6 sentences)
-   Every relevant fact: names, numbers, dates, locations. Context and backstory.
-   Who did what, why, and what it means. State things clearly. No hedging.
-
-3. WHY IT MATTERS (2 sentences)
-   What does this mean for ordinary Indians? Think: savings, prices, family safety, cost of living, governance, jobs.
-   Write this as plain impact — NEVER mention "retired", "senior citizen", "elderly", "pension", or any demographic. Just state the consequence.
-
-4. CLOSING LINE (1 sentence)
-   End with a grounded, factual observation — what this means or what comes next.
-   FORBIDDEN endings: "Watch for updates", "Stay tuned", "Keep an eye out", "We'll bring you", "Follow updates", "More details to follow", "Tune in", any call-to-action or tease.
-
-WRITING RULES
-- WORD COUNT: 160-200 words. Hard floor. Shorter = rejected and retried.
-- PRIORITISE the ARTICLE body content above the headline — use the specific facts, quotes, figures, and details from it.
-- If an ARTICLE section is present in the sources, you MUST extract and use its key facts. Do not ignore it.
-- Supplement with your own knowledge of Indian news, history, and context to add depth.
-- Do NOT fabricate specific quotes or numbers that contradict the source.
-- FORBIDDEN: "reportedly", "it is said", "sources say", "according to", "details are unclear"
-- FORBIDDEN: any mention of the audience — never say "retired", "senior", "elderly", "pensioner", "grandparent", "tier-1", "tier-2". Write for all Indians.
-- FORBIDDEN: bullet points, numbered lists, parentheses, em-dashes mid-sentence
-- Sentences: max 18 words. Mix short punchy lines with medium-length ones.
-- Write for the ear. Flow naturally when spoken aloud.
+SCRIPT RULES
+- TARGET: 55-75 words. Hard ceiling at 80. No padding, no repetition.
+- Pull the key fact from the ARTICLE content if present — use real numbers, names, locations.
+- 3-4 sentences max. Each sentence must carry new information.
+- Voice: confident, fast, warm. Like a knowledgeable friend — not a formal anchor.
+- Lead with the most striking fact. Don't bury the news.
+- End with the consequence or what happens next — one sharp line.
+- FORBIDDEN openers: "Today", "In a", "According to", "The", "A new"
+- FORBIDDEN endings: "Stay tuned", "Watch for updates", "Keep an eye out", any tease or CTA
+- FORBIDDEN words: "reportedly", "sources say", "it is said", "details are unclear"
+- FORBIDDEN: mention any audience demographic — no "Indians", "citizens", "public", "people"
+- FORBIDDEN: bullet points, lists, parentheses
 
 TRANSLATIONS
 ${langRules}
-- Keep proper nouns, acronyms, numbers, brand names in their original form.
-- NEVER romanise Hindi, Tamil, or Marathi words - native script only.
-- Each translation must be a full, complete spoken script - same depth and energy as English.
+- Match the same energy and brevity as the English — not a literal translation, a natural spoken version.
+- Keep proper nouns, numbers, acronyms in original form.
+- NEVER romanise Hindi, Tamil, or Marathi — native script only.
 
 Return exactly ONE JSON object:
 ${jsonShape}`;
