@@ -1158,8 +1158,8 @@ SCRIPT STRUCTURE
    Who did what, why, and what it means. State things clearly. No hedging.
 
 3. WHY IT MATTERS (2 sentences)
-   How does this affect a retired Indian in a tier-1 or tier-2 city?
-   Think: savings, pension, family safety, cost of living, governance.
+   What does this mean for ordinary Indians? Think: savings, prices, family safety, cost of living, governance, jobs.
+   Write this as plain impact — NEVER mention "retired", "senior citizen", "elderly", "pension", or any demographic. Just state the consequence.
 
 4. CLOSING LINE (1 sentence)
    End with a grounded, factual observation — what this means or what comes next.
@@ -1172,6 +1172,7 @@ WRITING RULES
 - Supplement with your own knowledge of Indian news, history, and context to add depth.
 - Do NOT fabricate specific quotes or numbers that contradict the source.
 - FORBIDDEN: "reportedly", "it is said", "sources say", "according to", "details are unclear"
+- FORBIDDEN: any mention of the audience — never say "retired", "senior", "elderly", "pensioner", "grandparent", "tier-1", "tier-2". Write for all Indians.
 - FORBIDDEN: bullet points, numbered lists, parentheses, em-dashes mid-sentence
 - Sentences: max 18 words. Mix short punchy lines with medium-length ones.
 - Write for the ear. Flow naturally when spoken aloud.
