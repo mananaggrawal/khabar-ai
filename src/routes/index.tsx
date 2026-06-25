@@ -307,30 +307,28 @@ function HomePage() {
           {/* Section pills */}
           <div
             ref={pillsRef}
-            className="flex gap-2 overflow-x-auto px-4 pb-3 scrollbar-none"
+            className="flex gap-1.5 overflow-x-auto px-4 pb-3 scrollbar-none"
             style={{ scrollbarWidth: "none" }}
           >
-            <button
-              onClick={() => setActiveSection("all")}
-              className="shrink-0 rounded-full px-4 py-1.5 text-xs font-semibold transition-all"
-              style={activeSection === "all"
-                ? { background: "#7B5CF0", color: "#fff" }
-                : { background: "rgba(123,92,240,0.10)", color: "#7B5CF0" }}
-            >
-              All
-            </button>
-            {storiesBySection.map(({ sectionId, feed }) => (
-              <button
-                key={sectionId}
-                onClick={() => setActiveSection(sectionId)}
-                className="shrink-0 rounded-full px-4 py-1.5 text-xs font-semibold transition-all"
-                style={activeSection === sectionId
-                  ? { background: "#7B5CF0", color: "#fff" }
-                  : { background: "rgba(123,92,240,0.10)", color: "#7B5CF0" }}
-              >
-                {feed?.label ?? sectionId}
-              </button>
-            ))}
+            {(["all", ...storiesBySection.map(g => g.sectionId)] as const).map((id) => {
+              const feed = id === "all" ? null : FEED_MAP.get(id);
+              const label = id === "all" ? "All" : (feed?.label ?? id);
+              const isActive = activeSection === id;
+              return (
+                <button
+                  key={id}
+                  onClick={() => setActiveSection(id)}
+                  className={[
+                    "shrink-0 rounded-full px-3.5 py-1 text-xs font-medium transition-all whitespace-nowrap",
+                    isActive
+                      ? "bg-foreground text-background"
+                      : "bg-muted text-muted-foreground hover:text-foreground",
+                  ].join(" ")}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
 
           {/* Story list — filtered by active pill */}
