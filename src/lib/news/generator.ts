@@ -1062,6 +1062,43 @@ interface ScriptedEvent {
   scriptMr?: string;
 }
 
+/**
+ * Fetch the plain-text body of a news article URL.
+ * Returns up to ~2000 chars of article body, or empty string on failure.
+ * Strips HTML tags and boilerplate, keeps paragraphs.
+ */
+async function fetchArticleText(url: string): Promise<string> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 6000); // 6s timeout
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; KhabarAI/1.0)" },
+    });
+    clearTimeout(timer);
+    if (!res.ok) return "";
+    const html = await res.text();
+    // Extract <article>, <main>, or largest <div> — strip tags, collapse whitespace
+    const body = html
+      .replace(/<script[\s\S]*?<\/script>/gi, "")
+      .replace(/<style[\s\S]*?<\/style>/gi, "")
+      .replace(/<(nav|header|footer|aside|form|figure|figcaption)[^>]*>[\s\S]*?<\/\1>/gi, "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+    // Return first 2200 chars — enough for scripting context
+    return body.slice(0, 2200);
+  } catch {
+    return "";
+  }
+}
+
 /** Validate that an English script is usable — not empty, not too short, no foreign script leaked in. */
 function isValidEnScript(text: string | undefined): boolean {
   if (!text || text.trim().length < 10) return false;
@@ -1080,13 +1117,21 @@ async function scriptOneEvent(
   langRules: string,
   jsonShape: string,
 ): Promise<ScriptedEvent> {
-  const sources = ev.sourceStories.slice(0, 6).map(s => {
+  // Fetch full article body for top 2 sources (in parallel, best-effort)
+  const topStories = ev.sourceStories.slice(0, 3);
+  const articleTexts = await Promise.all(
+    topStories.map(s => fetchArticleText(s.link))
+  );
+
+  const sources = ev.sourceStories.slice(0, 6).map((s, i) => {
     const desc = s.description
       ?.replace(/<[^>]+>/g, "")
       .replace(/\s+/g, " ")
       .trim()
-      .slice(0, 400);
-    return `  [${s.source}] ${s.title}${desc ? `\n   -> ${desc}` : ""}`;
+      .slice(0, 300);
+    const body = articleTexts[i]?.slice(0, 1500) ?? "";
+    const bodyLine = body.length > 100 ? `\n   ARTICLE: ${body}` : "";
+    return `  [${s.source}] ${s.title}${desc ? `\n   -> ${desc}` : ""}${bodyLine}`;
   }).join("\n");
 
   const editorialHint = ev.importanceReason
@@ -1122,8 +1167,9 @@ SCRIPT STRUCTURE
 
 WRITING RULES
 - WORD COUNT: 160-200 words. Hard floor. Shorter = rejected and retried.
-- Use your full knowledge of Indian news, history, and context - not just what is in the source.
-- If source material is thin, explain the background, significance, and implications you know.
+- PRIORITISE the ARTICLE body content above the headline — use the specific facts, quotes, figures, and details from it.
+- If an ARTICLE section is present in the sources, you MUST extract and use its key facts. Do not ignore it.
+- Supplement with your own knowledge of Indian news, history, and context to add depth.
 - Do NOT fabricate specific quotes or numbers that contradict the source.
 - FORBIDDEN: "reportedly", "it is said", "sources say", "according to", "details are unclear"
 - FORBIDDEN: bullet points, numbered lists, parentheses, em-dashes mid-sentence
