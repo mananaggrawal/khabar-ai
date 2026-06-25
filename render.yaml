@@ -39,3 +39,13 @@ services:
         sync: false
       - key: ADMIN_KEY
         sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: SCRIPT_PROVIDER
+        value: openai
+      - key: OPENAI_TTS_MODEL
+        value: tts-1
+      - key: OPENAI_TTS_VOICE_EN
+        value: onyx
+      - key: OPENAI_TTS_VOICE_HI
+        value: onyx

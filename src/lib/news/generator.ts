@@ -24,10 +24,11 @@ import { elevenLabsTTS, isQuotaExhausted } from "@/lib/tts/elevenlabs";
 import { googleTTS, isDailyQuotaExhausted } from "@/lib/tts/google";
 import { edgeTTS } from "@/lib/tts/edge";
 import { kokoroTTS } from "@/lib/tts/kokoro";
+import { openaiTTS } from "@/lib/tts/openai";
 import { saveBriefingToStorage, loadBriefingFromStorage } from "@/lib/supabase-storage";
 import { isAbortRequested } from "@/lib/abort";
 
-export type TtsProvider = "google" | "elevenlabs" | "edge" | "kokoro";
+export type TtsProvider = "google" | "elevenlabs" | "edge" | "kokoro" | "openai";
 
 const LOCAL_MODE = process.env.LOCAL_MODE === "true";
 
@@ -262,6 +263,58 @@ function makeConcurrencyLimiter(limit: number) {
   };
 }
 const geminiLimit = makeConcurrencyLimiter(1); // sequential — prevents burst 429s
+
+// ─── OpenAI helpers ───────────────────────────────────────────────────────────
+
+function getOpenAIKey(): string {
+  const k = process.env.OPENAI_API_KEY;
+  if (!k) throw new Error("OPENAI_API_KEY is not set");
+  return k;
+}
+
+// gpt-4o for scripting — strong instruction following + JSON mode
+const OPENAI_SCRIPT_MODEL = "gpt-4o";
+
+const openaiLimit = makeConcurrencyLimiter(3); // allow some parallelism (OpenAI has higher RPM)
+
+async function openaiJson(prompt: string, maxTokens = 4096): Promise<any> {
+  return openaiLimit(async () => {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${getOpenAIKey()}`,
+      },
+      body: JSON.stringify({
+        model: OPENAI_SCRIPT_MODEL,
+        response_format: { type: "json_object" },
+        max_tokens: maxTokens,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+
+    if (!res.ok) {
+      const body = (await res.text()).slice(0, 400);
+      throw new Error(`OpenAI ${res.status}: ${body}`);
+    }
+
+    const data = await res.json();
+    const text = data.choices?.[0]?.message?.content ?? "{}";
+    try { return JSON.parse(text); } catch {
+      throw new Error(`OpenAI JSON parse failed: ${text.slice(0, 200)}`);
+    }
+  });
+}
+
+/**
+ * Route script generation to OpenAI or Gemini based on SCRIPT_PROVIDER env var.
+ * Clustering and scoring always use Gemini (cheaper, fast enough).
+ */
+function scriptJson(prompt: string, maxTokens = 4096): Promise<any> {
+  const provider = process.env.SCRIPT_PROVIDER ?? "gemini";
+  if (provider === "openai") return openaiJson(prompt, maxTokens);
+  return geminiJson(prompt, maxTokens, true);
+}
 
 async function geminiJson(prompt: string, maxOutputTokens = 8192, useScriptModel = false): Promise<any> {
   return geminiLimit(async () => {
@@ -1169,7 +1222,7 @@ ${langRules}
 Return exactly ONE JSON object:
 ${jsonShape}`;
 
-  const raw = await geminiJson(prompt, 4096, true /* useScriptModel: gemini-2.5-flash */);
+  const raw = await scriptJson(prompt, 4096);
   return raw as ScriptedEvent;
 }
 
@@ -1296,7 +1349,7 @@ Stories to cover:
 ${itemsPayload}`;
 
   try {
-    const raw = await geminiJson(prompt, 4096) as ScriptedEvent & { title?: string };
+    const raw = await scriptJson(prompt, 4096) as ScriptedEvent & { title?: string };
     return {
       title:   raw.title   || label,
       titleHi: raw.titleHi,
@@ -1702,7 +1755,7 @@ function setSegmentAudioUrl(seg: BriefingSegment, lang: string, url: string): vo
 function isProviderLangSupported(provider: TtsProvider, lang: string): boolean {
   if (provider === "kokoro") return lang === "en";
   if (provider === "google") return lang === "en" || lang === "hi";
-  return true; // elevenlabs and edge support all 4 languages
+  return true; // elevenlabs, edge, openai support all 4 languages
 }
 
 async function synthesizeOne(text: string, filename: string, provider: TtsProvider): Promise<string> {
@@ -1710,6 +1763,7 @@ async function synthesizeOne(text: string, filename: string, provider: TtsProvid
   if (provider === "elevenlabs") { const { url } = await elevenLabsTTS(text, filename); return url; }
   if (provider === "edge")       { const { url } = await edgeTTS(text, filename);       return url; }
   if (provider === "kokoro")     { const { url } = await kokoroTTS(text, filename);     return url; }
+  if (provider === "openai")     { const { url } = await openaiTTS(text, filename);     return url; }
   throw new Error(`Unknown TTS provider: ${provider}`);
 }
 
