@@ -322,7 +322,7 @@ function HomePage() {
                   className="shrink-0 rounded-full px-3.5 py-1 text-xs font-semibold transition-all whitespace-nowrap"
                   style={isActive
                     ? { background: accent, color: "#fff" }
-                    : { background: `${accent}18`, color: accent }}
+                    : { background: "transparent", color: accent }}
                 >
                   {label}
                 </button>
