@@ -157,49 +157,43 @@ type ClusteredEvent = {
 
 const TARGET_WPM = 150;
 
-// Minor sections clubbed into one roundup segment each.
-// If only 1 story passes in a roundup section it stays individual.
-const ROUNDUP_SECTIONS = new Set<SectionId>(["health", "entertainment", "science", "local"]);
-
 // Score threshold — low enough to not miss anything real.
 const MIN_SCORE_THRESHOLD = 1.5;
 
 // Hard ceiling — prevents any one section from flooding the briefing.
-// Post-clubbing this yields ~30 segments ≈ 13-15 min listen.
-const MAX_TOTAL_STORIES = 40;
+// After AI clubbing this yields ~18-22 cards ≈ 13-15 min listen.
+const MAX_TOTAL_STORIES = 30;
 
 // Guaranteed minimum slots per section (backfilled even below threshold).
-const MIN_SECTION_SLOTS: Partial<Record<SectionId, number>> = {
-  headlines:  5,
-  india:      5,
-  business:   5,
-  world:      5,
-  sports:     3,
-  technology: 3,
+const MIN_SECTION_SLOTS: Record<SectionId, number> = {
+  politics: 5,
+  world:    4,
+  business: 5,   // user wants ≥3 cards post-clubbing → need 5 raw events
+  sports:   3,
+  techlife: 4,
 };
 
 // Hard per-section caps — no section exceeds this regardless of score.
-const MAX_SECTION_SLOTS: Partial<Record<SectionId, number>> = {
-  headlines:  7,
-  india:      7,
-  business:   6,
-  world:      6,
-  sports:     4,
-  technology: 4,
-};
-
-// Guaranteed stories fed into each roundup section (top N by score, always included).
-const MIN_ROUNDUP_ITEMS: Partial<Record<SectionId, number>> = {
-  health:        3,
-  entertainment: 3,
-  science:       3,
-  local:         3,
+const MAX_SECTION_SLOTS: Record<SectionId, number> = {
+  politics: 8,
+  world:    6,
+  business: 7,
+  sports:   5,
+  techlife: 5,
 };
 
 const SECTION_ORDER: SectionId[] = [
-  "india", "world", "business", "technology", "sports",
-  "health", "entertainment", "science", "local",
+  "politics", "world", "business", "sports", "techlife",
 ];
+
+// Section-specific script tones for AI prompts
+const SECTION_TONES: Record<SectionId, string> = {
+  politics: "Lead with consequences for governance, policy, or citizens. Sharp and authoritative.",
+  world:    "Global perspective. Include what it means for India when relevant. Clear stakes.",
+  business: "Lead with numbers when available — percentages, market moves, amounts. Crisp financial language.",
+  sports:   "Lead with the result — score, winner, significance. Energetic but tight.",
+  techlife: "Human and accessible. The 'so what' for everyday life. No jargon.",
+};
 
 // ─── Gemini helpers ───────────────────────────────────────────────────────────
 
@@ -427,19 +421,22 @@ async function fetchAllFeeds(city: string): Promise<Map<SectionId, RssItem[]>> {
   const results = await Promise.allSettled(
     FEEDS.map(async (feed) => {
       const url = feed.buildUrl({ city });
-      let items = await fetchRss(url, feed.label, feed.id);
+      let items = await fetchRss(url, feed.label, feed.feedId);
       if (items.length === 0 && feed.fallbackUrl) {
         console.warn(`[feeds] ${feed.label}: topic URL returned 0 — trying fallback`);
-        items = await fetchRss(feed.fallbackUrl, feed.label, feed.id);
+        items = await fetchRss(feed.fallbackUrl, feed.label, feed.feedId);
       }
-      return { id: feed.id, items };
+      return { section: feed.section, feedId: feed.feedId, items };
     }),
   );
 
+  // Aggregate by display section (multiple feeds → same section, e.g. headlines+india+local → politics)
   const map = new Map<SectionId, RssItem[]>();
   for (const r of results) {
     if (r.status === "fulfilled" && r.value.items.length > 0) {
-      map.set(r.value.id, r.value.items);
+      const existing = map.get(r.value.section) ?? [];
+      existing.push(...r.value.items);
+      map.set(r.value.section, existing);
     }
   }
   return map;
@@ -460,11 +457,8 @@ function buildRawStories(feedMap: Map<SectionId, RssItem[]>): Story[] {
   const seenTitles = new Set<string>();
   const stories: Story[] = [];
 
-  // Process section feeds before headlines so section metadata is preserved
-  const order: SectionId[] = [
-    "india", "world", "business", "technology", "entertainment",
-    "sports", "science", "health", "local", "headlines",
-  ];
+  // Process sections in display order (politics last since it pools multiple feeds)
+  const order: SectionId[] = ["world", "business", "sports", "techlife", "politics"];
 
   for (const sectionId of order) {
     const items = feedMap.get(sectionId) ?? [];
@@ -600,9 +594,7 @@ async function clusterSectionChunk(
   sectionId: SectionId,
   indexOffset: number,
 ): Promise<ClusterGroup[]> {
-  const label       = FEED_MAP.get(sectionId)?.label ?? sectionId;
-  const isHeadlines = sectionId === "headlines";
-  void isHeadlines; // used downstream
+  const label = FEED_MAP.get(sectionId)?.label ?? sectionId;
 
   const prompt = `You are a news editor. These ${sectionStories.length} articles are from the "${label}" section.
 
@@ -639,10 +631,9 @@ async function clusterSection(
 ): Promise<ClusteredEvent[]> {
   if (sectionStories.length === 0) return [];
 
-  const label       = FEED_MAP.get(sectionId)?.label ?? sectionId;
-  const isHeadlines = sectionId === "headlines";
+  const label = FEED_MAP.get(sectionId)?.label ?? sectionId;
 
-  // Split into chunks to stay within TPM limits — large sections (India 104, Local 101) would
+  // Split into chunks to stay within TPM limits — large sections (politics 200+) would
   // otherwise send 5000+ token prompts that hit Gemini's tokens-per-minute quota.
   let allGroups: ClusterGroup[];
   if (sectionStories.length <= CLUSTER_CHUNK_SIZE) {
@@ -669,7 +660,7 @@ ${sectionStories.map((s, i) => `${i}. [${s.source}] ${s.title}`).join("\n")}`;
       allGroups = groups;
     } catch (err: any) {
       logger(`  ✗ cluster ${sectionId}: ${err.message?.slice(0, 80)} — each article = 1 event`);
-      return sectionStories.map(s => soloEvent(s, sectionId, isHeadlines));
+      return sectionStories.map(s => soloEvent(s, sectionId));
     }
   } else {
     // Chunked clustering — split large sections to stay within TPM limits
@@ -713,15 +704,11 @@ ${sectionStories.map((s, i) => `${i}. [${s.source}] ${s.title}`).join("\n")}`;
     const imageUrl      = indices.map(i => sectionStories[i].imageUrl).find(Boolean);
     const sourceStories = indices.map(i => sectionStories[i]);
 
-    const nonHeadlineSection = sourceStories
-      .map(s => s.section)
-      .find(s => s !== "headlines") ?? "india";
-
     events.push({
       eventId:           storyId(primaryUrl),
       canonicalTitle:    title,
-      section:           isHeadlines ? nonHeadlineSection : sectionId,
-      assignedSection:   isHeadlines ? nonHeadlineSection : sectionId,
+      section:           sectionId,
+      assignedSection:   sectionId,
       sourceStories,
       publisherCount:    publishers.length,
       publishers,
@@ -730,25 +717,24 @@ ${sectionStories.map((s, i) => `${i}. [${s.source}] ${s.title}`).join("\n")}`;
       importanceScore:   0,
       importanceReason:  "",
       forcedByEditorial: false,
-      inHeadlinesFeed:   isHeadlines || sourceStories.some(s => s.section === "headlines"),
+      inHeadlinesFeed:   publishers.length >= 2, // multi-publisher = headline-worthy
     });
   }
 
   // Uncovered stories → solo events
   for (let i = 0; i < sectionStories.length; i++) {
-    if (!covered.has(i)) events.push(soloEvent(sectionStories[i], sectionId, isHeadlines));
+    if (!covered.has(i)) events.push(soloEvent(sectionStories[i], sectionId));
   }
 
   return events;
 }
 
-function soloEvent(s: Story, sectionId: SectionId, isHeadlines: boolean): ClusteredEvent {
-  const nonHLSection = s.section !== "headlines" ? s.section : "india";
+function soloEvent(s: Story, sectionId: SectionId): ClusteredEvent {
   return {
     eventId:           s.id,
     canonicalTitle:    s.title.replace(/\s*[-–|]\s*[^-–|]{1,40}$/, "").trim(),
-    section:           isHeadlines ? nonHLSection : sectionId,
-    assignedSection:   isHeadlines ? nonHLSection : sectionId,
+    section:           sectionId,
+    assignedSection:   sectionId,
     sourceStories:     [s],
     publisherCount:    1,
     publishers:        [s.source],
@@ -757,7 +743,7 @@ function soloEvent(s: Story, sectionId: SectionId, isHeadlines: boolean): Cluste
     importanceScore:   0,
     importanceReason:  "",
     forcedByEditorial: false,
-    inHeadlinesFeed:   isHeadlines,
+    inHeadlinesFeed:   false,
   };
 }
 
@@ -821,15 +807,11 @@ async function clusterAllSections(
 //   • For solo-publisher events, keeping the N most recent per section
 
 const SOLO_KEEP_PER_SECTION: Partial<Record<SectionId, number>> = {
-  india:         12,
-  business:      10,
-  world:          8,
-  technology:     8,
-  sports:         6,
-  health:         5,
-  entertainment:  4,
-  science:        4,
-  local:          5,
+  politics: 15,
+  world:    10,
+  business: 12,
+  sports:    8,
+  techlife: 10,
 };
 
 function preFilterForScoring(events: ClusteredEvent[], logger: Logger): ClusteredEvent[] {
@@ -1011,7 +993,7 @@ function buildBriefingPlan(events: ClusteredEvent[], logger: Logger): ClusteredE
   const used = new Set<string>();
   const plan: ClusteredEvent[] = [];
 
-  const add = (ev: ClusteredEvent, section: string) => {
+  const add = (ev: ClusteredEvent, section: SectionId) => {
     ev.assignedSection = section;
     plan.push(ev);
     used.add(ev.eventId);
@@ -1027,12 +1009,12 @@ function buildBriefingPlan(events: ClusteredEvent[], logger: Logger): ClusteredE
     if (plan.length >= MAX_TOTAL_STORIES) break;
     if (ev.importanceScore < MIN_SCORE_THRESHOLD) break;
     const sec = ev.section as SectionId;
-    const cap = MAX_SECTION_SLOTS[sec] ?? (ROUNDUP_SECTIONS.has(sec) ? 6 : 99);
+    const cap = MAX_SECTION_SLOTS[sec] ?? 6;
     if (sectionCount(sec) >= cap) continue; // section is full — skip, keep filling others
     add(ev, sec);
   }
 
-  // 2. Backfill: ensure every non-roundup section hits its minimum.
+  // 2. Backfill: ensure every section hits its minimum (ignores score threshold).
   for (const [sec, min] of Object.entries(MIN_SECTION_SLOTS) as [SectionId, number][]) {
     const have = sectionCount(sec);
     if (have >= min) continue;
@@ -1043,67 +1025,67 @@ function buildBriefingPlan(events: ClusteredEvent[], logger: Logger): ClusteredE
     }
   }
 
-  // 3. Guarantee roundup sections always have enough items to form a roundup.
-  for (const [sec, min] of Object.entries(MIN_ROUNDUP_ITEMS) as [SectionId, number][]) {
-    const have = sectionCount(sec);
-    if (have >= min) continue;
-    const candidates = sorted.filter(ev => !used.has(ev.eventId) && ev.section === sec);
-    for (const ev of candidates.slice(0, min - have)) {
-      logger(`  📌 roundup-backfill ${sec}: ${ev.canonicalTitle.slice(0, 50)} (score ${ev.importanceScore.toFixed(1)})`);
-      add(ev, sec);
-    }
-  }
-
-  // 3. Club roundup sections: merge ≥2 events from the same section into one placeholder
-  const roundupSectionEvents = new Map<SectionId, ClusteredEvent[]>();
-  const nonRoundupPlan: ClusteredEvent[] = [];
-
-  for (const ev of plan) {
-    const sec = ev.assignedSection as SectionId;
-    if (ROUNDUP_SECTIONS.has(sec)) {
-      const arr = roundupSectionEvents.get(sec) ?? [];
-      arr.push(ev);
-      roundupSectionEvents.set(sec, arr);
-    } else {
-      nonRoundupPlan.push(ev);
-    }
-  }
-
-  const finalPlan = [...nonRoundupPlan];
-  for (const [sec, evs] of roundupSectionEvents) {
-    if (evs.length < 2) {
-      // Only 1 story in this roundup section — keep as individual
-      finalPlan.push(...evs);
-    } else {
-      // Merge into synthetic roundup placeholder
-      const feed = FEED_MAP.get(sec);
-      const placeholder: ClusteredEvent = {
-        eventId:           `roundup-${sec}`,
-        canonicalTitle:    feed?.label ?? sec,
-        section:           sec,
-        assignedSection:   sec,
-        sourceStories:     evs.flatMap(e => e.sourceStories),
-        publisherCount:    evs.reduce((s, e) => s + e.publisherCount, 0),
-        publishers:        [...new Set(evs.flatMap(e => e.publishers))],
-        imageUrl:          evs.find(e => e.imageUrl)?.imageUrl,
-        firstPublishedAt:  evs[0].firstPublishedAt,
-        importanceScore:   Math.max(...evs.map(e => e.importanceScore)),
-        importanceReason:  `Roundup of ${evs.length} ${sec} stories`,
-        forcedByEditorial: false,
-        inHeadlinesFeed:   false,
-        roundupGroup:      evs,
-      };
-      finalPlan.push(placeholder);
-      logger(`  🗂 Roundup: ${sec} (${evs.length} stories → 1 segment)`);
-    }
-  }
-
   const bySection = new Map<string, number>();
-  for (const ev of finalPlan) bySection.set(ev.assignedSection, (bySection.get(ev.assignedSection) ?? 0) + 1);
-  logger(`Briefing plan: ${finalPlan.length} segments (~${Math.round(finalPlan.length * 0.4)} min listen)`);
+  for (const ev of plan) bySection.set(ev.assignedSection, (bySection.get(ev.assignedSection) ?? 0) + 1);
+  logger(`Briefing plan: ${plan.length} events before AI clubbing`);
   for (const [section, count] of bySection) logger(`  ${section}: ${count}`);
 
-  return finalPlan;
+  return plan;
+}
+
+// ─── Step 7b: AI-based story clubbing ────────────────────────────────────────
+// For each section, AI decides which events are closely related enough
+// to tell together as one card (max 3 per group). Most events stay solo.
+
+async function groupSectionEvents(
+  events: ClusteredEvent[],
+  sectionId: SectionId,
+  logger: Logger,
+): Promise<Array<{ events: ClusteredEvent[]; isClubbed: boolean }>> {
+  if (events.length <= 1) {
+    return events.map(ev => ({ events: [ev], isClubbed: false }));
+  }
+
+  const label = FEED_MAP.get(sectionId)?.label ?? sectionId;
+  const prompt = `You are a news editor grouping ${label} stories for a briefing card.
+
+Group stories that cover the SAME ongoing development (same event, same scandal, same match result).
+Max 3 per group. Most stories should stay solo. When in doubt, keep separate.
+
+Stories:
+${events.map((ev, i) => `${i}. ${ev.canonicalTitle}`).join("\n")}
+
+Return JSON — every index 0–${events.length - 1} must appear exactly once:
+[{"indices":[0]},{"indices":[1,3]},{"indices":[2]}]`;
+
+  try {
+    const groups: Array<{ indices: number[] }> = await geminiJson(prompt, 1024);
+    if (!Array.isArray(groups)) throw new Error("not an array");
+
+    const covered = new Set<number>();
+    const result: Array<{ events: ClusteredEvent[]; isClubbed: boolean }> = [];
+
+    for (const g of groups) {
+      const indices = (g.indices ?? []).filter(i => i >= 0 && i < events.length);
+      if (indices.length === 0) continue;
+      indices.forEach(i => covered.add(i));
+      const groupEvents = indices.map(i => events[i]);
+      result.push({ events: groupEvents, isClubbed: groupEvents.length > 1 });
+    }
+
+    // Any uncovered events → solo
+    for (let i = 0; i < events.length; i++) {
+      if (!covered.has(i)) result.push({ events: [events[i]], isClubbed: false });
+    }
+
+    const clubbedCount = result.filter(g => g.isClubbed).length;
+    if (clubbedCount > 0) logger(`  🔗 ${sectionId}: ${clubbedCount} clubbed group${clubbedCount > 1 ? "s" : ""}`);
+
+    return result;
+  } catch (err: any) {
+    logger(`  ✗ grouping ${sectionId}: ${err.message?.slice(0, 80)} — no clubbing`);
+    return events.map(ev => ({ events: [ev], isClubbed: false }));
+  }
 }
 
 // ─── Step 8: Script generation ────────────────────────────────────────────────
@@ -1194,7 +1176,10 @@ async function scriptOneEvent(
   const editorialHint = ev.importanceReason
     ? `\nEditorial context: ${ev.importanceReason}` : "";
 
+  const tone = SECTION_TONES[ev.assignedSection as SectionId] ?? "";
+
   const prompt = `You are a scriptwriter for Khabar AI — India's fastest news briefing. Date: ${today}. Section: ${label}.
+${tone ? `Section focus: ${tone}` : ""}
 
 Write a SHORT, PUNCHY spoken script for this ONE story. Think Aaj Tak "Aaj Ki Taaza Khabar" energy — rapid-fire, sharp, zero fluff. Like a smart friend who just read the news and is telling you the headline in 30 seconds.
 
@@ -1236,7 +1221,7 @@ async function scriptEventBatch(
 ): Promise<ScriptedEvent[]> {
   if (sectionEvents.length === 0) return [];
 
-  const label  = sectionId === "headlines" ? "Top Stories" : (FEED_MAP.get(sectionId)?.label ?? sectionId);
+  const label  = FEED_MAP.get(sectionId)?.label ?? sectionId;
   const withTa = languages.includes("ta");
   const withMr = languages.includes("mr");
 
@@ -1456,95 +1441,102 @@ async function scriptSelectedEvents(
 
   logger(`Scripting ${selectedEvents.length} events across ${bySection.size} sections…`);
   const stories: Story[] = [];
-  const sectionProcessOrder: SectionId[] = ["headlines", ...SECTION_ORDER];
 
-  for (const sectionId of sectionProcessOrder) {
+  for (const sectionId of SECTION_ORDER) {
     if (isAbortRequested()) { logger("⛔ Aborted"); break; }
     const events = bySection.get(sectionId);
     if (!events || events.length === 0) continue;
 
     const emoji = FEED_MAP.get(sectionId)?.emoji ?? "📰";
-    logger(`  ${emoji} ${sectionId}: scripting ${events.length} events…`);
+    logger(`  ${emoji} ${sectionId}: ${events.length} events → AI grouping…`);
 
-    // Split events into individual vs roundup placeholders
-    const individualEvents = events.filter(ev => !ev.roundupGroup);
-    const roundupEvents    = events.filter(ev => !!ev.roundupGroup);
+    // AI-based clubbing: group related events into combined cards
+    const groups = await groupSectionEvents(events, sectionId, logger);
 
-    // Script individual events as a batch
-    const scripted = await scriptEventBatch(individualEvents, sectionId, logger, languages);
+    for (const group of groups) {
+      if (isAbortRequested()) break;
 
-    for (let i = 0; i < individualEvents.length; i++) {
-      const ev = individualEvents[i];
-      const sc = scripted[i] ?? { title: ev.canonicalTitle, scriptEn: ev.canonicalTitle + ".", scriptHi: "" };
-      const primary = ev.sourceStories[0];
-      const sources: StorySource[] = ev.sourceStories.map(s => ({
-        title: s.title, source: s.source, link: s.link,
-      }));
-
-      stories.push({
-        id:                ev.eventId,
-        title:             sc.title || ev.canonicalTitle,
-        titleHi:           sc.titleHi,
-        titleTa:           sc.titleTa,
-        titleMr:           sc.titleMr,
-        source:            ev.publishers[0] ?? primary.source,
-        link:              primary.link,
-        publishedAt:       ev.firstPublishedAt,
-        section:           ev.assignedSection,
-        imageUrl:          ev.imageUrl ?? primary.imageUrl,
-        description:       primary.description,
-        sources,
-        scriptEn:          sc.scriptEn,
-        scriptHi:          sc.scriptHi ?? "",
-        scriptTa:          sc.scriptTa,
-        scriptMr:          sc.scriptMr,
-        audioStartSec:     0,
-        importanceScore:   ev.importanceScore,
-        importanceReason:  ev.importanceReason,
-        forcedByEditorial: ev.forcedByEditorial,
-        wordCount:         sc.scriptEn.trim().split(/\s+/).length,
-        publisherCount:    ev.publisherCount,
-        publishers:        ev.publishers,
-      });
-    }
-
-    // Script roundup placeholders
-    for (const ev of roundupEvents) {
-      logger(`  🗂 ${sectionId}: scripting roundup (${ev.roundupGroup!.length} items)…`);
-      const sc = await scriptRoundupGroup(ev, logger, languages);
-      const primary = ev.sourceStories[0];
-      stories.push({
-        id:                ev.eventId,
-        title:             sc.title || ev.canonicalTitle,
-        titleHi:           sc.titleHi,
-        titleTa:           sc.titleTa,
-        titleMr:           sc.titleMr,
-        source:            ev.publishers[0] ?? primary?.source ?? "",
-        link:              primary?.link ?? "",
-        publishedAt:       ev.firstPublishedAt,
-        section:           ev.assignedSection,
-        imageUrl:          ev.imageUrl,
-        description:       `${ev.roundupGroup!.length} stories`,
-        sources:           ev.sourceStories.map(s => ({ title: s.title, source: s.source, link: s.link })),
-        scriptEn:          sc.scriptEn,
-        scriptHi:          sc.scriptHi ?? "",
-        scriptTa:          sc.scriptTa,
-        scriptMr:          sc.scriptMr,
-        audioStartSec:     0,
-        importanceScore:   ev.importanceScore,
-        importanceReason:  ev.importanceReason,
-        forcedByEditorial: false,
-        wordCount:         sc.scriptEn.trim().split(/\s+/).length,
-        publisherCount:    ev.publisherCount,
-        publishers:        ev.publishers,
-        isRoundup:         true,
-        roundupItems:      ev.roundupGroup!.map(item => ({
-          title:   item.canonicalTitle,
-          titleHi: undefined,
-          titleTa: undefined,
-          titleMr: undefined,
-        })),
-      });
+      if (!group.isClubbed) {
+        // Individual card — full article fetch + per-event scripting
+        const ev = group.events[0];
+        const scripted = await scriptEventBatch([ev], sectionId, logger, languages);
+        const sc = scripted[0] ?? { title: ev.canonicalTitle, scriptEn: ev.canonicalTitle + ".", scriptHi: "" };
+        const primary = ev.sourceStories[0];
+        stories.push({
+          id:                ev.eventId,
+          title:             sc.title || ev.canonicalTitle,
+          titleHi:           sc.titleHi,
+          titleTa:           sc.titleTa,
+          titleMr:           sc.titleMr,
+          source:            ev.publishers[0] ?? primary.source,
+          link:              primary.link,
+          publishedAt:       ev.firstPublishedAt,
+          section:           ev.assignedSection,
+          imageUrl:          ev.imageUrl ?? primary.imageUrl,
+          description:       primary.description,
+          sources:           ev.sourceStories.map(s => ({ title: s.title, source: s.source, link: s.link })),
+          scriptEn:          sc.scriptEn,
+          scriptHi:          sc.scriptHi ?? "",
+          scriptTa:          sc.scriptTa,
+          scriptMr:          sc.scriptMr,
+          audioStartSec:     0,
+          importanceScore:   ev.importanceScore,
+          importanceReason:  ev.importanceReason,
+          forcedByEditorial: ev.forcedByEditorial,
+          wordCount:         sc.scriptEn.trim().split(/\s+/).length,
+          publisherCount:    ev.publisherCount,
+          publishers:        ev.publishers,
+        });
+      } else {
+        // Clubbed card — build synthetic placeholder and script as a group
+        const evs = group.events;
+        const placeholder: ClusteredEvent = {
+          eventId:           `club-${evs.map(e => e.eventId).join("-")}`,
+          canonicalTitle:    FEED_MAP.get(sectionId)?.label ?? sectionId,
+          section:           sectionId,
+          assignedSection:   sectionId,
+          sourceStories:     evs.flatMap(e => e.sourceStories),
+          publisherCount:    evs.reduce((s, e) => s + e.publisherCount, 0),
+          publishers:        [...new Set(evs.flatMap(e => e.publishers))],
+          imageUrl:          evs.find(e => e.imageUrl)?.imageUrl,
+          firstPublishedAt:  evs[0].firstPublishedAt,
+          importanceScore:   Math.max(...evs.map(e => e.importanceScore)),
+          importanceReason:  `Clubbed: ${evs.length} related ${sectionId} stories`,
+          forcedByEditorial: false,
+          inHeadlinesFeed:   false,
+          roundupGroup:      evs,
+        };
+        logger(`  🔗 ${sectionId}: scripting clubbed (${evs.length} stories)…`);
+        const sc = await scriptRoundupGroup(placeholder, logger, languages);
+        const primary = placeholder.sourceStories[0];
+        stories.push({
+          id:                placeholder.eventId,
+          title:             sc.title || placeholder.canonicalTitle,
+          titleHi:           sc.titleHi,
+          titleTa:           sc.titleTa,
+          titleMr:           sc.titleMr,
+          source:            placeholder.publishers[0] ?? primary?.source ?? "",
+          link:              primary?.link ?? "",
+          publishedAt:       placeholder.firstPublishedAt,
+          section:           placeholder.assignedSection,
+          imageUrl:          placeholder.imageUrl,
+          description:       `${evs.length} stories`,
+          sources:           placeholder.sourceStories.map(s => ({ title: s.title, source: s.source, link: s.link })),
+          scriptEn:          sc.scriptEn,
+          scriptHi:          sc.scriptHi ?? "",
+          scriptTa:          sc.scriptTa,
+          scriptMr:          sc.scriptMr,
+          audioStartSec:     0,
+          importanceScore:   placeholder.importanceScore,
+          importanceReason:  placeholder.importanceReason,
+          forcedByEditorial: false,
+          wordCount:         sc.scriptEn.trim().split(/\s+/).length,
+          publisherCount:    placeholder.publisherCount,
+          publishers:        placeholder.publishers,
+          isRoundup:         true,
+          roundupItems:      evs.map(item => ({ title: item.canonicalTitle, titleHi: undefined, titleTa: undefined, titleMr: undefined })),
+        });
+      }
     }
   }
 
@@ -1586,29 +1578,20 @@ function makeClosingScript(): { en: string; hi: string; ta: string; mr: string }
   };
 }
 
-const SECTION_LABELS: Partial<Record<SectionId, string>> = {
-  headlines:     "Top Stories",
-  india:         "India",
-  world:         "World",
-  business:      "Business",
-  technology:    "Technology",
-  sports:        "Sports",
-  health:        "Health",
-  entertainment: "Entertainment",
-  science:       "Science",
-  local:         "Local News",
+const SECTION_LABELS: Record<SectionId, string> = {
+  politics: "Politics",
+  world:    "World",
+  business: "Business",
+  sports:   "Sports",
+  techlife: "Tech & Life",
 };
 
-const STATIC_TRANSITIONS: Partial<Record<SectionId, string>> = {
-  india:         "Now let's turn to India.",
-  world:         "From India to the world.",
-  business:      "In business today...",
-  technology:    "Now, some technology news.",
-  sports:        "Here's what happened in sports.",
-  health:        "On the health front...",
-  entertainment: "And now, some lighter news.",
-  science:       "In science and research...",
-  local:         "Some local news now.",
+const STATIC_TRANSITIONS: Record<SectionId, string> = {
+  politics: "Now let's turn to politics and governance.",
+  world:    "From India to the world.",
+  business: "In business today...",
+  sports:   "Here's what happened in sports.",
+  techlife: "And now, tech and lifestyle news.",
 };
 
 async function generateTransitions(
@@ -1693,8 +1676,7 @@ async function generateWrapper(
   // Determine ordered sections present in the briefing
   const sectionSet = new Set<SectionId>();
   for (const story of stories) sectionSet.add(story.section);
-  const orderedSections = (["headlines", ...SECTION_ORDER] as SectionId[])
-    .filter(s => sectionSet.has(s));
+  const orderedSections = [...SECTION_ORDER].filter(s => sectionSet.has(s));
 
   const transitions = await generateTransitions(orderedSections, logger, languages);
 
@@ -1886,14 +1868,37 @@ export async function saveBriefing(briefing: DailyBriefing): Promise<void> {
 
 function mapOldCategory(cat: string): SectionId {
   const m: Record<string, SectionId> = {
-    "india-national": "india",   "india-business": "business",
-    "india-sports":   "sports",  "india-tech":     "technology",
-    "india-entertainment": "entertainment", "india-health": "health",
-    "global-world":   "world",   "global-business": "business",
-    "global-sports":  "sports",  "global-tech":    "technology",
-    "global-entertainment": "entertainment", "global-health": "health",
+    // New section names (pass-through)
+    "politics":              "politics",
+    "world":                 "world",
+    "business":              "business",
+    "sports":                "sports",
+    "techlife":              "techlife",
+    // Old section names → new sections
+    "headlines":             "politics",
+    "india":                 "politics",
+    "local":                 "politics",
+    "technology":            "techlife",
+    "entertainment":         "techlife",
+    "science":               "techlife",
+    "health":                "techlife",
+    // Legacy v2/v3 category names
+    "india-national":        "politics",
+    "india-business":        "business",
+    "india-sports":          "sports",
+    "india-tech":            "techlife",
+    "india-entertainment":   "techlife",
+    "india-health":          "techlife",
+    "global-world":          "world",
+    "global-business":       "business",
+    "global-sports":         "sports",
+    "global-tech":           "techlife",
+    "global-entertainment":  "techlife",
+    "global-health":         "techlife",
+    "economy":               "business",
+    "economy/finance":       "business",
   };
-  return m[cat] ?? "headlines";
+  return m[cat] ?? "politics";
 }
 
 function normalizeBriefing(raw: any): DailyBriefing {
@@ -1970,9 +1975,9 @@ export async function generateDailyBriefing(
   // Step 2: Dedup
   const rawStories = buildRawStories(feedMap);
   log(`After dedup: ${rawStories.length} unique articles`);
-  for (const feed of FEEDS) {
-    const n = rawStories.filter(s => s.section === feed.id).length;
-    if (n > 0) log(`  ${feed.emoji} ${feed.label}: ${n}`);
+  for (const [sectionId, sectionConfig] of FEED_MAP) {
+    const n = rawStories.filter(s => s.section === sectionId).length;
+    if (n > 0) log(`  ${sectionConfig.emoji} ${sectionConfig.label}: ${n}`);
   }
 
   // Steps 2b + 4 in parallel: OG images + clustering
@@ -2109,6 +2114,7 @@ export async function generateMissingSections(
 export async function generateMissingTTS(
   logger: Logger = () => {},
   provider: TtsProvider = "google",
+  overrideLangs?: string[],
 ): Promise<{ patched: number; briefing: DailyBriefing }> {
   const log = (msg: string) => { console.log(`[generator] ${msg}`); logger(msg); };
 
@@ -2118,7 +2124,7 @@ export async function generateMissingTTS(
     return { patched: 0, briefing: { date: "", generatedAt: "", stories: [] } };
   }
 
-  const languages = existing.generatedLanguages ?? ["en", "hi"];
+  const languages = overrideLangs ?? existing.generatedLanguages ?? ["en", "hi"];
 
   const storiesNeedingAudio = existing.stories.filter(s =>
     languages.some(lang => {

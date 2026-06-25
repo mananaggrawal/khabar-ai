@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { Check } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
-import { CITY_KEY, DEFAULT_CITY, MAJOR_CITIES, FEEDS, SECTIONS_KEY, readPreferredSections, type SectionId } from "@/lib/news/sources";
+import { CITY_KEY, DEFAULT_CITY, MAJOR_CITIES, FEED_MAP, SECTIONS_KEY, readPreferredSections, type SectionId } from "@/lib/news/sources";
 import { BottomNav } from "@/components/BottomNav";
 
 const LANGUAGE_KEY = "khabar-language";
@@ -35,7 +35,7 @@ function SettingsPage() {
   const [availableLangs, setAvailableLangs]   = useState<string[]>(readAvailableLanguages);
   const [selectedCity, setSelectedCity]       = useState<string>(readCity);
   const [preferredSections, setPreferredSections] = useState<Set<SectionId>>(
-    () => typeof window !== "undefined" ? readPreferredSections() : new Set(FEEDS.map(f => f.id))
+    () => typeof window !== "undefined" ? readPreferredSections() : new Set([...FEED_MAP.keys()])
   );
 
   // Re-read available languages on mount
@@ -158,7 +158,7 @@ function SettingsPage() {
             Choose which news sections appear in your briefing.
           </p>
           <div className="mt-4 space-y-2">
-            {[...FEEDS.filter(f => f.id !== "local"), FEEDS.find(f => f.id === "local")!].map((feed) => {
+            {[...FEED_MAP.values()].map((feed) => {
               const on = preferredSections.has(feed.id);
               const isLast = preferredSections.size === 1 && on;
               return (

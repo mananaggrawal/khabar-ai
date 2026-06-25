@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from "motion/react";
 import {
   ChevronDown, SkipBack, SkipForward, Play, Pause,
   RotateCcw, RotateCw, Bookmark,
-  Newspaper, Flag, Globe, TrendingUp, Laptop, Film, Trophy, Microscope, Heart, MapPin,
+  Globe, TrendingUp, Trophy, Zap, LandmarkIcon,
 } from "lucide-react";
 import { VoiceOrb } from "./VoiceOrb";
 import type { useMonologue } from "@/hooks/useMonologue";
@@ -23,18 +23,26 @@ interface PlayerScreenProps {
   onSave?: () => void;
 }
 
+const LEGACY_SECTION: Record<string, SectionId> = {
+  headlines: "politics", india: "politics", local: "politics",
+  technology: "techlife", entertainment: "techlife", science: "techlife", health: "techlife",
+};
+const resolveSection = (s: string): SectionId => (LEGACY_SECTION[s] ?? s) as SectionId;
+
 const SECTION_COLOR: Record<SectionId, string> = {
-  headlines: "#7B5CF0", india: "#E05A2B", world: "#0D9488",
-  business: "#16A34A", technology: "#2563EB", entertainment: "#A21CAF",
-  sports: "#DC2626", science: "#0891B2", health: "#E11D48", local: "#D97706",
+  politics: "#E05A2B",
+  world:    "#0D9488",
+  business: "#16A34A",
+  sports:   "#DC2626",
+  techlife: "#7B5CF0",
 };
 
 const SECTION_ICON: Record<SectionId, React.ReactNode> = {
-  headlines: <Newspaper className="size-8" />, india: <Flag className="size-8" />,
-  world: <Globe className="size-8" />, business: <TrendingUp className="size-8" />,
-  technology: <Laptop className="size-8" />, entertainment: <Film className="size-8" />,
-  sports: <Trophy className="size-8" />, science: <Microscope className="size-8" />,
-  health: <Heart className="size-8" />, local: <MapPin className="size-8" />,
+  politics: <LandmarkIcon className="size-8" />,
+  world:    <Globe        className="size-8" />,
+  business: <TrendingUp   className="size-8" />,
+  sports:   <Trophy       className="size-8" />,
+  techlife: <Zap          className="size-8" />,
 };
 
 function formatTime(sec: number): string {
@@ -55,7 +63,7 @@ export function PlayerScreen({ mono, visible, onClose, isSaved, onSave }: Player
 
   const isPlaying = state === "playing";
   const elapsed = progress * duration;
-  const accent = currentStory ? (SECTION_COLOR[currentStory.section] ?? "#7B5CF0") : "#7B5CF0";
+  const accent = currentStory ? (SECTION_COLOR[resolveSection(currentStory.section)] ?? "#7B5CF0") : "#7B5CF0";
 
   const sectionStories = currentFeed
     ? storiesWithAudio.filter((s) => s.section === currentFeed.id)
@@ -122,7 +130,7 @@ export function PlayerScreen({ mono, visible, onClose, isSaved, onSave }: Player
                   style={{ backgroundColor: `${accent}20` }}
                 >
                   <span style={{ color: accent }}>
-                    {currentStory?.section ? SECTION_ICON[currentStory.section] : null}
+                    {currentStory?.section ? SECTION_ICON[resolveSection(currentStory.section)] : null}
                   </span>
                 </div>
                 {/* Orb overlay when playing */}

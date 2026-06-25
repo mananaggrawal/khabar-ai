@@ -657,6 +657,13 @@ function adminPage(supabaseUrl, supabaseKey) {
           <label><input type="radio" name="tts-patch-provider" value="elevenlabs"><span>ElevenLabs</span></label>
           <label><input type="radio" name="tts-patch-provider" value="kokoro"><span>Kokoro <span class="config-note">(EN)</span></span></label>
         </div>
+        <div class="config-row" style="margin-bottom:16px;">
+          <span class="config-label">Languages</span>
+          <label><input type="checkbox" name="tts-patch-lang" value="en" checked><span>EN</span></label>
+          <label><input type="checkbox" name="tts-patch-lang" value="hi" checked><span>HI</span></label>
+          <label><input type="checkbox" name="tts-patch-lang" value="ta"><span>TA</span></label>
+          <label><input type="checkbox" name="tts-patch-lang" value="mr"><span>MR</span></label>
+        </div>
         <button class="btn-primary" id="tts-btn" onclick="runPatchTTS()">Patch missing TTS</button>
         <div id="tts-log" class="log-terminal"></div>
       </div>
@@ -1144,7 +1151,8 @@ function adminPage(supabaseUrl, supabaseKey) {
       const ttsPatchRaw = document.querySelector('input[name="tts-patch-provider"]:checked')?.value ?? 'edge';
       const ttsPatchProvider = ttsPatchRaw.startsWith('openai') ? 'openai' : ttsPatchRaw;
       const ttsPatchModel = ttsPatchRaw === 'openai-tts1' ? 'tts-1' : ttsPatchRaw === 'openai-ttsHD' ? 'tts-1-hd' : '';
-      const patchParams = new URLSearchParams({ provider: ttsPatchProvider });
+      const ttsPatchLangs = [...document.querySelectorAll('input[name="tts-patch-lang"]:checked')].map(el => el.value);
+      const patchParams = new URLSearchParams({ provider: ttsPatchProvider, languages: ttsPatchLangs.join(',') });
       if (ttsPatchModel) patchParams.set('ttsModel', ttsPatchModel);
       const r = await fetch('/api/admin/patch-tts?' + patchParams, { method: 'POST', headers: { 'x-admin-key': AKEY } });
       if (r.status === 409) {

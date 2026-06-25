@@ -1,22 +1,23 @@
 /**
- * Google News RSS feed configuration — direct topic feeds.
- * No Gemini categorisation needed: Google already sorts these.
+ * Google News RSS feed configuration — topic-first section taxonomy.
+ * 10 RSS feeds map to 5 display sections: politics | world | business | sports | techlife
  */
 
+// ── Display section IDs (used in UI, stories, scripts) ───────────────────────
+
 export type SectionId =
-  | "headlines"
-  | "india"
+  | "politics"
   | "world"
   | "business"
-  | "technology"
-  | "entertainment"
   | "sports"
-  | "science"
-  | "health"
-  | "local";
+  | "techlife";
 
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+/** Configuration for a single RSS feed source. */
 export type FeedConfig = {
-  id: SectionId;
+  feedId: string;        // internal feed identifier (legacy section name)
+  section: SectionId;   // display section this feed belongs to
   label: string;
   labelHi: string;
   emoji: string;
@@ -24,6 +25,14 @@ export type FeedConfig = {
   buildUrl: (opts?: { city?: string }) => string;
   /** Fallback URL if buildUrl returns 0 results (e.g. topic ID expired). */
   fallbackUrl?: string;
+};
+
+/** Display config for a section (used in UI: pills, StoryCard label, transitions). */
+export type SectionConfig = {
+  id: SectionId;
+  label: string;
+  labelHi: string;
+  emoji: string;
 };
 
 // ── URL builders ──────────────────────────────────────────────────────────────
@@ -43,92 +52,123 @@ const TOPIC: Record<string, string> = {
   health:        "CAAqIQgKIhtDQkFTRGdvSUwyMHZNR3QwTlRJU0FtVnVLQUFQAQ",
 };
 
-// ── Feed configs ──────────────────────────────────────────────────────────────
+// ── Feed configs — 10 RSS feeds mapped to 5 display sections ──────────────────
+//
+// politics  ← headlines + india + local
+// world     ← world
+// business  ← business
+// sports    ← sports
+// techlife  ← technology + entertainment + science + health
 
 export const FEEDS: FeedConfig[] = [
   {
-    id: "headlines",
-    label: "Headlines",
+    feedId:  "headlines",
+    section: "politics",
+    label:   "Headlines",
     labelHi: "मुख्य खबरें",
-    emoji: "🔥",
+    emoji:   "🔥",
     buildUrl: () => `${GN_BASE}?${LOCALE}`,
   },
   {
-    id: "india",
-    label: "India",
+    feedId:  "india",
+    section: "politics",
+    label:   "India",
     labelHi: "भारत",
-    emoji: "🇮🇳",
-    // Topic ID can expire — search URL is a reliable fallback (rss.ts tries topic first)
+    emoji:   "🇮🇳",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.india}?${LOCALE}`,
     fallbackUrl: `${GN_BASE}/search?q=india+news&${LOCALE}`,
   },
   {
-    id: "world",
-    label: "World",
+    feedId:  "world",
+    section: "world",
+    label:   "World",
     labelHi: "विश्व",
-    emoji: "🌍",
+    emoji:   "🌍",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.world}?${LOCALE}`,
     fallbackUrl: `${GN_BASE}/search?q=world+international+news&${LOCALE}`,
   },
   {
-    id: "business",
-    label: "Business",
+    feedId:  "business",
+    section: "business",
+    label:   "Business",
     labelHi: "व्यापार",
-    emoji: "💼",
+    emoji:   "💼",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.business}?${LOCALE}`,
     fallbackUrl: `${GN_BASE}/search?q=india+business+economy+markets&${LOCALE}`,
   },
   {
-    id: "technology",
-    label: "Technology",
+    feedId:  "technology",
+    section: "techlife",
+    label:   "Technology",
     labelHi: "तकनीक",
-    emoji: "💻",
+    emoji:   "💻",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.technology}?${LOCALE}`,
     fallbackUrl: `${GN_BASE}/search?q=technology+ai+tech+news+india&${LOCALE}`,
   },
   {
-    id: "entertainment",
-    label: "Entertainment",
+    feedId:  "entertainment",
+    section: "techlife",
+    label:   "Entertainment",
     labelHi: "मनोरंजन",
-    emoji: "🎬",
+    emoji:   "🎬",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.entertainment}?${LOCALE}`,
     fallbackUrl: `${GN_BASE}/search?q=bollywood+entertainment+movies+india&${LOCALE}`,
   },
   {
-    id: "sports",
-    label: "Sports",
+    feedId:  "sports",
+    section: "sports",
+    label:   "Sports",
     labelHi: "खेल",
-    emoji: "⚽",
+    emoji:   "⚽",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.sports}?${LOCALE}`,
     fallbackUrl: `${GN_BASE}/search?q=cricket+sports+news+india&${LOCALE}`,
   },
   {
-    id: "science",
-    label: "Science",
+    feedId:  "science",
+    section: "techlife",
+    label:   "Science",
     labelHi: "विज्ञान",
-    emoji: "🔬",
+    emoji:   "🔬",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.science}?${LOCALE}`,
     fallbackUrl: `${GN_BASE}/search?q=science+space+research+news&${LOCALE}`,
   },
   {
-    id: "health",
-    label: "Health",
+    feedId:  "health",
+    section: "techlife",
+    label:   "Health",
     labelHi: "स्वास्थ्य",
-    emoji: "🏥",
+    emoji:   "🏥",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.health}?${LOCALE}`,
     fallbackUrl: `${GN_BASE}/search?q=health+medicine+wellness+news+india&${LOCALE}`,
   },
   {
-    id: "local",
-    label: "Local",
+    feedId:  "local",
+    section: "politics",
+    label:   "Local",
     labelHi: "स्थानीय",
-    emoji: "📍",
+    emoji:   "📍",
     buildUrl: ({ city } = {}) =>
       `${GN_BASE}/search?q=${encodeURIComponent((city ?? "Mumbai") + " local news")}&${LOCALE}`,
   },
 ];
 
-export const FEED_MAP = new Map<SectionId, FeedConfig>(FEEDS.map((f) => [f.id, f]));
+// ── Display section configs ────────────────────────────────────────────────────
+
+const SECTION_CONFIGS: SectionConfig[] = [
+  { id: "politics",  label: "Politics",    labelHi: "राजनीति",        emoji: "🏛️" },
+  { id: "world",     label: "World",       labelHi: "विश्व",           emoji: "🌍" },
+  { id: "business",  label: "Business",    labelHi: "व्यापार",         emoji: "💼" },
+  { id: "sports",    label: "Sports",      labelHi: "खेल",             emoji: "⚽" },
+  { id: "techlife",  label: "Tech & Life", labelHi: "तकनीक और जीवन",  emoji: "💡" },
+];
+
+/**
+ * FEED_MAP maps SectionId → SectionConfig.
+ * Used throughout UI and scripting for labels, emojis.
+ */
+export const FEED_MAP = new Map<SectionId, SectionConfig>(
+  SECTION_CONFIGS.map((c) => [c.id, c]),
+);
 
 // ── City setting (localStorage, client-side only) ─────────────────────────────
 
@@ -164,5 +204,5 @@ export function readPreferredSections(): Set<SectionId> {
       if (Array.isArray(arr) && arr.length > 0) return new Set(arr);
     }
   } catch {}
-  return new Set(FEEDS.map((f) => f.id)); // default: all sections
+  return new Set(SECTION_CONFIGS.map((c) => c.id)); // default: all 5 sections
 }

@@ -241,16 +241,20 @@ function HomePage() {
     if (mono.state === "idle") setPlayerOpen(false);
   }, [mono.state]);
 
+  // Legacy section → new display section mapping (for old briefings)
+  const LEGACY_SECTION: Record<string, SectionId> = {
+    headlines: "politics", india: "politics", local: "politics",
+    technology: "techlife", entertainment: "techlife", science: "techlife", health: "techlife",
+  };
+  const resolveSection = (s: string): SectionId => (LEGACY_SECTION[s] ?? s) as SectionId;
+
   // Group stories by section in display order
-  const SECTION_DISPLAY_ORDER: SectionId[] = [
-    "headlines", "india", "world", "business", "technology",
-    "sports", "health", "entertainment", "science", "local",
-  ];
+  const SECTION_DISPLAY_ORDER: SectionId[] = ["politics", "world", "business", "sports", "techlife"];
   const storiesBySection = SECTION_DISPLAY_ORDER
     .map(sectionId => ({
       sectionId,
       feed: FEED_MAP.get(sectionId),
-      stories: (briefing?.stories ?? []).filter(s => s.section === sectionId),
+      stories: (briefing?.stories ?? []).filter(s => resolveSection(s.section) === sectionId),
     }))
     .filter(g => g.stories.length > 0);
 

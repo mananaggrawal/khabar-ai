@@ -1,4 +1,4 @@
-import { Play, Pause, Newspaper, Flag, Globe, TrendingUp, Laptop, Film, Trophy, Microscope, Heart, MapPin } from "lucide-react";
+import { Play, Pause, Globe, TrendingUp, Trophy, Zap, LandmarkIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Story } from "@/lib/news/generator";
 import { FEED_MAP, type SectionId } from "@/lib/news/sources";
@@ -6,30 +6,35 @@ import { getStoryTitle } from "@/hooks/useMonologue";
 
 // Per-section accent colors — used for left border + label
 export const SECTION_COLOR: Record<SectionId, string> = {
-  headlines:     "#7B5CF0",
-  india:         "#E05A2B",
-  world:         "#0D9488",
-  business:      "#16A34A",
-  technology:    "#2563EB",
-  entertainment: "#A21CAF",
-  sports:        "#DC2626",
-  science:       "#0891B2",
-  health:        "#E11D48",
-  local:         "#D97706",
+  politics: "#E05A2B",
+  world:    "#0D9488",
+  business: "#16A34A",
+  sports:   "#DC2626",
+  techlife: "#7B5CF0",
 };
+
+// Legacy section names → new section (for briefings generated before the taxonomy change)
+const LEGACY_SECTION: Record<string, SectionId> = {
+  headlines: "politics",
+  india:     "politics",
+  local:     "politics",
+  technology:"techlife",
+  entertainment:"techlife",
+  science:   "techlife",
+  health:    "techlife",
+};
+
+function resolveSection(s: string): SectionId {
+  return LEGACY_SECTION[s] ?? (s as SectionId);
+}
 
 // Lucide icon per section
 const SECTION_ICON: Record<SectionId, React.ReactNode> = {
-  headlines:     <Newspaper  className="size-5" />,
-  india:         <Flag       className="size-5" />,
-  world:         <Globe      className="size-5" />,
-  business:      <TrendingUp className="size-5" />,
-  technology:    <Laptop     className="size-5" />,
-  entertainment: <Film       className="size-5" />,
-  sports:        <Trophy     className="size-5" />,
-  science:       <Microscope className="size-5" />,
-  health:        <Heart      className="size-5" />,
-  local:         <MapPin     className="size-5" />,
+  politics: <LandmarkIcon className="size-5" />,
+  world:    <Globe        className="size-5" />,
+  business: <TrendingUp   className="size-5" />,
+  sports:   <Trophy       className="size-5" />,
+  techlife: <Zap          className="size-5" />,
 };
 
 function WaveformIcon() {
@@ -68,8 +73,9 @@ interface StoryCardProps {
 }
 
 export function StoryCard({ story, isPlaying, hasAudio, language = "en", onPlay, onPause, onTap }: StoryCardProps) {
-  const feed = FEED_MAP.get(story.section);
-  const accent = SECTION_COLOR[story.section] ?? "#7B5CF0";
+  const section = resolveSection(story.section);
+  const feed = FEED_MAP.get(section);
+  const accent = SECTION_COLOR[section] ?? "#7B5CF0";
   const displayTitle = getStoryTitle(story, language ?? "en");
   const sectionLabel = language === "hi" ? (feed?.labelHi ?? feed?.label ?? story.section) : (feed?.label ?? story.section);
 
@@ -106,7 +112,7 @@ export function StoryCard({ story, isPlaying, hasAudio, language = "en", onPlay,
             className="hidden h-[56px] w-[56px] items-center justify-center rounded-xl"
             style={{ display: "none", backgroundColor: `${accent}18` }}
           >
-            <span style={{ color: accent }}>{SECTION_ICON[story.section]}</span>
+            <span style={{ color: accent }}>{SECTION_ICON[section]}</span>
           </div>
         </div>
       ) : (
@@ -114,7 +120,7 @@ export function StoryCard({ story, isPlaying, hasAudio, language = "en", onPlay,
           className="flex h-[56px] w-[56px] shrink-0 items-center justify-center rounded-xl"
           style={{ backgroundColor: `${accent}18` }}
         >
-          <span style={{ color: accent }}>{SECTION_ICON[story.section]}</span>
+          <span style={{ color: accent }}>{SECTION_ICON[section]}</span>
         </div>
       )}
 
