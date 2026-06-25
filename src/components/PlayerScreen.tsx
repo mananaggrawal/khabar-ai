@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from "motion/react";
 import {
   ChevronDown, SkipBack, SkipForward, Play, Pause,
   RotateCcw, RotateCw, Bookmark,
-  Flame, LandmarkIcon, Globe, TrendingUp,
+  Flame, LandmarkIcon, Globe, TrendingUp, MapPin,
 } from "lucide-react";
 import { VoiceOrb } from "./VoiceOrb";
 import type { useMonologue } from "@/hooks/useMonologue";
@@ -24,12 +24,12 @@ interface PlayerScreenProps {
 }
 
 const LEGACY_SECTION: Record<string, SectionId> = {
-  politics: "india", local: "india", sports: "india",
+  politics: "india", sports: "india",
   techlife: "india", technology: "india", entertainment: "india", science: "india", health: "india",
 };
 function resolveSection(s: string): SectionId {
   if (s in LEGACY_SECTION) return LEGACY_SECTION[s];
-  if (["headlines", "india", "world", "business"].includes(s)) return s as SectionId;
+  if (["headlines", "india", "world", "business", "local"].includes(s)) return s as SectionId;
   return "india";
 }
 
@@ -38,6 +38,7 @@ const SECTION_COLOR: Record<SectionId, string> = {
   india:     "#F97316",
   world:     "#0D9488",
   business:  "#16A34A",
+  local:     "#2563EB",
 };
 
 const SECTION_ICON: Record<SectionId, React.ReactNode> = {
@@ -45,6 +46,7 @@ const SECTION_ICON: Record<SectionId, React.ReactNode> = {
   india:     <LandmarkIcon className="size-8" />,
   world:     <Globe        className="size-8" />,
   business:  <TrendingUp   className="size-8" />,
+  local:     <MapPin       className="size-8" />,
 };
 
 function formatTime(sec: number): string {

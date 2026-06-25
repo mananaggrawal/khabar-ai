@@ -147,8 +147,6 @@ function HeroCard({
     weekday: "short", day: "numeric", month: "long",
   });
 
-  const isPlaying = mono.state === "playing";
-
   return (
     <div
       className="mx-4 mb-4 relative overflow-hidden rounded-3xl"
@@ -190,22 +188,8 @@ function HeroCard({
             {displayStory ? getStoryTitle(displayStory, mono.language) : "Today's Briefing"}
           </p>
 
-          {/* Play button + story count */}
+          {/* Story count */}
           <div className="flex items-center gap-2.5">
-            <button
-              onClick={() => isPlaying ? mono.pause() : mono.playAll()}
-              className="flex items-center gap-1.5 rounded-full px-4 py-2 text-[12px] font-semibold text-foreground transition-transform active:scale-95"
-              style={{
-                background: "rgba(255,255,255,0.92)",
-                boxShadow: "0 2px 12px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.1)",
-              }}
-            >
-              {isPlaying ? (
-                <><Pause className="size-3 fill-current" />Pause</>
-              ) : (
-                <><Play className="size-3 fill-current ml-0.5" />Play briefing</>
-              )}
-            </button>
             <span className="text-[11px] text-white/45 font-medium">
               {briefing.stories.length} stories
             </span>
@@ -248,7 +232,7 @@ function HomePage() {
 
   const [playerOpen, setPlayerOpen] = useState(false);
   const [detailStory, setDetailStory] = useState<Story | null>(null);
-  const [activeSection, setActiveSection] = useState<SectionId | "all">("all");
+  const [activeSection, setActiveSection] = useState<SectionId | null>(null);
   const pillsRef = useRef<HTMLDivElement>(null);
 
   // Persist which languages are available in this briefing to localStorage
@@ -280,10 +264,11 @@ function HomePage() {
     }))
     .filter(g => g.stories.length > 0);
 
-  // Section groups to render — all sections, or just the active pill
-  const groupsToRender = activeSection === "all"
-    ? storiesBySection
-    : storiesBySection.filter(g => g.sectionId === activeSection);
+  // Active section defaults to the first available section (no "All" view)
+  const currentSection = activeSection ?? storiesBySection[0]?.sectionId ?? null;
+
+  // Only the active section is shown
+  const groupsToRender = storiesBySection.filter(g => g.sectionId === currentSection);
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
@@ -336,10 +321,10 @@ function HomePage() {
             className="flex gap-2 overflow-x-auto px-4 pb-3"
             style={{ scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}
           >
-            {(["all", ...storiesBySection.map(g => g.sectionId)] as const).map((id) => {
-              const feed     = id === "all" ? null : FEED_MAP.get(id);
-              const label    = id === "all" ? "All" : (feed?.label ?? id);
-              const isActive = activeSection === id;
+            {storiesBySection.map((g) => {
+              const id       = g.sectionId;
+              const label    = g.feed?.label ?? id;
+              const isActive = currentSection === id;
               return (
                 <button
                   key={id}
@@ -370,7 +355,6 @@ function HomePage() {
                   {/* Section header + play-section button */}
                   <div className="flex items-center justify-between px-1 pt-2 pb-2">
                     <div className="flex min-w-0 items-center gap-2">
-                      <span className="text-sm">{feed?.emoji}</span>
                       <h2 className="truncate text-sm font-semibold text-foreground">{label}</h2>
                       <span className="text-[11px] text-muted-foreground">{stories.length}</span>
                     </div>

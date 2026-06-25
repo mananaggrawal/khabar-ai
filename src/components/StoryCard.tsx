@@ -1,4 +1,4 @@
-import { Play, Flame, LandmarkIcon, Globe, TrendingUp } from "lucide-react";
+import { Play, Flame, LandmarkIcon, Globe, TrendingUp, MapPin } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Story } from "@/lib/news/generator";
 import { FEED_MAP, type SectionId } from "@/lib/news/sources";
@@ -10,12 +10,12 @@ export const SECTION_COLOR: Record<SectionId, string> = {
   india:     "#F97316",
   world:     "#0D9488",
   business:  "#16A34A",
+  local:     "#2563EB",
 };
 
 // Legacy section names → new section (backward compat for old briefings)
 const LEGACY_SECTION: Record<string, SectionId> = {
   politics:      "india",
-  local:         "india",
   sports:        "india",
   techlife:      "india",
   technology:    "india",
@@ -26,7 +26,7 @@ const LEGACY_SECTION: Record<string, SectionId> = {
 
 function resolveSection(s: string): SectionId {
   if (s in LEGACY_SECTION) return LEGACY_SECTION[s];
-  if (["headlines", "india", "world", "business"].includes(s)) return s as SectionId;
+  if (["headlines", "india", "world", "business", "local"].includes(s)) return s as SectionId;
   return "india";
 }
 
@@ -36,6 +36,7 @@ const SECTION_ICON: Record<SectionId, React.ReactNode> = {
   india:     <LandmarkIcon className="size-5" />,
   world:     <Globe        className="size-5" />,
   business:  <TrendingUp   className="size-5" />,
+  local:     <MapPin       className="size-5" />,
 };
 
 function WaveformIcon() {
