@@ -5,7 +5,9 @@
 
 // ── Section IDs — straight from Google News feed names ───────────────────────
 
-export type SectionId = "headlines" | "india" | "world" | "business" | "local";
+export type SectionId =
+  | "headlines" | "india" | "world" | "business"
+  | "technology" | "sports" | "science" | "health" | "local";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -35,9 +37,13 @@ const GN_BASE = "https://news.google.com/rss";
 export const DEFAULT_CITY = "Mumbai";
 
 const TOPIC: Record<string, string> = {
-  india:    "CAAqIQgKIhtDQkFTRGdvSUwyMHZNRHBxY0dNU0FtVnVLQUFQAQ",
-  world:    "CAAqJggKIiBDQkFTRWdvSUwyMHZNRGx1YlY4U0FtVnVHZ0pKVGlnQVAB",
-  business: "CAAqJggKIiBDQkFTRWdvSUwyMHZNRGx6TVdZU0FtVnVHZ0pKVGlnQVAB",
+  india:      "CAAqIQgKIhtDQkFTRGdvSUwyMHZNRHBxY0dNU0FtVnVLQUFQAQ",
+  world:      "CAAqJggKIiBDQkFTRWdvSUwyMHZNRGx1YlY4U0FtVnVHZ0pKVGlnQVAB",
+  business:   "CAAqJggKIiBDQkFTRWdvSUwyMHZNRGx6TVdZU0FtVnVHZ0pKVGlnQVAB",
+  technology: "CAAqJggKIiBDQkFTRWdvSUwyMHZNRGRqTVhZU0FtVnVHZ0pKVGlnQVAB",
+  sports:     "CAAqJggKIiBDQkFTRWdvSUwyMHZNRFp1ZEdvU0FtVnVHZ0pKVGlnQVAB",
+  science:    "CAAqJggKIiBDQkFTRWdvSUwyMHZNRFp0Y1RJU0FtVnVHZ0pKVGlnQVAB",
+  health:     "CAAqIQgKIhtDQkFTRGdvSUwyMHZNR3QwTlRFU0FtVnVLQUFQAQ",
 };
 
 // ── Feed configs ──────────────────────────────────────────────────────────────
@@ -75,6 +81,38 @@ export const FEEDS: FeedConfig[] = [
     fallbackUrl: `${GN_BASE}/search?q=india+business+economy+markets&${LOCALE}`,
   },
   {
+    feedId:  "technology",
+    label:   "Technology",
+    labelHi: "तकनीक",
+    emoji:   "💻",
+    buildUrl: () => `${GN_BASE}/topics/${TOPIC.technology}?${LOCALE}`,
+    fallbackUrl: `${GN_BASE}/search?q=technology&${LOCALE}`,
+  },
+  {
+    feedId:  "sports",
+    label:   "Sports",
+    labelHi: "खेल",
+    emoji:   "🏆",
+    buildUrl: () => `${GN_BASE}/topics/${TOPIC.sports}?${LOCALE}`,
+    fallbackUrl: `${GN_BASE}/search?q=sports&${LOCALE}`,
+  },
+  {
+    feedId:  "science",
+    label:   "Science",
+    labelHi: "विज्ञान",
+    emoji:   "🔬",
+    buildUrl: () => `${GN_BASE}/topics/${TOPIC.science}?${LOCALE}`,
+    fallbackUrl: `${GN_BASE}/search?q=science&${LOCALE}`,
+  },
+  {
+    feedId:  "health",
+    label:   "Health",
+    labelHi: "स्वास्थ्य",
+    emoji:   "🩺",
+    buildUrl: () => `${GN_BASE}/topics/${TOPIC.health}?${LOCALE}`,
+    fallbackUrl: `${GN_BASE}/search?q=health&${LOCALE}`,
+  },
+  {
     feedId:  "local",
     label:   "Local",
     labelHi: "स्थानीय",
@@ -87,14 +125,18 @@ export const FEEDS: FeedConfig[] = [
 
 // ── Display section configs ───────────────────────────────────────────────────
 
-export const SECTION_ORDER: SectionId[] = ["headlines", "india", "world", "business", "local"];
+export const SECTION_ORDER: SectionId[] = ["headlines", "india", "world", "business", "technology", "sports", "science", "health", "local"];
 
 const SECTION_CONFIGS: SectionConfig[] = [
-  { id: "headlines", label: "Top Stories", labelHi: "मुख्य खबरें", emoji: "🔥" },
-  { id: "india",     label: "India",       labelHi: "भारत",         emoji: "🇮🇳" },
-  { id: "world",     label: "World",       labelHi: "विश्व",         emoji: "🌍" },
-  { id: "business",  label: "Business",    labelHi: "व्यापार",       emoji: "💼" },
-  { id: "local",     label: "Local",       labelHi: "स्थानीय",      emoji: "📍" },
+  { id: "headlines",  label: "Top Stories", labelHi: "मुख्य खबरें", emoji: "🔥" },
+  { id: "india",      label: "India",       labelHi: "भारत",         emoji: "🇮🇳" },
+  { id: "world",      label: "World",       labelHi: "विश्व",         emoji: "🌍" },
+  { id: "business",   label: "Business",    labelHi: "व्यापार",       emoji: "💼" },
+  { id: "technology", label: "Technology",  labelHi: "तकनीक",        emoji: "💻" },
+  { id: "sports",     label: "Sports",      labelHi: "खेल",          emoji: "🏆" },
+  { id: "science",    label: "Science",     labelHi: "विज्ञान",       emoji: "🔬" },
+  { id: "health",     label: "Health",      labelHi: "स्वास्थ्य",     emoji: "🩺" },
+  { id: "local",      label: "Local",       labelHi: "स्थानीय",      emoji: "📍" },
 ];
 
 /** FEED_MAP: SectionId → SectionConfig. Used in UI for labels and emojis. */

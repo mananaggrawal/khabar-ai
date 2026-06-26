@@ -364,6 +364,16 @@ function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]
   const stories: Story[] = [];
   const headlineIds = new Set<string>();
 
+  // Only today's news: drop items older than STORY_MAX_AGE_HOURS (default 24h).
+  // Google News feeds include multi-day-old items, which caused "stale day" stories.
+  const maxAgeMs    = (Number(process.env.STORY_MAX_AGE_HOURS) || 24) * 3_600_000;
+  const freshCutoff = Date.now() - maxAgeMs;
+  function isFresh(item: RssItem): boolean {
+    if (!item.pubDate) return false;          // no date → can't confirm it's today, skip
+    const t = Date.parse(item.pubDate);
+    return !isNaN(t) && t >= freshCutoff;
+  }
+
   function addStory(item: RssItem, section: SectionId): number {
     const id  = storyId(item.link);
     const key = normalize(item.title).slice(0, 60);
@@ -382,11 +392,11 @@ function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]
   }
 
   // Process topical feeds first
-  for (const feedId of ["india", "world", "business", "local"] as SectionId[]) {
+  for (const feedId of ["india", "world", "business", "technology", "sports", "science", "health", "local"] as SectionId[]) {
     for (const item of feedMap.get(feedId) ?? []) {
       const id  = storyId(item.link);
       const key = normalize(item.title).slice(0, 60);
-      if (!seenIds.has(id) && !seenTitles.has(key)) addStory(item, feedId);
+      if (!seenIds.has(id) && !seenTitles.has(key) && isFresh(item)) addStory(item, feedId);
     }
   }
 
@@ -397,7 +407,7 @@ function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]
     if (seenIds.has(id) || seenTitles.has(key)) {
       const idx = idToIdx.get(id) ?? titleToIdx.get(key);
       if (idx != null) headlineIds.add(stories[idx].id);
-    } else {
+    } else if (isFresh(item)) {
       const idx = addStory(item, "headlines");
       headlineIds.add(stories[idx].id);
     }
@@ -654,7 +664,7 @@ async function clusterAndSelect(
 
   const prompt = `You are the news editor for Khabar AI — India's top audio news briefing.
 
-Here are ${stories.length} articles from today's Google News feeds (India, World, Business, Local, Headlines).
+Here are ${stories.length} articles from today's Google News feeds (India, World, Business, Technology, Sports, Science, Health, Local, Headlines).
 ★ = appeared on Google's homepage — stronger editorial signal.
 
 TASK:
@@ -673,7 +683,7 @@ Return a JSON object with a single key "events":
 {"events": [
   {
     "title": "specific, factual event title — max 10 words",
-    "section": "headlines|india|world|business|local",
+    "section": "headlines|india|world|business|technology|sports|science|health|local",
     "sourceIndices": [0, 4, 12],
     "imageIndex": 0,
     "whyImportant": "one sentence — the key reason this matters"
@@ -683,7 +693,7 @@ Return a JSON object with a single key "events":
 RULES:
 - Return exactly ${maxStories} events (or fewer if total distinct events is less)
 - Every index used in sourceIndices must be in range 0–${stories.length - 1}
-- section: assign based on content — "headlines" for major cross-cutting stories, "local" for city/regional news, else india/world/business
+- section: assign based on content — "headlines" for major cross-cutting stories, "local" for city/regional news, else the best-fitting topic: india, world, business, technology, sports, science, or health
 - imageIndex: which sourceIndex is most likely to have a good image (Reuters, AP, PTI, AFP > others)
 - Keep clusters tight — only group articles covering the SAME specific event
 
@@ -741,7 +751,7 @@ ${articleList}`;
     const title    = (g.title ?? "").trim();
     if (!title) continue;
 
-    const section  = (["headlines", "india", "world", "business", "local"].includes(g.section)
+    const section  = (["headlines", "india", "world", "business", "technology", "sports", "science", "health", "local"].includes(g.section)
       ? g.section : stories[indices[0]].section) as SectionId;
 
     const imageIdx      = (g.imageIndex != null && indices.includes(g.imageIndex)) ? g.imageIndex : indices[0];
@@ -1008,10 +1018,9 @@ export async function saveBriefing(briefing: DailyBriefing): Promise<void> {
 function mapOldSection(cat: string): SectionId {
   const m: Record<string, SectionId> = {
     headlines: "headlines", india: "india", world: "world", business: "business", local: "local",
+    technology: "technology", sports: "sports", science: "science", health: "health",
     // old taxonomy → nearest new section
-    politics: "india",
-    sports: "india", techlife: "india", technology: "india",
-    entertainment: "india", science: "india", health: "india",
+    politics: "india", techlife: "technology", entertainment: "india",
     // legacy v2/v3
     "india-national": "india", "india-business": "business", "india-sports": "india",
     "india-tech": "india", "global-world": "world", "global-business": "business",
