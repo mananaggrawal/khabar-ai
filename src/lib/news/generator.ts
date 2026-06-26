@@ -943,17 +943,90 @@ async function synthesizeOne(text: string, filename: string, provider: TtsProvid
   throw new Error(`Unknown TTS provider: ${provider}`);
 }
 
+// ─── Step 5b: Translate English → other languages ────────────────────────────
+
+const LANG_NAMES: Record<string, string> = { hi: "Hindi", ta: "Tamil", mr: "Marathi" };
+// Validate the translation came back in the right script (Devanagari / Tamil)
+const LANG_SCRIPT_RE: Record<string, RegExp> = { hi: /[ऀ-ॿ]/, mr: /[ऀ-ॿ]/, ta: /[஀-௿]/ };
+
+// gpt-4o-mini is cheap and good enough for short news translation. Override via TRANSLATE_MODEL.
+function getTranslateModel(): string { return process.env.TRANSLATE_MODEL ?? "gpt-4o-mini"; }
+
+function setScript(s: Story, lang: string, text: string): void {
+  if (lang === "hi") s.scriptHi = text;
+  else if (lang === "ta") s.scriptTa = text;
+  else if (lang === "mr") s.scriptMr = text;
+}
+function scriptForLang(s: Story, lang: string): string | undefined {
+  if (lang === "en") return s.scriptEn || undefined;
+  if (lang === "hi") return s.scriptHi || undefined;
+  if (lang === "ta") return s.scriptTa || undefined;
+  if (lang === "mr") return s.scriptMr || undefined;
+  return undefined;
+}
+function setAudioUrl(s: Story, lang: string, url: string): void {
+  if (lang === "en") s.audioUrlEn = url;
+  else if (lang === "hi") s.audioUrlHi = url;
+  else if (lang === "ta") s.audioUrlTa = url;
+  else if (lang === "mr") s.audioUrlMr = url;
+}
+
+async function translateBatch(texts: string[], lang: string): Promise<string[]> {
+  const name = LANG_NAMES[lang] ?? lang;
+  const prompt = `Translate each of these ${texts.length} short English news scripts into ${name}. They are read ALOUD in an audio news briefing, so each translation must sound natural spoken: everyday conversational ${name} (not heavy or over-Sanskritised), keep every name, place and number accurate, and write in the ${name} script. Keep the same order and the same count.
+
+Return ONLY JSON: {"t": ["…", "…"]} — exactly ${texts.length} strings, in order.
+
+${texts.map((t, i) => `[${i}]\n${t}`).join("\n\n")}`;
+  const raw = await openaiJson(prompt, getTranslateModel(), 8192);
+  const arr = Array.isArray(raw?.t) ? raw.t : (Array.isArray(raw) ? raw : []);
+  return arr.map((x: any) => String(x ?? "").trim());
+}
+
+/** Translate every story's English script into each language (in place). Batched + cheap. */
+async function translateAll(stories: Story[], langs: string[], logger: Logger): Promise<void> {
+  const limit = makeConcurrencyLimiter(5);
+  const BATCH = 10;
+  for (const lang of langs) {
+    if (isAbortRequested()) return;
+    logger(`Translating ${stories.length} scripts → ${LANG_NAMES[lang] ?? lang}…`);
+    let ok = 0;
+    const tasks: Promise<void>[] = [];
+    for (let i = 0; i < stories.length; i += BATCH) {
+      const slice = stories.slice(i, i + BATCH);
+      tasks.push(limit(async () => {
+        if (isAbortRequested()) return;
+        if (!slice.some(s => s.scriptEn)) return;
+        try {
+          const out = await translateBatch(slice.map(s => s.scriptEn), lang);
+          slice.forEach((s, j) => {
+            const tr = (out[j] ?? "").trim();
+            if (tr && LANG_SCRIPT_RE[lang]?.test(tr)) { setScript(s, lang, tr); ok++; }
+          });
+        } catch (err: any) {
+          logger(`  ✗ translate ${lang}: ${err.message?.slice(0, 60)}`);
+        }
+      }));
+    }
+    await Promise.all(tasks);
+    logger(`  ${LANG_NAMES[lang] ?? lang}: ${ok}/${stories.length} translated`);
+  }
+}
+
+// ─── Step 6: TTS (per language) ───────────────────────────────────────────────
+
 async function generateAllTTS(
   stories: Story[],
   date: string,
   provider: TtsProvider,
+  languages: string[],
   logger: Logger,
   onProgress?: (stories: Story[]) => Promise<void>,
 ): Promise<{ stories: Story[]; costInfo: TtsCostInfo }> {
-  logger(`TTS (${provider}): ${stories.length} stories, English`);
+  logger(`TTS (${provider}): ${stories.length} stories × ${languages.length} lang(s) [${languages.join(",")}]`);
   const updated = stories.map(s => ({ ...s }));
   let totalChars = 0;
-  let storiesWithAudio = 0;
+  let clips = 0;
 
   // 5 concurrent for TTS — Edge has no rate limit; others are conservative
   const ttsLimit = makeConcurrencyLimiter(5);
@@ -965,24 +1038,28 @@ async function generateAllTTS(
     ? (s: Story[]) => saveQueue(() => onProgress(s))
     : undefined;
 
+  // One job per (story, language) clip
+  const jobs: Array<{ i: number; lang: string }> = [];
+  for (let i = 0; i < updated.length; i++) for (const lang of languages) jobs.push({ i, lang });
+
   await Promise.all(
-    stories.map((story, i) =>
+    jobs.map(({ i, lang }) =>
       ttsLimit(async () => {
         if (isAbortRequested()) return;
         if (provider === "google"     && isDailyQuotaExhausted()) return;
         if (provider === "elevenlabs" && isQuotaExhausted())      return;
 
-        const script = story.scriptEn;
+        const script = scriptForLang(updated[i], lang);
         if (!script) return;
 
         try {
-          const url = await synthesizeOne(script, `${date}-${story.id}-en`, provider);
-          updated[i] = { ...updated[i], audioUrlEn: url, audioStartSec: 0 };
+          const url = await synthesizeOne(script, `${date}-${updated[i].id}-${lang}`, provider);
+          setAudioUrl(updated[i], lang, url);
+          updated[i].audioStartSec = 0;
           totalChars += script.length;
-          storiesWithAudio++;
-          logger(`  ✓ [${i + 1}/${stories.length}] ${story.title.slice(0, 55)}`);
+          clips++;
         } catch (err: any) {
-          logger(`  ✗ [${i + 1}/${stories.length}]: ${err.message?.slice(0, 60)}`);
+          logger(`  ✗ [${updated[i].id.slice(0, 6)}/${lang}]: ${err.message?.slice(0, 50)}`);
         }
 
         if (safeProgress) await safeProgress([...updated]);
@@ -990,11 +1067,12 @@ async function generateAllTTS(
     ),
   );
 
+  const storiesWithAudio = updated.filter(s => s.audioUrlEn).length;
   const estimatedUsd =
     provider === "elevenlabs" ? (totalChars / 1000) * 0.08 :
     provider === "google"     ? (totalChars / 1_000_000) * 0.50 : 0;
 
-  logger(`TTS done: ${storiesWithAudio}/${stories.length} stories, est. $${estimatedUsd.toFixed(3)}`);
+  logger(`TTS done: ${clips} clips, ${storiesWithAudio}/${stories.length} stories with EN audio, est. $${estimatedUsd.toFixed(3)}`);
   return {
     stories: updated,
     costInfo: { provider, totalChars, estimatedUsd, storiesAttempted: stories.length, storiesWithAudio },
@@ -1084,13 +1162,11 @@ export async function generateDailyBriefing(
 
   log(`Starting briefing v5 — ${date} | city: ${city} | TTS: ${ttsProvider}`);
 
-  // v5 generates English audio only. Report exactly what's produced so the app
-  // never advertises a language that has no scripts or audio behind it.
-  const extraLangs = languages.filter(l => l !== "en");
-  if (extraLangs.length) {
-    log(`Note: v5 generates English only — ignoring requested language(s): ${extraLangs.join(", ")}`);
-  }
-  const generatedLanguages = ["en"];
+  // English is always scripted; every other supported language is TRANSLATED from it.
+  const SUPPORTED_LANGS = ["en", "hi", "ta", "mr"];
+  const targetLangs = ["en", ...SUPPORTED_LANGS.filter(l => l !== "en" && languages.includes(l))];
+  const generatedLanguages = targetLangs;
+  if (targetLangs.length > 1) log(`Languages: ${targetLangs.join(", ")} (English scripted, others translated)`);
 
   // Step 1: Fetch
   const t0 = Date.now();
@@ -1145,6 +1221,14 @@ export async function generateDailyBriefing(
   const scriptSec = (Date.now() - t2) / 1000;
   log(`Scripts done in ${scriptSec.toFixed(1)}s`);
 
+  // Step 5b: Translate English → other languages (before the pre-TTS checkpoint)
+  const translateLangs = targetLangs.filter(l => l !== "en");
+  if (translateLangs.length && !isAbortRequested()) {
+    const tT = Date.now();
+    await translateAll(stories, translateLangs, log);
+    log(`Translation done in ${((Date.now() - tT) / 1000).toFixed(1)}s`);
+  }
+
   // Meta
   const estimatedWords       = stories.reduce((n, s) => n + (s.wordCount ?? s.scriptEn.split(/\s+/).length), 0);
   const estimatedDurationSec = Math.round((estimatedWords / WORDS_PER_MINUTE) * 60);
@@ -1163,7 +1247,7 @@ export async function generateDailyBriefing(
   // Step 6: TTS
   const t3 = Date.now();
   const { stories: withAudio, costInfo } = await generateAllTTS(
-    stories, date, ttsProvider, log,
+    stories, date, ttsProvider, targetLangs, log,
     async (s) => saveBriefing({ date, generatedAt: new Date().toISOString(), stories: s, meta, generatedLanguages }),
   );
   const ttsSec     = (Date.now() - t3) / 1000;
@@ -1231,7 +1315,7 @@ export async function generateMissingTTS(
 
   const date = existing.date;
   const { stories: patched, costInfo } = await generateAllTTS(
-    storiesNeedingAudio, date, provider, log,
+    storiesNeedingAudio, date, provider, languages, log,
     async (updated) => {
       const allStories = existing.stories.map(s => updated.find(u => u.id === s.id) ?? s);
       await saveBriefing({ ...existing, stories: allStories });
