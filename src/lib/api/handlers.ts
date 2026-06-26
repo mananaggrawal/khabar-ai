@@ -448,6 +448,7 @@ export async function handleAnalytics(request: Request): Promise<Response> {
     const eventCounts: Record<string, number> = {};
     const sectionCounts: Record<string, number> = {};
     const storyCounts: Record<string, number> = {};
+    const userMap = new Map<string, { events: number; plays: number; completes: number; last: string }>();
     let durSum = 0, durN = 0;
     const generationRuns: any[] = [];
 
@@ -456,7 +457,15 @@ export async function handleAnalytics(request: Request): Promise<Response> {
       let d = dayMap.get(day);
       if (!d) { d = { events: 0, users: new Set(), plays: 0, starts: 0, completes: 0 }; dayMap.set(day, d); }
       d.events++;
-      if (r.user_id) d.users.add(r.user_id);
+      if (r.user_id) {
+        d.users.add(r.user_id);
+        let u = userMap.get(r.user_id);
+        if (!u) { u = { events: 0, plays: 0, completes: 0, last: r.occurred_at }; userMap.set(r.user_id, u); }
+        u.events++;
+        if (r.event === "play") u.plays++;
+        if (r.event === "story_complete") u.completes++;
+        if (r.occurred_at > u.last) u.last = r.occurred_at;
+      }
       eventCounts[r.event] = (eventCounts[r.event] || 0) + 1;
       const p = r.props || {};
       if (r.event === "play") d.plays++;
@@ -480,6 +489,18 @@ export async function handleAnalytics(request: Request): Promise<Response> {
     const starts    = eventCounts["story_start"] || 0;
     const completes = eventCounts["story_complete"] || 0;
 
+    // Map user ids → email (service role can read auth.users) so the admin sees who's who
+    const emailById = new Map<string, string>();
+    try {
+      const { data: list } = await (supabaseAdmin as any).auth.admin.listUsers({ page: 1, perPage: 1000 });
+      for (const u of (list?.users ?? [])) emailById.set(u.id, u.email ?? u.id);
+    } catch { /* fall back to ids */ }
+
+    const users = [...userMap.entries()]
+      .map(([id, u]) => ({ email: emailById.get(id) ?? id, events: u.events, plays: u.plays, completes: u.completes, lastActive: u.last }))
+      .sort((a, b) => b.events - a.events)
+      .slice(0, 50);
+
     return json({
       days,
       totalEvents: rows.length,
@@ -495,6 +516,8 @@ export async function handleAnalytics(request: Request): Promise<Response> {
       },
       completionRate: starts ? +((completes / starts) * 100).toFixed(1) : 0,
       avgStorySec:    durN ? Math.round(durSum / durN) : 0,
+      users,
+      totalUsers: userMap.size,
       generationRuns,
     });
   } catch (e: any) {

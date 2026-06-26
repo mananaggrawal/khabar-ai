@@ -247,7 +247,7 @@ function HomePage() {
     if (!LOCAL_MODE) {
       import("@/integrations/supabase/client")
         .then(({ supabase }) => supabase.auth.getUser())
-        .then(({ data }) => { if (data?.user) identify(data.user.id); })
+        .then(({ data }) => { if (data?.user) identify(data.user.id, { email: data.user.email ?? undefined }); })
         .catch(() => {});
     }
   }, []);

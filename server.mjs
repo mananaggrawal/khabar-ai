@@ -366,6 +366,8 @@ function adminAnalyticsPage(adminKey) {
   .card .v{font-size:24px;font-weight:700;margin-top:4px}
   .panel{background:#160d27;border:1px solid #271b45;border-radius:14px;padding:14px;margin-bottom:16px}
   .panel h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#8b7fb0;margin:0 0 10px}
+  .chartbox{position:relative;width:100%}
+  .chartbox canvas{position:absolute;inset:0;width:100%!important;height:100%!important}
   table{width:100%;border-collapse:collapse;font-size:13px}
   th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #271b45}
   th{color:#8b7fb0;font-weight:600}
@@ -387,9 +389,10 @@ function adminAnalyticsPage(adminKey) {
     <div class="card"><div class="k">Completion</div><div class="v" id="kpiCompletion">–</div></div>
     <div class="card"><div class="k">Avg story</div><div class="v" id="kpiAvg">–</div></div>
   </div>
-  <div class="panel"><h2>Activity per day</h2><canvas id="dailyChart" height="110"></canvas></div>
-  <div class="panel"><h2>Funnel — open → briefing → play → complete</h2><canvas id="funnelChart" height="90"></canvas></div>
-  <div class="panel"><h2>Story starts by section</h2><canvas id="sectionChart" height="90"></canvas></div>
+  <div class="panel"><h2>Activity per day</h2><div class="chartbox" style="height:260px"><canvas id="dailyChart"></canvas></div></div>
+  <div class="panel"><h2>Funnel — open → briefing → play → complete</h2><div class="chartbox" style="height:220px"><canvas id="funnelChart"></canvas></div></div>
+  <div class="panel"><h2>Story starts by section</h2><div class="chartbox" style="height:220px"><canvas id="sectionChart"></canvas></div></div>
+  <div class="panel"><h2>Users <span class="muted" id="usersCount"></span></h2><table id="usersTbl"><thead><tr><th>User</th><th>Events</th><th>Plays</th><th>Completed</th><th>Last active</th></tr></thead><tbody></tbody></table></div>
   <div class="panel"><h2>Top stories <span class="muted">(by play; ids until titles are joined)</span></h2><table id="topTbl"><thead><tr><th>Story id</th><th>Plays</th></tr></thead><tbody></tbody></table></div>
   <div class="panel"><h2>Recent generation runs</h2><table id="genTbl"><thead><tr><th>Date</th><th>Stories</th><th>TTS $</th><th>Elapsed</th></tr></thead><tbody></tbody></table></div>
 
@@ -433,6 +436,16 @@ function adminAnalyticsPage(adminKey) {
       [{ label:'Count', data:[d.funnel.app_open,d.funnel.briefing_loaded,d.funnel.play,d.funnel.story_complete], backgroundColor:'#a78bfa' }]);
     drawChart('sectionChart', 'bar', d.sections.map(function(s){return s.section;}),
       [{ label:'Starts', data:d.sections.map(function(s){return s.count;}), backgroundColor:'#34d399' }]);
+
+    var uc = document.getElementById('usersCount');
+    if (uc) uc.textContent = (d.totalUsers != null ? ('· ' + d.totalUsers + ' total') : '');
+    var ub = document.querySelector('#usersTbl tbody'); ub.innerHTML = '';
+    (d.users || []).forEach(function(u){
+      var tr = document.createElement('tr');
+      var la = (u.lastActive || '').replace('T', ' ').slice(0, 16);
+      tr.innerHTML = '<td>' + (u.email || '–') + '</td><td>' + u.events + '</td><td>' + u.plays + '</td><td>' + u.completes + '</td><td class="muted">' + la + '</td>';
+      ub.appendChild(tr);
+    });
 
     var tb = document.querySelector('#topTbl tbody'); tb.innerHTML = '';
     d.topStories.forEach(function(s){
