@@ -49,6 +49,8 @@ export type Story = {
   id: string;
   title: string;
   titleHi?: string;
+  titleTa?: string;
+  titleMr?: string;
   source: string;
   link: string;
   publishedAt: string;
@@ -957,6 +959,12 @@ function setScript(s: Story, lang: string, text: string): void {
   else if (lang === "ta") s.scriptTa = text;
   else if (lang === "mr") s.scriptMr = text;
 }
+function setTitle(s: Story, lang: string, text: string): void {
+  if (!text) return;
+  if (lang === "hi") s.titleHi = text;
+  else if (lang === "ta") s.titleTa = text;
+  else if (lang === "mr") s.titleMr = text;
+}
 function scriptForLang(s: Story, lang: string): string | undefined {
   if (lang === "en") return s.scriptEn || undefined;
   if (lang === "hi") return s.scriptHi || undefined;
@@ -971,25 +979,27 @@ function setAudioUrl(s: Story, lang: string, url: string): void {
   else if (lang === "mr") s.audioUrlMr = url;
 }
 
-async function translateBatch(texts: string[], lang: string): Promise<string[]> {
+type TransItem = { title: string; script: string };
+
+async function translateBatch(items: TransItem[], lang: string): Promise<TransItem[]> {
   const name = LANG_NAMES[lang] ?? lang;
-  const prompt = `Translate each of these ${texts.length} short English news scripts into ${name}. They are read ALOUD in an audio news briefing, so each translation must sound natural spoken: everyday conversational ${name} (not heavy or over-Sanskritised), keep every name, place and number accurate, and write in the ${name} script. Keep the same order and the same count.
+  const prompt = `Translate each of these ${items.length} short English news items into ${name}. Each item has a TITLE (headline) and a SCRIPT (read ALOUD in an audio briefing). Translate BOTH. They must sound natural spoken: everyday conversational ${name} (not heavy or over-Sanskritised), keep every name, place and number accurate, and write in the ${name} script. Keep the same order and the same count.
 
-Return ONLY JSON: {"t": ["…", "…"]} — exactly ${texts.length} strings, in order.
+Return ONLY JSON: {"t": [{"title": "…", "script": "…"}, …]} — exactly ${items.length} objects, in order.
 
-${texts.map((t, i) => `[${i}]\n${t}`).join("\n\n")}`;
+${items.map((it, i) => `[${i}] TITLE: ${it.title}\nSCRIPT: ${it.script}`).join("\n\n")}`;
   const raw = await openaiJson(prompt, getTranslateModel(), 8192);
-  const arr = Array.isArray(raw?.t) ? raw.t : (Array.isArray(raw) ? raw : []);
-  return arr.map((x: any) => String(x ?? "").trim());
+  const arr: any[] = Array.isArray(raw?.t) ? raw.t : (Array.isArray(raw) ? raw : []);
+  return arr.map((x: any) => ({ title: String(x?.title ?? "").trim(), script: String(x?.script ?? "").trim() }));
 }
 
-/** Translate every story's English script into each language (in place). Batched + cheap. */
+/** Translate every story's English title + script into each language (in place). Batched + cheap. */
 async function translateAll(stories: Story[], langs: string[], logger: Logger): Promise<void> {
   const limit = makeConcurrencyLimiter(5);
   const BATCH = 10;
   for (const lang of langs) {
     if (isAbortRequested()) return;
-    logger(`Translating ${stories.length} scripts → ${LANG_NAMES[lang] ?? lang}…`);
+    logger(`Translating ${stories.length} stories → ${LANG_NAMES[lang] ?? lang}…`);
     let ok = 0;
     const tasks: Promise<void>[] = [];
     for (let i = 0; i < stories.length; i += BATCH) {
@@ -998,10 +1008,14 @@ async function translateAll(stories: Story[], langs: string[], logger: Logger): 
         if (isAbortRequested()) return;
         if (!slice.some(s => s.scriptEn)) return;
         try {
-          const out = await translateBatch(slice.map(s => s.scriptEn), lang);
+          const out = await translateBatch(slice.map(s => ({ title: s.title, script: s.scriptEn })), lang);
           slice.forEach((s, j) => {
-            const tr = (out[j] ?? "").trim();
-            if (tr && LANG_SCRIPT_RE[lang]?.test(tr)) { setScript(s, lang, tr); ok++; }
+            const tr = out[j];
+            if (tr && tr.script && LANG_SCRIPT_RE[lang]?.test(tr.script)) {
+              setScript(s, lang, tr.script);
+              if (tr.title && LANG_SCRIPT_RE[lang]?.test(tr.title)) setTitle(s, lang, tr.title);
+              ok++;
+            }
           });
         } catch (err: any) {
           logger(`  ✗ translate ${lang}: ${err.message?.slice(0, 60)}`);
