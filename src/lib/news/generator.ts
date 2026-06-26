@@ -868,6 +868,7 @@ HARD RULES:
 - NO demographic mentions: "Indians", "citizens", "the public", "people"
 - NO bullet points, no parentheses, no lists
 - NEVER invent facts — only use what is in the sources
+- DATES & NUMBERS: use ONLY dates, years and figures that appear in the sources above. Never add a date or year from memory. If the sources give no date, do not state one. This is today's news — do not present a past anniversary or old event as if it just happened.
 
 TITLE RULES — "title" must be a clean, factual headline for THIS exact story:
 - max 9 words, plain text, accurate to the script and the sources
