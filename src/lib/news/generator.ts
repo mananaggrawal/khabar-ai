@@ -69,7 +69,6 @@ export type Story = {
   wordCount?: number;
   publisherCount?: number;
   publishers?: string[];
-  featured?: boolean;        // ★ on Google homepage → surfaced in "Top Stories"
 };
 
 export type BriefingSegment = {
@@ -382,8 +381,8 @@ function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]
     return idx;
   }
 
-  // Process topical feeds first (order = dedup priority for which section a story is filed under)
-  for (const feedId of ["india", "world", "business", "technology", "sports", "science", "health", "local"] as SectionId[]) {
+  // Process topical feeds first
+  for (const feedId of ["india", "world", "business", "local"] as SectionId[]) {
     for (const item of feedMap.get(feedId) ?? []) {
       const id  = storyId(item.link);
       const key = normalize(item.title).slice(0, 60);
@@ -391,9 +390,7 @@ function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]
     }
   }
 
-  // Headlines last — the homepage feed is the "Top Stories" SIGNAL (★), not its own
-  // section. Matching stories get the flag; unique ones default to "india" and the
-  // cluster step reassigns them a real topic. Top Stories is derived from the flag.
+  // Headlines last — mark matches, add unique ones as "headlines" section
   for (const item of feedMap.get("headlines") ?? []) {
     const id  = storyId(item.link);
     const key = normalize(item.title).slice(0, 60);
@@ -401,7 +398,7 @@ function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]
       const idx = idToIdx.get(id) ?? titleToIdx.get(key);
       if (idx != null) headlineIds.add(stories[idx].id);
     } else {
-      const idx = addStory(item, "india");
+      const idx = addStory(item, "headlines");
       headlineIds.add(stories[idx].id);
     }
   }
@@ -651,15 +648,14 @@ async function clusterAndSelect(
     `${i}. [${s.source}]${headlineIds.has(s.id) ? " ★" : ""} [${s.section}] ${s.title}`
   ).join("\n");
 
-  // Per-section cap: a MAX so one feed (India) can't crowd out the rest. Lower
-  // share now that there are more sections, giving non-India room to rebalance.
-  // It's a ceiling only — it never pads/forces a section that lacks news.
-  const perSectionCap = Math.ceil(maxStories * 0.3);
+  // Per-section cap: a MAX so one feed can't take the whole briefing — it does
+  // NOT floor/limit the smaller sections, which fill from whatever they produce.
+  const perSectionCap = Math.ceil(maxStories * 0.6);
 
   const prompt = `You are the news editor for Khabar AI — India's top audio news briefing.
 
-Here are ${stories.length} articles from today's Google News feeds (India, World, Business, Technology, Sports, Science, Health, Local, plus the homepage).
-★ = appeared on Google's homepage — stronger editorial signal (these become "Top Stories").
+Here are ${stories.length} articles from today's Google News feeds (India, World, Business, Local, Headlines).
+★ = appeared on Google's homepage — stronger editorial signal.
 
 TASK:
 1. Group every article about the same underlying event into ONE cluster — even when the headlines are worded differently or come from different publishers. Be aggressive about merging: if two headlines describe the same ruling, announcement, incident, or statement, they are the SAME event and must share one cluster. Put every article index covering that event in its sourceIndices.
@@ -677,7 +673,7 @@ Return a JSON object with a single key "events":
 {"events": [
   {
     "title": "specific, factual event title — max 10 words",
-    "section": "india|world|business|technology|sports|science|health|local",
+    "section": "headlines|india|world|business|local",
     "sourceIndices": [0, 4, 12],
     "imageIndex": 0,
     "whyImportant": "one sentence — the key reason this matters"
@@ -687,7 +683,7 @@ Return a JSON object with a single key "events":
 RULES:
 - Return exactly ${maxStories} events (or fewer if total distinct events is less)
 - Every index used in sourceIndices must be in range 0–${stories.length - 1}
-- section: assign each event the SINGLE best-fitting topic — india, world, business, technology, sports, science, health, or local (city/regional). Do NOT use "headlines"; Top Stories is derived automatically from the ★ flag.
+- section: assign based on content — "headlines" for major cross-cutting stories, "local" for city/regional news, else india/world/business
 - imageIndex: which sourceIndex is most likely to have a good image (Reuters, AP, PTI, AFP > others)
 - Keep clusters tight — only group articles covering the SAME specific event
 
@@ -745,7 +741,7 @@ ${articleList}`;
     const title    = (g.title ?? "").trim();
     if (!title) continue;
 
-    const section  = (["india", "world", "business", "technology", "sports", "science", "health", "local"].includes(g.section)
+    const section  = (["headlines", "india", "world", "business", "local"].includes(g.section)
       ? g.section : stories[indices[0]].section) as SectionId;
 
     const imageIdx      = (g.imageIndex != null && indices.includes(g.imageIndex)) ? g.imageIndex : indices[0];
@@ -918,7 +914,6 @@ async function scriptAllEvents(
         wordCount:       scriptEn.trim().split(/\s+/).length,
         publisherCount:  ev.publisherCount,
         publishers:      ev.publishers,
-        featured:        ev.inHeadlinesFeed,   // ★ homepage → shown in "Top Stories"
       } satisfies Story;
     })),
   );
@@ -1013,9 +1008,10 @@ export async function saveBriefing(briefing: DailyBriefing): Promise<void> {
 function mapOldSection(cat: string): SectionId {
   const m: Record<string, SectionId> = {
     headlines: "headlines", india: "india", world: "world", business: "business", local: "local",
-    technology: "technology", sports: "sports", science: "science", health: "health",
     // old taxonomy → nearest new section
-    politics: "india", techlife: "technology", entertainment: "india",
+    politics: "india",
+    sports: "india", techlife: "india", technology: "india",
+    entertainment: "india", science: "india", health: "india",
     // legacy v2/v3
     "india-national": "india", "india-business": "business", "india-sports": "india",
     "india-tech": "india", "global-world": "world", "global-business": "business",

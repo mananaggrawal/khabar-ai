@@ -1,4 +1,4 @@
-import { Play, Flame, LandmarkIcon, Globe, TrendingUp, MapPin, Cpu, Trophy, FlaskConical, HeartPulse } from "lucide-react";
+import { Play, Flame, LandmarkIcon, Globe, TrendingUp, MapPin } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Story } from "@/lib/news/generator";
 import { FEED_MAP, type SectionId } from "@/lib/news/sources";
@@ -6,41 +6,37 @@ import { getStoryTitle } from "@/hooks/useMonologue";
 
 // Per-section accent colors
 export const SECTION_COLOR: Record<SectionId, string> = {
-  headlines:  "#EF4444",
-  india:      "#F97316",
-  world:      "#0D9488",
-  business:   "#16A34A",
-  technology: "#6366F1",
-  sports:     "#DB2777",
-  science:    "#0EA5E9",
-  health:     "#65A30D",
-  local:      "#2563EB",
+  headlines: "#EF4444",
+  india:     "#F97316",
+  world:     "#0D9488",
+  business:  "#16A34A",
+  local:     "#2563EB",
 };
 
 // Legacy section names → new section (backward compat for old briefings)
 const LEGACY_SECTION: Record<string, SectionId> = {
   politics:      "india",
-  techlife:      "technology",
+  sports:        "india",
+  techlife:      "india",
+  technology:    "india",
   entertainment: "india",
+  science:       "india",
+  health:        "india",
 };
 
 function resolveSection(s: string): SectionId {
   if (s in LEGACY_SECTION) return LEGACY_SECTION[s];
-  if (["headlines", "india", "world", "business", "technology", "sports", "science", "health", "local"].includes(s)) return s as SectionId;
+  if (["headlines", "india", "world", "business", "local"].includes(s)) return s as SectionId;
   return "india";
 }
 
 // Lucide icon per section
 const SECTION_ICON: Record<SectionId, React.ReactNode> = {
-  headlines:  <Flame        className="size-5" />,
-  india:      <LandmarkIcon className="size-5" />,
-  world:      <Globe        className="size-5" />,
-  business:   <TrendingUp   className="size-5" />,
-  technology: <Cpu          className="size-5" />,
-  sports:     <Trophy       className="size-5" />,
-  science:    <FlaskConical className="size-5" />,
-  health:     <HeartPulse   className="size-5" />,
-  local:      <MapPin       className="size-5" />,
+  headlines: <Flame        className="size-5" />,
+  india:     <LandmarkIcon className="size-5" />,
+  world:     <Globe        className="size-5" />,
+  business:  <TrendingUp   className="size-5" />,
+  local:     <MapPin       className="size-5" />,
 };
 
 function WaveformIcon() {
