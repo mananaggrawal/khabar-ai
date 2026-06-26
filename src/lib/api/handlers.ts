@@ -27,6 +27,26 @@ function authCheck(request: Request): Response | null {
   return null;
 }
 
+// Analytics is restricted to specific email(s) via Supabase login (not the admin key).
+const ANALYTICS_EMAILS = (process.env.ANALYTICS_ADMIN_EMAILS ?? "manan190303@gmail.com")
+  .split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+
+async function requireAnalyticsUser(request: Request): Promise<Response | null> {
+  const authz = request.headers.get("authorization") || "";
+  const token = authz.startsWith("Bearer ") ? authz.slice(7) : "";
+  if (!token) return json({ error: "Sign in required" }, 401);
+  try {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data, error } = await (supabaseAdmin as any).auth.getUser(token);
+    const email = String(data?.user?.email ?? "").toLowerCase();
+    if (error || !email) return json({ error: "Invalid session" }, 401);
+    if (!ANALYTICS_EMAILS.includes(email)) return json({ error: "Not authorized" }, 403);
+    return null;
+  } catch {
+    return json({ error: "Auth check failed" }, 401);
+  }
+}
+
 // POST /api/admin/generate — streams SSE log events during generation
 export async function handleGenerate(request: Request): Promise<Response> {
   const err = authCheck(request);
@@ -427,7 +447,7 @@ export async function handleTrack(request: Request): Promise<Response> {
 
 // GET /api/admin/analytics?days=30 — aggregates from analytics_events for the dashboard
 export async function handleAnalytics(request: Request): Promise<Response> {
-  const err = authCheck(request);
+  const err = await requireAnalyticsUser(request);
   if (err) return err;
   try {
     const url  = new URL(request.url, "http://localhost");
@@ -448,7 +468,7 @@ export async function handleAnalytics(request: Request): Promise<Response> {
     const eventCounts: Record<string, number> = {};
     const sectionCounts: Record<string, number> = {};
     const storyCounts: Record<string, number> = {};
-    const userMap = new Map<string, { events: number; plays: number; completes: number; last: string }>();
+    const userMap = new Map<string, { stories: number; completes: number; last: string }>();
     let durSum = 0, durN = 0;
     const generationRuns: any[] = [];
 
@@ -460,9 +480,8 @@ export async function handleAnalytics(request: Request): Promise<Response> {
       if (r.user_id) {
         d.users.add(r.user_id);
         let u = userMap.get(r.user_id);
-        if (!u) { u = { events: 0, plays: 0, completes: 0, last: r.occurred_at }; userMap.set(r.user_id, u); }
-        u.events++;
-        if (r.event === "play") u.plays++;
+        if (!u) { u = { stories: 0, completes: 0, last: r.occurred_at }; userMap.set(r.user_id, u); }
+        if (r.event === "story_start") u.stories++;
         if (r.event === "story_complete") u.completes++;
         if (r.occurred_at > u.last) u.last = r.occurred_at;
       }
@@ -497,8 +516,8 @@ export async function handleAnalytics(request: Request): Promise<Response> {
     } catch { /* fall back to ids */ }
 
     const users = [...userMap.entries()]
-      .map(([id, u]) => ({ email: emailById.get(id) ?? id, events: u.events, plays: u.plays, completes: u.completes, lastActive: u.last }))
-      .sort((a, b) => b.events - a.events)
+      .map(([id, u]) => ({ email: emailById.get(id) ?? id, stories: u.stories, completes: u.completes, lastActive: u.last }))
+      .sort((a, b) => b.stories - a.stories)
       .slice(0, 50);
 
     return json({
@@ -508,11 +527,13 @@ export async function handleAnalytics(request: Request): Promise<Response> {
       eventCounts,
       sections: Object.entries(sectionCounts).map(([section, count]) => ({ section, count })).sort((a, b) => b.count - a.count),
       topStories: Object.entries(storyCounts).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([storyId, count]) => ({ storyId, count })),
+      storiesPlayed: starts,
+      storiesCompleted: completes,
       funnel: {
-        app_open:        eventCounts["app_open"] || 0,
-        briefing_loaded: eventCounts["briefing_loaded"] || 0,
-        play:            eventCounts["play"] || 0,
-        story_complete:  completes,
+        opens:     eventCounts["app_open"] || 0,
+        briefings: eventCounts["briefing_loaded"] || 0,
+        played:    starts,      // stories played = story_start (accurate)
+        completed: completes,
       },
       completionRate: starts ? +((completes / starts) * 100).toFixed(1) : 0,
       avgStorySec:    durN ? Math.round(durSum / durN) : 0,

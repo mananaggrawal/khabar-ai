@@ -142,7 +142,10 @@ const server = createServer(async (req, res) => {
 
   if (pathname === "/admin/analytics") {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(adminAnalyticsPage(process.env.ADMIN_KEY || ""));
+    res.end(adminAnalyticsPage(
+      process.env.VITE_SUPABASE_URL || "",
+      process.env.VITE_SUPABASE_PUBLISHABLE_KEY || "",
+    ));
     return;
   }
 
@@ -344,13 +347,14 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log(`[khabar] Server listening on http://0.0.0.0:${PORT}`);
 });
 
-function adminAnalyticsPage(adminKey) {
+function adminAnalyticsPage(supabaseUrl, supabaseKey) {
   return `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Khabar Analytics</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   :root{color-scheme:dark}
   *{box-sizing:border-box}
@@ -376,28 +380,38 @@ function adminAnalyticsPage(adminKey) {
   @media(max-width:640px){.cards{grid-template-columns:repeat(2,1fr)}}
 </style>
 </head><body>
+  <div id="gate" style="display:none;text-align:center;padding:64px 20px">
+    <h1>Khabar — Analytics</h1>
+    <p id="gateMsg" class="muted" style="margin:14px 0">Sign in to continue.</p>
+    <button id="signinBtn" style="background:#a78bfa;color:#140b22;border:0;border-radius:999px;padding:10px 18px;font-weight:700;cursor:pointer">Sign in with Google</button>
+  </div>
+  <div id="app" style="display:none">
   <div class="row">
-    <div><h1>Khabar — Analytics</h1><div class="muted" style="font-size:12px"><a href="/admin">← Admin</a> · first-party events</div></div>
+    <div><h1>Khabar — Analytics</h1><div class="muted" style="font-size:12px"><a href="/admin">← Admin</a> · <span id="who"></span></div></div>
     <div class="seg" id="seg">
       <button data-d="7">7d</button><button data-d="30" class="on">30d</button><button data-d="90">90d</button>
     </div>
   </div>
   <div id="err"></div>
   <div class="cards">
-    <div class="card"><div class="k">Total events</div><div class="v" id="kpiEvents">–</div></div>
-    <div class="card"><div class="k">Plays</div><div class="v" id="kpiPlays">–</div></div>
+    <div class="card"><div class="k">Active users</div><div class="v" id="kpiUsers">–</div></div>
+    <div class="card"><div class="k">Stories played</div><div class="v" id="kpiStories">–</div></div>
     <div class="card"><div class="k">Completion</div><div class="v" id="kpiCompletion">–</div></div>
     <div class="card"><div class="k">Avg story</div><div class="v" id="kpiAvg">–</div></div>
   </div>
   <div class="panel"><h2>Activity per day</h2><div class="chartbox" style="height:260px"><canvas id="dailyChart"></canvas></div></div>
-  <div class="panel"><h2>Funnel — open → briefing → play → complete</h2><div class="chartbox" style="height:220px"><canvas id="funnelChart"></canvas></div></div>
+  <div class="panel"><h2>Funnel — opens → briefings → stories → completed</h2><div class="chartbox" style="height:220px"><canvas id="funnelChart"></canvas></div></div>
   <div class="panel"><h2>Story starts by section</h2><div class="chartbox" style="height:220px"><canvas id="sectionChart"></canvas></div></div>
-  <div class="panel"><h2>Users <span class="muted" id="usersCount"></span></h2><table id="usersTbl"><thead><tr><th>User</th><th>Events</th><th>Plays</th><th>Completed</th><th>Last active</th></tr></thead><tbody></tbody></table></div>
+  <div class="panel"><h2>Users <span class="muted" id="usersCount"></span></h2><table id="usersTbl"><thead><tr><th>User</th><th>Stories</th><th>Completed</th><th>Last active</th></tr></thead><tbody></tbody></table></div>
   <div class="panel"><h2>Top stories <span class="muted">(by play; ids until titles are joined)</span></h2><table id="topTbl"><thead><tr><th>Story id</th><th>Plays</th></tr></thead><tbody></tbody></table></div>
   <div class="panel"><h2>Recent generation runs</h2><table id="genTbl"><thead><tr><th>Date</th><th>Stories</th><th>TTS $</th><th>Elapsed</th></tr></thead><tbody></tbody></table></div>
+  </div> <!-- /#app -->
 
 <script>
-  var AKEY = ${JSON.stringify(adminKey)};
+  var SUPABASE_URL = ${JSON.stringify(supabaseUrl)};
+  var SUPABASE_KEY = ${JSON.stringify(supabaseKey)};
+  var SB = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  var TOKEN = '';
   var days = 30;
   var charts = {};
 
@@ -421,21 +435,20 @@ function adminAnalyticsPage(adminKey) {
   }
 
   function render(d){
-    txt('kpiEvents', d.totalEvents);
-    txt('kpiPlays', d.eventCounts.play || 0);
+    txt('kpiUsers', d.totalUsers != null ? d.totalUsers : 0);
+    txt('kpiStories', d.storiesPlayed != null ? d.storiesPlayed : 0);
     txt('kpiCompletion', d.completionRate + '%');
     txt('kpiAvg', d.avgStorySec + 's');
 
     var labels = d.perDay.map(function(x){ return x.day.slice(5); });
     drawChart('dailyChart', 'line', labels, [
-      { label:'Events', data:d.perDay.map(function(x){return x.events;}), borderColor:'#a78bfa', backgroundColor:'#a78bfa33', tension:.3 },
-      { label:'Plays',  data:d.perDay.map(function(x){return x.plays;}),  borderColor:'#34d399', backgroundColor:'#34d39933', tension:.3 },
-      { label:'Users',  data:d.perDay.map(function(x){return x.users;}),  borderColor:'#f59e0b', backgroundColor:'#f59e0b33', tension:.3 }
+      { label:'Stories', data:d.perDay.map(function(x){return x.starts;}), borderColor:'#34d399', backgroundColor:'#34d39933', tension:.3 },
+      { label:'Users',   data:d.perDay.map(function(x){return x.users;}),  borderColor:'#f59e0b', backgroundColor:'#f59e0b33', tension:.3 }
     ]);
-    drawChart('funnelChart', 'bar', ['Open','Briefing','Play','Complete'],
-      [{ label:'Count', data:[d.funnel.app_open,d.funnel.briefing_loaded,d.funnel.play,d.funnel.story_complete], backgroundColor:'#a78bfa' }]);
+    drawChart('funnelChart', 'bar', ['Opens','Briefings','Stories','Completed'],
+      [{ label:'Count', data:[d.funnel.opens,d.funnel.briefings,d.funnel.played,d.funnel.completed], backgroundColor:'#a78bfa' }]);
     drawChart('sectionChart', 'bar', d.sections.map(function(s){return s.section;}),
-      [{ label:'Starts', data:d.sections.map(function(s){return s.count;}), backgroundColor:'#34d399' }]);
+      [{ label:'Stories', data:d.sections.map(function(s){return s.count;}), backgroundColor:'#34d399' }]);
 
     var uc = document.getElementById('usersCount');
     if (uc) uc.textContent = (d.totalUsers != null ? ('· ' + d.totalUsers + ' total') : '');
@@ -443,7 +456,7 @@ function adminAnalyticsPage(adminKey) {
     (d.users || []).forEach(function(u){
       var tr = document.createElement('tr');
       var la = (u.lastActive || '').replace('T', ' ').slice(0, 16);
-      tr.innerHTML = '<td>' + (u.email || '–') + '</td><td>' + u.events + '</td><td>' + u.plays + '</td><td>' + u.completes + '</td><td class="muted">' + la + '</td>';
+      tr.innerHTML = '<td>' + (u.email || '–') + '</td><td>' + u.stories + '</td><td>' + u.completes + '</td><td class="muted">' + la + '</td>';
       ub.appendChild(tr);
     });
 
@@ -464,16 +477,43 @@ function adminAnalyticsPage(adminKey) {
     });
   }
 
+  function showGate(msg, showBtn){
+    document.getElementById('app').style.display = 'none';
+    document.getElementById('gate').style.display = 'block';
+    document.getElementById('gateMsg').textContent = msg;
+    document.getElementById('signinBtn').style.display = showBtn ? 'inline-block' : 'none';
+  }
+  function showApp(){
+    document.getElementById('gate').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+  }
+
   async function load(){
     document.getElementById('err').textContent = '';
     try {
-      var res = await fetch('/api/admin/analytics?days=' + days, { headers: { 'x-admin-key': AKEY } });
-      if (!res.ok) { document.getElementById('err').textContent = 'Error ' + res.status + ' — check ADMIN_KEY / migration'; return; }
+      var res = await fetch('/api/admin/analytics?days=' + days, { headers: { 'Authorization': 'Bearer ' + TOKEN } });
+      if (res.status === 401) { showGate('Session expired — sign in again.', true); return; }
+      if (res.status === 403) { showGate('This account is not authorized to view analytics.', false); return; }
+      if (!res.ok) { document.getElementById('err').textContent = 'Error ' + res.status; return; }
+      showApp();
       render(await res.json());
     } catch (e) {
       document.getElementById('err').textContent = 'Failed to load: ' + (e && e.message ? e.message : e);
     }
   }
+
+  async function boot(){
+    var s = await SB.auth.getSession();
+    var session = s && s.data ? s.data.session : null;
+    if (!session) { showGate('Sign in to view analytics.', true); return; }
+    TOKEN = session.access_token;
+    var who = document.getElementById('who'); if (who) who.textContent = session.user.email || '';
+    load();
+  }
+
+  document.getElementById('signinBtn').addEventListener('click', function(){
+    SB.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin + '/admin/analytics' } });
+  });
 
   document.getElementById('seg').addEventListener('click', function(e){
     var b = e.target.closest('button'); if (!b) return;
@@ -482,7 +522,7 @@ function adminAnalyticsPage(adminKey) {
     load();
   });
 
-  load();
+  boot();
 </script>
 </body></html>`;
 }

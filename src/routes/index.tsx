@@ -240,16 +240,16 @@ function HomePage() {
   // it should follow along as autoplay advances. False when opened on another story.
   const detailFollowsRef = useRef(false);
 
-  // Analytics: init PostHog, identify the user, log app open (once)
+  // Analytics: init PostHog, identify the user FIRST, then log app open so the
+  // event carries the user id (avoids anonymous first events).
   useEffect(() => {
     initAnalytics();
-    track(EVENTS.APP_OPEN);
-    if (!LOCAL_MODE) {
-      import("@/integrations/supabase/client")
-        .then(({ supabase }) => supabase.auth.getUser())
-        .then(({ data }) => { if (data?.user) identify(data.user.id, { email: data.user.email ?? undefined }); })
-        .catch(() => {});
-    }
+    if (LOCAL_MODE) { track(EVENTS.APP_OPEN); return; }
+    import("@/integrations/supabase/client")
+      .then(({ supabase }) => supabase.auth.getUser())
+      .then(({ data }) => { if (data?.user) identify(data.user.id, { email: data.user.email ?? undefined }); })
+      .catch(() => {})
+      .finally(() => track(EVENTS.APP_OPEN));
   }, []);
 
   // Analytics: briefing loaded (once per briefing date)
