@@ -33,13 +33,20 @@ export async function uploadAudio(
 
 export async function saveBriefingToStorage(date: string, briefing: unknown): Promise<void> {
   const json = Buffer.from(JSON.stringify(briefing, null, 2));
-  const { error } = await client().storage
-    .from(BUCKET)
-    .upload(`briefings/${date}.json`, json, {
-      contentType: "application/json",
-      upsert: true,
-    });
-  if (error) throw new Error(`Storage briefing save failed: ${error.message}`);
+  let lastErr: string | undefined;
+  // Retry transient Storage failures (e.g. 504 Gateway Timeout under load)
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, 1000 * attempt));
+    const { error } = await client().storage
+      .from(BUCKET)
+      .upload(`briefings/${date}.json`, json, {
+        contentType: "application/json",
+        upsert: true,
+      });
+    if (!error) return;
+    lastErr = error.message;
+  }
+  throw new Error(`Storage briefing save failed: ${lastErr}`);
 }
 
 export async function loadBriefingFromStorage(date: string): Promise<unknown | null> {

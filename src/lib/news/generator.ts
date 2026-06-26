@@ -1070,6 +1070,11 @@ async function generateAllTTS(
   const safeProgress = onProgress
     ? (s: Story[]) => saveQueue(() => onProgress(s))
     : undefined;
+  // Throttle checkpoint saves: the full briefing is re-uploaded each time, so
+  // saving after every clip (75×4≈300) overloads Storage (Gateway Timeouts).
+  // Checkpoint at most every 20s; the final save persists the complete state.
+  let lastCheckpoint = Date.now();
+  const CHECKPOINT_MS = 20_000;
 
   // One job per (story, language) clip
   const jobs: Array<{ i: number; lang: string }> = [];
@@ -1095,7 +1100,12 @@ async function generateAllTTS(
           logger(`  ✗ [${updated[i].id.slice(0, 6)}/${lang}]: ${err.message?.slice(0, 50)}`);
         }
 
-        if (safeProgress) await safeProgress([...updated]);
+        // Throttled, non-fatal checkpoint — never let a save failure abort TTS
+        if (safeProgress && Date.now() - lastCheckpoint > CHECKPOINT_MS) {
+          lastCheckpoint = Date.now();
+          try { await safeProgress([...updated]); }
+          catch (e: any) { logger(`  checkpoint save skipped: ${e?.message?.slice(0, 50)}`); }
+        }
       }),
     ),
   );
