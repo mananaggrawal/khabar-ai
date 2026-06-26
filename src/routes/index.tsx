@@ -14,6 +14,8 @@ import { BottomNav }         from "@/components/BottomNav";
 import { fetchBriefing }     from "@/lib/news/briefing.functions";
 import { useMonologue, getStoryTitle, getAudioUrl } from "@/hooks/useMonologue";
 import { useSavedStories }   from "@/hooks/useSavedStories";
+import { initAnalytics, identify, track } from "@/lib/analytics/track";
+import { EVENTS } from "@/lib/analytics/events";
 import { FEED_MAP, type SectionId } from "@/lib/news/sources";
 import type { Story } from "@/lib/news/generator";
 
@@ -238,6 +240,25 @@ function HomePage() {
   // it should follow along as autoplay advances. False when opened on another story.
   const detailFollowsRef = useRef(false);
 
+  // Analytics: init PostHog, identify the user, log app open (once)
+  useEffect(() => {
+    initAnalytics();
+    track(EVENTS.APP_OPEN);
+    if (!LOCAL_MODE) {
+      import("@/integrations/supabase/client")
+        .then(({ supabase }) => supabase.auth.getUser())
+        .then(({ data }) => { if (data?.user) identify(data.user.id); })
+        .catch(() => {});
+    }
+  }, []);
+
+  // Analytics: briefing loaded (once per briefing date)
+  useEffect(() => {
+    if (briefing?.stories?.length) {
+      track(EVENTS.BRIEFING_LOADED, { date: briefing.date, stories: briefing.stories.length });
+    }
+  }, [briefing?.date]);
+
   // Persist which languages are available in this briefing to localStorage
   useEffect(() => {
     if (!briefing?.stories?.length) return;
@@ -339,7 +360,7 @@ function HomePage() {
               return (
                 <button
                   key={id}
-                  onClick={() => setActiveSection(id)}
+                  onClick={() => { setActiveSection(id); track(EVENTS.SECTION_VIEW, { section: id }); }}
                   className={`shrink-0 rounded-full border px-3.5 py-1 text-xs font-semibold transition-all whitespace-nowrap ${
                     isActive
                       ? "border-primary bg-primary text-primary-foreground"
@@ -385,6 +406,7 @@ function HomePage() {
                           onTap={() => {
                             detailFollowsRef.current = mono.currentStory?.id === story.id;
                             setDetailStory(story);
+                            track(EVENTS.DETAIL_OPEN, { storyId: story.id, section: story.section, source: "home" });
                           }}
                         />
                       );

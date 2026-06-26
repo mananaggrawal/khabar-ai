@@ -41,7 +41,7 @@ if (!existsSync(SERVER_BUNDLE)) {
 }
 
 const { default: ssrHandler } = await import(SERVER_BUNDLE);
-const { handleGenerate, handleAsk, handleStatus, handleDownload, handleCron, handlePatchMissing, handlePatchTTS, handlePatchScripts, handleStop } = await import(API_BUNDLE);
+const { handleGenerate, handleAsk, handleStatus, handleDownload, handleCron, handlePatchMissing, handlePatchTTS, handlePatchScripts, handleStop, handleTrack } = await import(API_BUNDLE);
 
 // Convert Node.js IncomingMessage to a Web Fetch Request
 async function toRequest(req) {
@@ -292,6 +292,19 @@ self.addEventListener('fetch', e => {
       console.error("[khabar] /api/ask error:", err);
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: String(err?.message ?? err) }));
+    }
+    return;
+  }
+
+  if (pathname === "/api/track" && req.method === "POST") {
+    try {
+      const request = await toRequest(req);
+      const response = await handleTrack(request);
+      await sendResponse(response, res);
+    } catch (err) {
+      console.error("[khabar] /api/track error:", err);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false }));
     }
     return;
   }

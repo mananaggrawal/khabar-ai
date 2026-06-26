@@ -18,6 +18,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DailyBriefing, Story } from "@/lib/news/generator";
 import { FEED_MAP, type SectionId } from "@/lib/news/sources";
+import { track } from "@/lib/analytics/track";
+import { EVENTS } from "@/lib/analytics/events";
 
 export type MonologueState = "idle" | "playing" | "paused" | "error";
 export type Language = "en" | "hi" | "ta" | "mr";
@@ -273,6 +275,15 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
 
       const onEnded = mode !== null
         ? () => {
+            // Completion of the story that just finished
+            const finished = storiesWithAudio[currentIdxRef.current];
+            if (finished) {
+              track(EVENTS.STORY_COMPLETE, {
+                storyId: finished.id,
+                section: finished.section,
+                durationSec: Math.round(audioRef.current?.duration ?? 0),
+              });
+            }
             // Find the next story with a different audio file (next section)
             let next = currentIdxRef.current + 1;
             while (next < storiesWithAudio.length) {
@@ -311,6 +322,8 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
         if (curAudio.paused) curAudio.play().catch(() => {});
         return;
       }
+
+      track(EVENTS.STORY_START, { storyId: story.id, section: story.section, index: idx, mode: mode ?? "single" });
 
       const audio = attachAudio(url!, seekTo, onEnded);
       audio.play().catch((e: any) => {
@@ -389,6 +402,7 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
   }, [playAt, storiesWithAudio]);
 
   const play = useCallback(() => {
+    track(EVENTS.PLAY, {});
     try {
       const saved = localStorage.getItem(RESUME_KEY);
       if (saved) {
@@ -405,8 +419,10 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
   }, [storiesWithAudio, language, briefing, playAt, playAll]);
 
   const pause = useCallback(() => {
-    if (audioRef.current) { pauseTimeRef.current = audioRef.current.currentTime; audioRef.current.pause(); }
+    const pos = audioRef.current?.currentTime ?? 0;
+    if (audioRef.current) { pauseTimeRef.current = pos; audioRef.current.pause(); }
     setState("paused");
+    track(EVENTS.PAUSE, { positionSec: Math.round(pos) });
   }, []);
 
   const resume = useCallback(async () => {

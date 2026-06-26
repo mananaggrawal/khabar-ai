@@ -9,6 +9,8 @@ import type { Story } from "@/lib/news/generator";
 import { FEED_MAP } from "@/lib/news/sources";
 import { type Language, getStoryTitle } from "@/hooks/useMonologue";
 import { SECTION_COLOR } from "@/components/StoryCard";
+import { track } from "@/lib/analytics/track";
+import { EVENTS } from "@/lib/analytics/events";
 
 interface StoryDetailSheetProps {
   story: Story | null;
@@ -199,6 +201,7 @@ export function StoryDetailSheet({
                         href={src.link}
                         target="_blank"
                         rel="noopener noreferrer"
+                        onClick={() => track(EVENTS.SOURCE_CLICK, { storyId: story.id, publisher: src.source })}
                         className="flex items-start justify-between rounded-2xl border border-border/40 bg-white shadow-sm px-4 py-3 gap-3 transition-all active:scale-[0.99] hover:shadow"
                       >
                         <div className="flex items-start gap-2.5 min-w-0">
@@ -233,6 +236,7 @@ export function StoryDetailSheet({
                       href={url(story.title)}
                       target="_blank"
                       rel="noopener noreferrer"
+                      onClick={() => track(EVENTS.EXPLORE_CLICK, { storyId: story.id, engine: name })}
                       className="flex items-center justify-between rounded-2xl border border-border/40 bg-white shadow-sm px-4 py-3 text-sm font-medium text-foreground transition-all active:scale-[0.99] hover:shadow"
                     >
                       <span className="flex items-center gap-2.5">

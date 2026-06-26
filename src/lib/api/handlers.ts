@@ -66,6 +66,18 @@ export async function handleGenerate(request: Request): Promise<Response> {
       console.log(`[admin] generation triggered (provider: ${provider}, langs: ${languages.join(",")})`);
       const briefing = await generateDailyBriefing((msg) => send({ type: "log", msg }), city, provider, languages);
       const rs = briefing.runSummary;
+      void logServerEvent("generation_run", {
+        date:        briefing.date,
+        provider,
+        languages:   languages.join(","),
+        stories:     briefing.stories.length,
+        elapsedSec:  rs?.elapsedSec ?? 0,
+        scriptSec:   rs?.scriptSec ?? 0,
+        ttsSec:      rs?.ttsSec ?? 0,
+        rawStories:  rs?.rawStories ?? 0,
+        ttsChars:    rs?.tts.totalChars ?? 0,
+        ttsEstUsd:   rs?.tts.estimatedUsd ?? 0,
+      });
       send({
         type: "done",
         date:        briefing.date,
@@ -362,6 +374,54 @@ export async function handleAsk(request: Request): Promise<Response> {
   } catch (err: any) {
     console.error("[ask]", err);
     return json({ error: err?.message ?? "Failed" }, 500);
+  }
+}
+
+// ── Analytics ingestion ──────────────────────────────────────────────────────
+
+/** Insert a single analytics event (server-side, service role — clients can't forge). */
+async function insertEvent(row: Record<string, unknown>): Promise<void> {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { error } = await (supabaseAdmin as any).from("analytics_events").insert(row);
+  if (error) console.error("[track] insert failed:", error.message);
+}
+
+/** Fire a server-originated analytics event (e.g. generation_run). Never throws. */
+export async function logServerEvent(event: string, props: Record<string, unknown> = {}): Promise<void> {
+  try {
+    await insertEvent({
+      event: event.slice(0, 120),
+      user_id: null,
+      platform: "server",
+      props,
+      occurred_at: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error("[track] server event failed:", err?.message ?? err);
+  }
+}
+
+// POST /api/track — client analytics ingestion. Best-effort; never fails the UX.
+export async function handleTrack(request: Request): Promise<Response> {
+  try {
+    const body = await request.json().catch(() => null);
+    if (!body || typeof body.event !== "string" || !body.event) {
+      return json({ error: "event required" }, 400);
+    }
+    const props = (body.props && typeof body.props === "object") ? body.props : {};
+    await insertEvent({
+      event:       String(body.event).slice(0, 120),
+      user_id:     typeof body.userId === "string" && body.userId ? body.userId : null,
+      platform:    typeof props.platform === "string" ? props.platform : null,
+      language:    typeof props.language === "string" ? props.language : null,
+      app_version: typeof props.appVersion === "string" ? props.appVersion : null,
+      props,
+      occurred_at: typeof body.ts === "string" ? body.ts : new Date().toISOString(),
+    });
+    return new Response(null, { status: 204 });
+  } catch (err: any) {
+    console.error("[track]", err?.message ?? err);
+    return json({ ok: false }, 200); // swallow — analytics must never break the app
   }
 }
 

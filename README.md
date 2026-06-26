@@ -173,7 +173,20 @@ OPENAI_API_KEY="sk-..."
 ADMIN_KEY="your-secret-key"
 LOCAL_MODE=true        # skips Supabase auth; saves audio + briefing to local files
 VITE_LOCAL_MODE=true
+
+# Analytics (optional) — PostHog client key for product analytics.
+# Without it, events still log to the Supabase `analytics_events` table via /api/track.
+VITE_POSTHOG_KEY="phc_..."
+VITE_POSTHOG_HOST="https://us.i.posthog.com"   # or your EU/self-host URL
+# VITE_APP_VERSION="web"                        # optional build tag on events
 ```
+
+> **Analytics setup:** apply `supabase/migrations/20260626000000_add_analytics_events.sql`
+> (creates the `analytics_events` table, server-write only). Client events flow
+> through `src/lib/analytics/track.ts` → `/api/track` → Supabase, and in parallel
+> to PostHog when `VITE_POSTHOG_KEY` is set. Event names live in
+> `src/lib/analytics/events.ts` and are shared with the future mobile app. See
+> `PRIVACY.md` for the disclosure.
 
 ```bash
 npm run dev
