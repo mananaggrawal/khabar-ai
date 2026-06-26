@@ -24,10 +24,9 @@ import type { Story } from "@/lib/news/generator";
 const LOCAL_MODE = import.meta.env.VITE_LOCAL_MODE === "true";
 
 // Section display order + legacy mapping — shared by playback ordering and grouping
-const SECTION_DISPLAY_ORDER: SectionId[] = ["headlines", "india", "world", "business", "local"];
+const SECTION_DISPLAY_ORDER: SectionId[] = ["headlines", "india", "world", "business", "technology", "sports", "science", "health", "local"];
 const LEGACY_SECTION: Record<string, SectionId> = {
-  politics: "india", sports: "india",
-  techlife: "india", technology: "india", entertainment: "india", science: "india", health: "india",
+  politics: "india", techlife: "technology", entertainment: "india",
 };
 function resolveSection(s: string): SectionId {
   if (s in LEGACY_SECTION) return LEGACY_SECTION[s];
@@ -287,8 +286,9 @@ function HomePage() {
     }
   }, [mono.currentStory, detailStory]);
 
-  // Group stories by section in display order (helpers are module-scope)
-  const storiesBySection = SECTION_DISPLAY_ORDER
+  // Real topic sections (everything except the derived "headlines"/Top Stories view)
+  const realGroups = SECTION_DISPLAY_ORDER
+    .filter(sectionId => sectionId !== "headlines")
     .map(sectionId => ({
       sectionId,
       feed: FEED_MAP.get(sectionId),
@@ -296,7 +296,16 @@ function HomePage() {
     }))
     .filter(g => g.stories.length > 0);
 
-  // Active section defaults to the first available section (no "All" view)
+  // Top Stories = the day's ★ homepage stories, drawn from every section (they
+  // also still appear under their own topic group below).
+  const featuredStories = (briefing?.stories ?? []).filter(s => s.featured);
+  const topGroup = featuredStories.length > 0
+    ? { sectionId: "headlines" as SectionId, feed: FEED_MAP.get("headlines"), stories: featuredStories }
+    : null;
+
+  const storiesBySection = topGroup ? [topGroup, ...realGroups] : realGroups;
+
+  // Active section defaults to the first available (Top Stories if present)
   const currentSection = activeSection ?? storiesBySection[0]?.sectionId ?? null;
 
   // Only the active section is shown

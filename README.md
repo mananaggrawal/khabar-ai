@@ -2,7 +2,7 @@
 
 A daily AI-powered news briefing app that delivers spoken news in a warm, conversational voice — like a smart friend catching you up on what happened today. Built as a personal tool for iPhone use.
 
-Pulls from Google News RSS across 5 focused feeds, merges articles about the same event with a single LLM call, writes very quick factual English scripts with GPT-4o, and converts them to speech with Edge TTS (free) by default.
+Pulls from Google News RSS across several topic feeds, merges articles about the same event with a single LLM call, writes very quick factual English scripts with GPT-4o, and converts them to speech with Edge TTS (free) by default.
 
 ---
 
@@ -10,7 +10,7 @@ Pulls from Google News RSS across 5 focused feeds, merges articles about the sam
 
 Khabar AI generates a daily briefing on demand (or via cron):
 
-1. Fetches 5 Google News RSS feeds in parallel — Top Stories (headlines), India, World, Business, Local (city-scoped via the `city` option)
+1. Fetches Google News RSS feeds in parallel — India, World, Business, Technology, Sports, Science, Health, Local (city-scoped via the `city` option), plus the homepage. "Top Stories" is a front-page view of the day's ★ homepage stories, drawn from every section.
 2. Deduplicates by URL hash + title prefix; articles on Google's homepage feed are flagged (★) as a stronger editorial signal
 3. Clusters articles about the same event and selects as many distinct events as fit in one `gpt-4o-mini` call, ordered by importance and balanced across sections (count derives from `TARGET_MINUTES`, default 25 → ~63 stories)
 4. Writes a very quick ~45–65 word factual English script per event with `gpt-4o` — headline + key facts, no interpretation — using the live-fetched body text of the top sources
@@ -87,7 +87,7 @@ src/
 ```
 POST /api/admin/generate?provider=edge&languages=en&city=Mumbai   (x-admin-key: <ADMIN_KEY>)
     │
-    ├── fetchAllFeeds()         -- 5 Google News RSS feeds in parallel (incl. city-scoped Local)
+    ├── fetchAllFeeds()         -- topic feeds (india/world/business/tech/sports/science/health/local) + homepage
     │                              (falls back to search URL if topic ID expired)
     ├── buildRawStories()       -- dedup by URL hash + title prefix; flag ★ homepage stories
     │
