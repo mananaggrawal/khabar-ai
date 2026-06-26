@@ -234,6 +234,9 @@ function HomePage() {
   const [detailStory, setDetailStory] = useState<Story | null>(null);
   const [activeSection, setActiveSection] = useState<SectionId | null>(null);
   const pillsRef = useRef<HTMLDivElement>(null);
+  // True when the open detail drawer is showing the currently-playing story, so
+  // it should follow along as autoplay advances. False when opened on another story.
+  const detailFollowsRef = useRef(false);
 
   // Persist which languages are available in this briefing to localStorage
   useEffect(() => {
@@ -254,6 +257,14 @@ function HomePage() {
   useEffect(() => {
     if (mono.state === "idle") setPlayerOpen(false);
   }, [mono.state]);
+
+  // If the detail drawer is open ON the playing story, follow autoplay to the next
+  useEffect(() => {
+    if (detailFollowsRef.current && detailStory && mono.currentStory &&
+        mono.currentStory.id !== detailStory.id) {
+      setDetailStory(mono.currentStory);
+    }
+  }, [mono.currentStory, detailStory]);
 
   // Group stories by section in display order (helpers are module-scope)
   const storiesBySection = SECTION_DISPLAY_ORDER
@@ -371,7 +382,10 @@ function HomePage() {
                           hasAudio={hasAudio}
                           onPlay={() => storyIdx >= 0 && mono.playFrom(storyIdx)}
                           onPause={mono.pause}
-                          onTap={() => setDetailStory(story)}
+                          onTap={() => {
+                            detailFollowsRef.current = mono.currentStory?.id === story.id;
+                            setDetailStory(story);
+                          }}
                         />
                       );
                     })}
