@@ -516,6 +516,19 @@ function titleTokens(title: string): Set<string> {
   );
 }
 
+/** Strip stray source labels the model sometimes leaves in a title. */
+function cleanTitle(title: string, publishers: string[] = []): string {
+  let s = (title ?? "").trim();
+  s = s.replace(/^\s*\[[^\]]*\]\s*/, "");          // leading "[Source]"
+  // trailing " - Publisher" / " | Publisher" when it matches a known publisher
+  for (const p of publishers) {
+    if (!p) continue;
+    const esc = p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    s = s.replace(new RegExp(`\\s*[-|–—:]\\s*${esc}\\s*$`, "i"), "");
+  }
+  return s.replace(/\s{2,}/g, " ").trim();
+}
+
 function titlesSimilar(a: Set<string>, b: Set<string>): boolean {
   if (a.size === 0 || b.size === 0) return false;
   let inter = 0;
@@ -529,25 +542,37 @@ function titlesSimilar(a: Set<string>, b: Set<string>): boolean {
   return jaccard >= 0.5 || containment >= 0.6;
 }
 
+/** Two events are the same if they share any underlying source article. */
+function eventsShareSource(a: SelectedEvent, b: Set<string>): boolean {
+  return a.sourceStories.some(s => b.has(s.id) || b.has(s.link));
+}
+
 function mergeDuplicateEvents(events: SelectedEvent[]): { merged: SelectedEvent[]; removed: number } {
   const kept: SelectedEvent[] = [];
   const keptTokens: Set<string>[] = [];
+  const keptSourceKeys: Set<string>[] = [];
   let removed = 0;
 
   for (const ev of events) {
     const toks = titleTokens(ev.title);
     let target = -1;
     for (let i = 0; i < kept.length; i++) {
-      if (titlesSimilar(toks, keptTokens[i])) { target = i; break; }
+      // Same event if titles overlap a lot OR they share an actual source article
+      if (titlesSimilar(toks, keptTokens[i]) || eventsShareSource(ev, keptSourceKeys[i])) {
+        target = i;
+        break;
+      }
     }
     if (target >= 0) {
       foldEventInto(kept[target], ev);
-      // Accumulate tokens so later variants of the same story still match the cluster
+      // Accumulate tokens + source keys so later variants still match the cluster
       for (const w of toks) keptTokens[target].add(w);
+      for (const s of ev.sourceStories) { keptSourceKeys[target].add(s.id); keptSourceKeys[target].add(s.link); }
       removed++;
     } else {
       kept.push(ev);
       keptTokens.push(toks);
+      keptSourceKeys.push(new Set(ev.sourceStories.flatMap(s => [s.id, s.link])));
     }
   }
   return { merged: kept, removed };
@@ -728,7 +753,7 @@ ${articleList}`;
 
     events.push({
       eventId:         storyId(stories[imageIdx]?.link ?? stories[indices[0]].link),
-      title,
+      title:           cleanTitle(title, publishers),
       section,
       sourceStories,
       publisherCount:  publishers.length,
@@ -832,12 +857,17 @@ HARD RULES:
 - NO bullet points, no parentheses, no lists
 - NEVER invent facts — only use what is in the sources
 
+TITLE RULES — "title" must be a clean, factual headline for THIS exact story:
+- max 9 words, plain text, accurate to the script and the sources
+- NEVER include a publication or source name (no "TOI", "Reuters", "- NDTV", etc.)
+- no brackets, no quotes, no trailing source attribution
+
 Return ONLY valid JSON: {"title": "...", "scriptEn": "..."}`;
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       const raw = await aiJson(prompt, getScriptModel(), 4096);
-      const title    = (raw.title    || ev.title).trim();
+      const title    = cleanTitle((raw.title || ev.title).trim(), ev.publishers);
       const scriptEn = (raw.scriptEn || "").trim();
       if (!isValidScript(scriptEn)) {
         throw new Error(`Script invalid: ${scriptEn.split(/\s+/).length} words`);
