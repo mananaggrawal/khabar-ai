@@ -25,6 +25,12 @@ export type Language = "en" | "hi" | "ta" | "mr";
 const RESUME_KEY   = "khabar-resume-pos";
 const LANGUAGE_KEY = "khabar-language";
 
+// How early (seconds) to advance to the next clip when the app is backgrounded.
+// iOS freezes page JS during the silent gap between clips, so we swap just before
+// the current clip ends — while audio is still playing — to avoid the gap. In the
+// foreground clips play fully (advance on 'ended'); only background trims this much.
+const BG_ADVANCE_LEAD_SEC = 0.5;
+
 const SUPPORTED_LANGS: Language[] = ["en", "hi", "ta", "mr"];
 
 function readLanguage(): Language {
@@ -65,6 +71,8 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
   const queueModeRef   = useRef<"all" | SectionId | null>(null);
   const lastSaveRef    = useRef(0);
   const playAtRef      = useRef<((idx: number, mode: "all" | SectionId | null, startAt?: number) => void) | null>(null);
+  const endedHandlerRef = useRef<(() => void) | null>(null); // current track's advance handler
+  const advancedRef     = useRef(false);                     // guard: one advance per track
 
   // Keep refs in sync
   useEffect(() => { currentIdxRef.current = currentStoryIdx; }, [currentStoryIdx]);
@@ -172,6 +180,22 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
           const ct = audio.currentTime;
           setProgress(ct / audio.duration);
 
+          // Background auto-advance: when the app is hidden/locked, iOS freezes JS in
+          // the silent gap after a clip ends, so 'ended' never gets to start the next
+          // one. While still playing (timeupdate keeps firing), advance just before the
+          // end so there's no gap. Foreground keeps playing fully (advances on 'ended').
+          if (
+            typeof document !== "undefined" && document.hidden &&
+            queueModeRef.current !== null &&
+            endedHandlerRef.current &&
+            !advancedRef.current &&
+            audio.duration - ct <= BG_ADVANCE_LEAD_SEC
+          ) {
+            advancedRef.current = true;
+            endedHandlerRef.current();
+            return;
+          }
+
           // Advance story index when crossing audioStartSec boundary (same section audio)
           const nextIdx = currentIdxRef.current + 1;
           const next = storiesWithAudio[nextIdx];
@@ -247,15 +271,6 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
       setCurrentStoryIdx(idx);
       setQueueMode(mode);
 
-      // If same section audio already loaded, just seek — no reload
-      const curAudio = audioRef.current;
-      const filename = url.split('/').pop() ?? '';
-      if (curAudio && !curAudio.ended && filename && curAudio.src.endsWith(filename)) {
-        if (seekTo > 0) curAudio.currentTime = seekTo;
-        if (curAudio.paused) curAudio.play().catch(() => {});
-        return;
-      }
-
       const onEnded = mode !== null
         ? () => {
             // Find the next story with a different audio file (next section)
@@ -283,6 +298,19 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
             playAtRef.current?.(next, queueModeRef.current, 0);
           }
         : undefined;
+
+      // Register this track's advance handler for the background early-swap path
+      endedHandlerRef.current = onEnded ?? null;
+      advancedRef.current = false;
+
+      // If same audio already loaded, just seek — no reload
+      const curAudio = audioRef.current;
+      const filename = url.split('/').pop() ?? '';
+      if (curAudio && !curAudio.ended && filename && curAudio.src.endsWith(filename)) {
+        if (seekTo > 0) curAudio.currentTime = seekTo;
+        if (curAudio.paused) curAudio.play().catch(() => {});
+        return;
+      }
 
       const audio = attachAudio(url!, seekTo, onEnded);
       audio.play().catch((e: any) => {
