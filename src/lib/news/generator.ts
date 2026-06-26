@@ -623,7 +623,8 @@ async function clusterAndSelect(
     `${i}. [${s.source}]${headlineIds.has(s.id) ? " ★" : ""} [${s.section}] ${s.title}`
   ).join("\n");
 
-  // Per-section soft cap: at most ~60% of total from any one section
+  // Per-section cap: a MAX so one feed can't take the whole briefing — it does
+  // NOT floor/limit the smaller sections, which fill from whatever they produce.
   const perSectionCap = Math.ceil(maxStories * 0.6);
 
   const prompt = `You are the news editor for Khabar AI — India's top audio news briefing.
