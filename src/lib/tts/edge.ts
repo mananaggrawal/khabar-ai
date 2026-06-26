@@ -50,10 +50,35 @@ function estimateMp3Duration(bytes: number): number {
 // Relative percentage per SSML prosody rate. Override via EDGE_TTS_RATE.
 const TTS_RATE = process.env.EDGE_TTS_RATE ?? "+12%";
 
+// msedge-tts inserts our text RAW into its SSML, so escape XML specials and use
+// SSML to fix pronunciation. Acronyms like "US" are otherwise read as the word
+// "us"; spell them out letter-by-letter.
+function ssmlEscape(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// Acronyms to spell out (read as letters, not as a word). Order: longest first.
+const SPELL_OUT = ["USA", "UAE", "US", "UK", "UN", "EU"];
+
+function prepareSpoken(text: string): string {
+  let t = ssmlEscape(text);
+  // normalise dotted forms first: U.S.A. → USA, U.S. → US, etc.
+  t = t
+    .replace(/\bU\.S\.A\./g, "USA")
+    .replace(/\bU\.S\.(?!A)/g, "US")
+    .replace(/\bU\.K\./g, "UK")
+    .replace(/\bU\.N\./g, "UN")
+    .replace(/\bE\.U\./g, "EU");
+  // spell out whole-word acronyms via SSML say-as
+  t = t.replace(new RegExp(`\\b(${SPELL_OUT.join("|")})\\b`, "g"),
+    (m) => `<say-as interpret-as="characters">${m}</say-as>`);
+  return t;
+}
+
 async function synthesize(script: string, voice: string): Promise<Buffer> {
   const tts = new MsEdgeTTS();
   await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3);
-  const { audioStream } = tts.toStream(script, { rate: TTS_RATE });
+  const { audioStream } = tts.toStream(prepareSpoken(script), { rate: TTS_RATE });
 
   const chunks: Buffer[] = [];
   await new Promise<void>((resolve, reject) => {
