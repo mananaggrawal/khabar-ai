@@ -136,19 +136,36 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
 
   const attachAudio = useCallback(
     (url: string, startAt = 0, onEnded?: () => void) => {
-      audioRef.current?.pause();
-      const preloaded = preloadRef.current;
+      // Reuse ONE persistent <audio> element for the whole session. On iOS PWA,
+      // an element that started playing via a user gesture is allowed to keep
+      // playing AND switch its src while the app is in the background; creating a
+      // *new* Audio() in the background is blocked by the OS. That's why
+      // auto-advance used to stop when the app was backgrounded — each story was a
+      // fresh element. Reusing the element keeps advancing in the background.
+      if (!audioRef.current) {
+        audioRef.current = new Audio();
+        audioRef.current.preload = "auto";
+      }
+      const audio = audioRef.current;
+      preloadRef.current = null;
+
       // Match by filename in case one URL is absolute and the other relative
       const filename = url.split('/').pop() ?? '';
-      const audio =
-        preloaded && filename && preloaded.src.endsWith(filename) && startAt === 0
-          ? preloaded
-          : new Audio(url);
-      preloadRef.current = null;
+      const srcChanged = !filename || !audio.src.endsWith(filename);
+      if (srcChanged) {
+        audio.src = url;
+        audio.load();
+      }
       if (startAt > 0) audio.currentTime = startAt;
-      audioRef.current = audio;
+      else if (srcChanged && audio.currentTime !== 0) audio.currentTime = 0;
 
-      audio.onloadedmetadata = () => setDuration(audio.duration);
+      audio.onloadedmetadata = () => {
+        setDuration(audio.duration);
+        // Apply resume offset once metadata (and thus seekable range) is known
+        if (startAt > 0 && Math.abs(audio.currentTime - startAt) > 0.5) {
+          audio.currentTime = startAt;
+        }
+      };
 
       audio.ontimeupdate = () => {
         if (audio.duration > 0) {
@@ -260,7 +277,10 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
               try { localStorage.removeItem(RESUME_KEY); } catch {}
               return;
             }
-            setTimeout(() => playAtRef.current?.(next, queueModeRef.current, 0), 50);
+            // Advance synchronously (no setTimeout — iOS throttles timers in the
+            // background, which would stall auto-advance). Reusing the same audio
+            // element lets play() succeed while backgrounded.
+            playAtRef.current?.(next, queueModeRef.current, 0);
           }
         : undefined;
 
