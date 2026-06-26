@@ -33,8 +33,8 @@ const LOCAL_MODE = process.env.LOCAL_MODE === "true";
 const WORDS_PER_MINUTE  = 150;
 // Very quick headline+gist scripts (~60 words) → maximize story coverage per minute.
 const WORDS_PER_STORY   = 60;
-// Override via TARGET_MINUTES env var (default: 25 min → ~63 stories)
-const TARGET_MINUTES    = Number(process.env.TARGET_MINUTES ?? 25);
+// Override via TARGET_MINUTES env var (default: 30 min → ~75 stories)
+const TARGET_MINUTES    = Number(process.env.TARGET_MINUTES ?? 30);
 const MAX_STORIES       = Math.round(TARGET_MINUTES * WORDS_PER_MINUTE / WORDS_PER_STORY);
 
 // ─── Public types ─────────────────────────────────────────────────────────────
