@@ -49,3 +49,8 @@ services:
         value: onyx
       - key: OPENAI_TTS_VOICE_HI
         value: onyx
+      # Analytics (PostHog) — VITE_* are baked in at build, so redeploy after changing.
+      - key: VITE_POSTHOG_KEY
+        sync: false
+      - key: VITE_POSTHOG_HOST
+        value: https://us.i.posthog.com

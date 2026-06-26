@@ -425,6 +425,83 @@ export async function handleTrack(request: Request): Promise<Response> {
   }
 }
 
+// GET /api/admin/analytics?days=30 — aggregates from analytics_events for the dashboard
+export async function handleAnalytics(request: Request): Promise<Response> {
+  const err = authCheck(request);
+  if (err) return err;
+  try {
+    const url  = new URL(request.url, "http://localhost");
+    const days = Math.min(Math.max(Number(url.searchParams.get("days") ?? 30), 1), 90);
+    const since = new Date(Date.now() - days * 86_400_000).toISOString();
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data, error } = await (supabaseAdmin as any)
+      .from("analytics_events")
+      .select("event,user_id,occurred_at,props")
+      .gte("occurred_at", since)
+      .order("occurred_at", { ascending: false })
+      .limit(50000);
+    if (error) return json({ error: error.message }, 500);
+
+    const rows: any[] = data ?? [];
+    const dayMap = new Map<string, { events: number; users: Set<string>; plays: number; starts: number; completes: number }>();
+    const eventCounts: Record<string, number> = {};
+    const sectionCounts: Record<string, number> = {};
+    const storyCounts: Record<string, number> = {};
+    let durSum = 0, durN = 0;
+    const generationRuns: any[] = [];
+
+    for (const r of rows) {
+      const day = String(r.occurred_at).slice(0, 10);
+      let d = dayMap.get(day);
+      if (!d) { d = { events: 0, users: new Set(), plays: 0, starts: 0, completes: 0 }; dayMap.set(day, d); }
+      d.events++;
+      if (r.user_id) d.users.add(r.user_id);
+      eventCounts[r.event] = (eventCounts[r.event] || 0) + 1;
+      const p = r.props || {};
+      if (r.event === "play") d.plays++;
+      if (r.event === "story_start") {
+        d.starts++;
+        if (p.section) sectionCounts[p.section] = (sectionCounts[p.section] || 0) + 1;
+        if (p.storyId) storyCounts[p.storyId] = (storyCounts[p.storyId] || 0) + 1;
+      }
+      if (r.event === "story_complete") {
+        d.completes++;
+        const ds = Number(p.durationSec);
+        if (ds > 0) { durSum += ds; durN++; }
+      }
+      if (r.event === "generation_run" && generationRuns.length < 10) generationRuns.push({ ...p, at: r.occurred_at });
+    }
+
+    const perDay = [...dayMap.keys()].sort().map((day) => {
+      const d = dayMap.get(day)!;
+      return { day, events: d.events, users: d.users.size, plays: d.plays, starts: d.starts, completes: d.completes };
+    });
+    const starts    = eventCounts["story_start"] || 0;
+    const completes = eventCounts["story_complete"] || 0;
+
+    return json({
+      days,
+      totalEvents: rows.length,
+      perDay,
+      eventCounts,
+      sections: Object.entries(sectionCounts).map(([section, count]) => ({ section, count })).sort((a, b) => b.count - a.count),
+      topStories: Object.entries(storyCounts).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([storyId, count]) => ({ storyId, count })),
+      funnel: {
+        app_open:        eventCounts["app_open"] || 0,
+        briefing_loaded: eventCounts["briefing_loaded"] || 0,
+        play:            eventCounts["play"] || 0,
+        story_complete:  completes,
+      },
+      completionRate: starts ? +((completes / starts) * 100).toFixed(1) : 0,
+      avgStorySec:    durN ? Math.round(durSum / durN) : 0,
+      generationRuns,
+    });
+  } catch (e: any) {
+    return json({ error: e?.message ?? "analytics failed" }, 500);
+  }
+}
+
 // ── Gemini Q&A (search grounding + briefing context) ─────────────────────────
 
 async function answerQuestion(question: string, script: string): Promise<string> {

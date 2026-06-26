@@ -41,7 +41,7 @@ if (!existsSync(SERVER_BUNDLE)) {
 }
 
 const { default: ssrHandler } = await import(SERVER_BUNDLE);
-const { handleGenerate, handleAsk, handleStatus, handleDownload, handleCron, handlePatchMissing, handlePatchTTS, handlePatchScripts, handleStop, handleTrack } = await import(API_BUNDLE);
+const { handleGenerate, handleAsk, handleStatus, handleDownload, handleCron, handlePatchMissing, handlePatchTTS, handlePatchScripts, handleStop, handleTrack, handleAnalytics } = await import(API_BUNDLE);
 
 // Convert Node.js IncomingMessage to a Web Fetch Request
 async function toRequest(req) {
@@ -137,6 +137,12 @@ const server = createServer(async (req, res) => {
       process.env.VITE_SUPABASE_URL || "",
       process.env.VITE_SUPABASE_PUBLISHABLE_KEY || "",
     ));
+    return;
+  }
+
+  if (pathname === "/admin/analytics") {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(adminAnalyticsPage(process.env.ADMIN_KEY || ""));
     return;
   }
 
@@ -309,6 +315,19 @@ self.addEventListener('fetch', e => {
     return;
   }
 
+  if (pathname === "/api/admin/analytics" && req.method === "GET") {
+    try {
+      const request = await toRequest(req);
+      const response = await handleAnalytics(request);
+      await sendResponse(response, res);
+    } catch (err) {
+      console.error("[khabar] /api/admin/analytics error:", err);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: String(err?.message ?? err) }));
+    }
+    return;
+  }
+
   // ── SSR handler ────────────────────────────────────────────────────────
   try {
     const request = await toRequest(req);
@@ -324,6 +343,136 @@ self.addEventListener('fetch', e => {
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`[khabar] Server listening on http://0.0.0.0:${PORT}`);
 });
+
+function adminAnalyticsPage(adminKey) {
+  return `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Khabar Analytics</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root{color-scheme:dark}
+  *{box-sizing:border-box}
+  body{margin:0;background:#0c0714;color:#e8e4f0;font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:20px;max-width:1000px;margin:0 auto}
+  h1{font-size:20px;margin:0}
+  a{color:#a78bfa}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+  .seg button{background:#1c1330;color:#cbb8f0;border:1px solid #2e2150;border-radius:999px;padding:5px 12px;margin-left:6px;cursor:pointer;font-weight:600}
+  .seg button.on{background:#a78bfa;color:#140b22;border-color:#a78bfa}
+  .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}
+  .card{background:#160d27;border:1px solid #271b45;border-radius:14px;padding:14px}
+  .card .k{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#8b7fb0}
+  .card .v{font-size:24px;font-weight:700;margin-top:4px}
+  .panel{background:#160d27;border:1px solid #271b45;border-radius:14px;padding:14px;margin-bottom:16px}
+  .panel h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#8b7fb0;margin:0 0 10px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #271b45}
+  th{color:#8b7fb0;font-weight:600}
+  .muted{color:#8b7fb0}
+  #err{color:#fca5a5}
+  @media(max-width:640px){.cards{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head><body>
+  <div class="row">
+    <div><h1>Khabar — Analytics</h1><div class="muted" style="font-size:12px"><a href="/admin">← Admin</a> · first-party events</div></div>
+    <div class="seg" id="seg">
+      <button data-d="7">7d</button><button data-d="30" class="on">30d</button><button data-d="90">90d</button>
+    </div>
+  </div>
+  <div id="err"></div>
+  <div class="cards">
+    <div class="card"><div class="k">Total events</div><div class="v" id="kpiEvents">–</div></div>
+    <div class="card"><div class="k">Plays</div><div class="v" id="kpiPlays">–</div></div>
+    <div class="card"><div class="k">Completion</div><div class="v" id="kpiCompletion">–</div></div>
+    <div class="card"><div class="k">Avg story</div><div class="v" id="kpiAvg">–</div></div>
+  </div>
+  <div class="panel"><h2>Activity per day</h2><canvas id="dailyChart" height="110"></canvas></div>
+  <div class="panel"><h2>Funnel — open → briefing → play → complete</h2><canvas id="funnelChart" height="90"></canvas></div>
+  <div class="panel"><h2>Story starts by section</h2><canvas id="sectionChart" height="90"></canvas></div>
+  <div class="panel"><h2>Top stories <span class="muted">(by play; ids until titles are joined)</span></h2><table id="topTbl"><thead><tr><th>Story id</th><th>Plays</th></tr></thead><tbody></tbody></table></div>
+  <div class="panel"><h2>Recent generation runs</h2><table id="genTbl"><thead><tr><th>Date</th><th>Stories</th><th>TTS $</th><th>Elapsed</th></tr></thead><tbody></tbody></table></div>
+
+<script>
+  var AKEY = ${JSON.stringify(adminKey)};
+  var days = 30;
+  var charts = {};
+
+  function txt(id, v){ document.getElementById(id).textContent = v; }
+
+  function drawChart(id, type, labels, datasets){
+    var ctx = document.getElementById(id).getContext('2d');
+    if (charts[id]) charts[id].destroy();
+    charts[id] = new Chart(ctx, {
+      type: type,
+      data: { labels: labels, datasets: datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: '#cbb8f0', boxWidth: 12 } } },
+        scales: {
+          x: { ticks: { color: '#8b7fb0' }, grid: { color: '#241941' } },
+          y: { ticks: { color: '#8b7fb0' }, grid: { color: '#241941' }, beginAtZero: true }
+        }
+      }
+    });
+  }
+
+  function render(d){
+    txt('kpiEvents', d.totalEvents);
+    txt('kpiPlays', d.eventCounts.play || 0);
+    txt('kpiCompletion', d.completionRate + '%');
+    txt('kpiAvg', d.avgStorySec + 's');
+
+    var labels = d.perDay.map(function(x){ return x.day.slice(5); });
+    drawChart('dailyChart', 'line', labels, [
+      { label:'Events', data:d.perDay.map(function(x){return x.events;}), borderColor:'#a78bfa', backgroundColor:'#a78bfa33', tension:.3 },
+      { label:'Plays',  data:d.perDay.map(function(x){return x.plays;}),  borderColor:'#34d399', backgroundColor:'#34d39933', tension:.3 },
+      { label:'Users',  data:d.perDay.map(function(x){return x.users;}),  borderColor:'#f59e0b', backgroundColor:'#f59e0b33', tension:.3 }
+    ]);
+    drawChart('funnelChart', 'bar', ['Open','Briefing','Play','Complete'],
+      [{ label:'Count', data:[d.funnel.app_open,d.funnel.briefing_loaded,d.funnel.play,d.funnel.story_complete], backgroundColor:'#a78bfa' }]);
+    drawChart('sectionChart', 'bar', d.sections.map(function(s){return s.section;}),
+      [{ label:'Starts', data:d.sections.map(function(s){return s.count;}), backgroundColor:'#34d399' }]);
+
+    var tb = document.querySelector('#topTbl tbody'); tb.innerHTML = '';
+    d.topStories.forEach(function(s){
+      var tr = document.createElement('tr');
+      tr.innerHTML = '<td class="muted">' + s.storyId + '</td><td>' + s.count + '</td>';
+      tb.appendChild(tr);
+    });
+
+    var gb = document.querySelector('#genTbl tbody'); gb.innerHTML = '';
+    d.generationRuns.forEach(function(g){
+      var tr = document.createElement('tr');
+      var usd = g.ttsEstUsd != null ? ('$' + Number(g.ttsEstUsd).toFixed(3)) : '–';
+      var el  = g.elapsedSec != null ? (Math.round(g.elapsedSec) + 's') : '–';
+      tr.innerHTML = '<td>' + (g.date || (g.at || '').slice(0,10)) + '</td><td>' + (g.stories != null ? g.stories : '–') + '</td><td>' + usd + '</td><td>' + el + '</td>';
+      gb.appendChild(tr);
+    });
+  }
+
+  async function load(){
+    document.getElementById('err').textContent = '';
+    try {
+      var res = await fetch('/api/admin/analytics?days=' + days, { headers: { 'x-admin-key': AKEY } });
+      if (!res.ok) { document.getElementById('err').textContent = 'Error ' + res.status + ' — check ADMIN_KEY / migration'; return; }
+      render(await res.json());
+    } catch (e) {
+      document.getElementById('err').textContent = 'Failed to load: ' + (e && e.message ? e.message : e);
+    }
+  }
+
+  document.getElementById('seg').addEventListener('click', function(e){
+    var b = e.target.closest('button'); if (!b) return;
+    days = Number(b.getAttribute('data-d'));
+    Array.prototype.forEach.call(this.querySelectorAll('button'), function(x){ x.classList.toggle('on', x === b); });
+    load();
+  });
+
+  load();
+</script>
+</body></html>`;
+}
 
 function adminPage(supabaseUrl, supabaseKey) {
   const ALLOWED_EMAIL = "manan190303@gmail.com";
