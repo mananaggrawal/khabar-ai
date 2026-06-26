@@ -358,22 +358,35 @@ function storyId(url: string): string {
  * Stories from the headlines feed that match a topical story → inHeadlinesFeed flag set.
  * Stories unique to the headlines feed → section = "headlines".
  */
-function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]; headlineIds: Set<string> } {
+function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]; headlineIds: Set<string>; staleDropped: number; blockedDropped: number } {
   const seenIds    = new Set<string>();
   const seenTitles = new Set<string>();
   const idToIdx    = new Map<string, number>();
   const titleToIdx = new Map<string, number>();
   const stories: Story[] = [];
   const headlineIds = new Set<string>();
+  let staleDropped = 0, blockedDropped = 0;
 
-  // Only today's news: drop items older than STORY_MAX_AGE_HOURS (default 24h).
-  // Google News feeds include multi-day-old items, which caused "stale day" stories.
-  const maxAgeMs    = (Number(process.env.STORY_MAX_AGE_HOURS) || 24) * 3_600_000;
-  const freshCutoff = Date.now() - maxAgeMs;
+  // Only today's news: drop items older than STORY_MAX_AGE_HOURS (default 24h),
+  // and anything dated in the future (clock-skew tolerance 2h).
+  const maxAgeMs     = (Number(process.env.STORY_MAX_AGE_HOURS) || 24) * 3_600_000;
+  const freshCutoff  = Date.now() - maxAgeMs;
+  const futureCutoff = Date.now() + 2 * 3_600_000;
   function isFresh(item: RssItem): boolean {
     if (!item.pubDate) return false;          // no date → can't confirm it's today, skip
     const t = Date.parse(item.pubDate);
-    return !isNaN(t) && t >= freshCutoff;
+    return !isNaN(t) && t >= freshCutoff && t <= futureCutoff;
+  }
+
+  // Blocked sources: their feed dates are unreliable (e.g. News On Air stamps a
+  // site-wide "last updated today" on every page), leaking months-old articles
+  // past the freshness check. Drop them outright. Extend via BLOCKED_SOURCES.
+  const BLOCKED = (process.env.BLOCKED_SOURCES ?? "news on air,newsonair,akashvani,all india radio,prasar bharati")
+    .split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+  function isBlocked(item: RssItem): boolean {
+    const src  = (item.source || "").toLowerCase();
+    const link = (item.link || "").toLowerCase();
+    return BLOCKED.some(b => src.includes(b)) || link.includes("newsonair") || link.includes("akashvani");
   }
 
   function addStory(item: RssItem, section: SectionId): number {
@@ -398,7 +411,10 @@ function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]
     for (const item of feedMap.get(feedId) ?? []) {
       const id  = storyId(item.link);
       const key = normalize(item.title).slice(0, 60);
-      if (!seenIds.has(id) && !seenTitles.has(key) && isFresh(item)) addStory(item, feedId);
+      if (seenIds.has(id) || seenTitles.has(key)) continue;
+      if (isBlocked(item)) { blockedDropped++; continue; }
+      if (!isFresh(item))  { staleDropped++;   continue; }
+      addStory(item, feedId);
     }
   }
 
@@ -409,13 +425,15 @@ function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]
     if (seenIds.has(id) || seenTitles.has(key)) {
       const idx = idToIdx.get(id) ?? titleToIdx.get(key);
       if (idx != null) headlineIds.add(stories[idx].id);
-    } else if (isFresh(item)) {
+    } else {
+      if (isBlocked(item)) { blockedDropped++; continue; }
+      if (!isFresh(item))  { staleDropped++;   continue; }
       const idx = addStory(item, "headlines");
       headlineIds.add(stories[idx].id);
     }
   }
 
-  return { stories, headlineIds };
+  return { stories, headlineIds, staleDropped, blockedDropped };
 }
 
 // ─── Step 2b: OG image fetching ───────────────────────────────────────────────
@@ -1193,8 +1211,8 @@ export async function generateDailyBriefing(
   if (isAbortRequested()) throw new Error("Aborted by user");
 
   // Step 2: Dedup
-  const { stories: rawStories, headlineIds } = buildRawStories(feedMap);
-  log(`After dedup: ${rawStories.length} unique articles (${headlineIds.size} on Google homepage)`);
+  const { stories: rawStories, headlineIds, staleDropped, blockedDropped } = buildRawStories(feedMap);
+  log(`After dedup: ${rawStories.length} unique articles (${headlineIds.size} on Google homepage) — dropped ${staleDropped} stale, ${blockedDropped} blocked-source`);
   for (const [sectionId, config] of FEED_MAP) {
     const n = rawStories.filter(s => s.section === sectionId).length;
     if (n > 0) log(`  ${config.emoji} ${config.label}: ${n}`);
