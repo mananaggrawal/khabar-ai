@@ -666,6 +666,32 @@ ${list}`;
   return events.filter((_, i) => !removed.has(i));
 }
 
+// Each section's top-N (by importance order) are guaranteed into the cap.
+const PER_SECTION_GUARANTEE = Number(process.env.PER_SECTION_GUARANTEE) || 3;
+
+/**
+ * Cap to `max` events but never drop a section's most important stories.
+ * Events arrive in importance order; we reserve each section's first N, then
+ * fill the remaining budget in order. Preserves overall ordering.
+ */
+function capWithPerSectionGuarantee(events: SelectedEvent[], max: number): SelectedEvent[] {
+  if (events.length <= max) return events;
+  const perSec = new Map<string, number>();
+  const reserved = new Set<number>();
+  events.forEach((e, i) => {
+    const c = perSec.get(e.section) ?? 0;
+    if (c < PER_SECTION_GUARANTEE) { reserved.add(i); perSec.set(e.section, c + 1); }
+  });
+  const fillBudget = max - reserved.size;
+  const result: SelectedEvent[] = [];
+  let filled = 0;
+  for (let i = 0; i < events.length && result.length < max; i++) {
+    if (reserved.has(i)) result.push(events[i]);
+    else if (filled < fillBudget) { result.push(events[i]); filled++; }
+  }
+  return result;
+}
+
 // ─── Step 4: Cluster same-event articles (single AI call) ────────────────────
 
 async function clusterAndSelect(
@@ -691,9 +717,9 @@ TASK:
 1. Group every article about the same underlying event into ONE cluster — even when the headlines are worded differently or come from different publishers. Be aggressive about merging: if two headlines describe the same ruling, announcement, incident, or statement, they are the SAME event and must share one cluster. Put every article index covering that event in its sourceIndices.
 2. Cover as many genuinely DISTINCT events as possible — up to ${maxStories}. Include every unique story, but never list the same event twice.
 3. Order from most to least important.
-4. Balance sections — aim for at least 4 events per section where news exists; no single section should exceed ${perSectionCap} events.
+4. PER-SECTION GUARANTEE: for EVERY section that has news, FIRST secure that section's 2-3 most significant stories — judged on importance WITHIN that topic, not against politics. The biggest sports story (e.g. a World Cup or major tournament), the biggest science/technology/health story of the day, etc. MUST be included even though it would rank below political news on the overall scale. A section's headline story must never be dropped in favour of one more political story. Only after each section's top stories are secured, fill the rest by overall importance. No single section should exceed ${perSectionCap} events.
 
-IMPORTANCE GUIDE (order by this):
+IMPORTANCE GUIDE (for ORDERING and for filling remaining slots after the per-section guarantee):
 - Major: Parliament/Cabinet decisions, elections, RBI/budget/market moves, India-Pakistan/China, Supreme Court, major disasters
 - Medium: International events affecting India, corporate/economic policy, state-level governance
 - Lower: Routine updates, niche stories, individual match results (unless major tournament)
@@ -816,8 +842,11 @@ ${articleList}`;
   // Second pass: focused LLM dedupe catches same-event stories worded differently
   const deduped = await llmDedupeEvents(merged, logger);
 
-  // Hard cap — keep the most important after de-duping
-  const capped = deduped.slice(0, maxStories);
+  // Cap with a PER-SECTION GUARANTEE: reserve each section's top few (by the
+  // model's order = importance within that section) so a section's biggest story
+  // can't be crowded out of the cap by political news, then fill the rest by
+  // overall importance. No keywords — purely structural.
+  const capped = capWithPerSectionGuarantee(deduped, maxStories);
   logger(`Clustered into ${capped.length} events (target: ${maxStories}, ~${Math.round(capped.length * WORDS_PER_STORY / WORDS_PER_MINUTE)} min)`);
   return capped;
 }
