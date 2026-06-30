@@ -1,0 +1,48 @@
+workflows:
+  ios-release:
+    name: Khabar iOS
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+
+    environment:
+      flutter: 3.44.4
+      xcode: latest
+      cocoapods: default
+      ios_signing:
+        distribution_type: development
+        bundle_identifier: io.khabar.app
+
+    scripts:
+      - name: Get Flutter packages
+        script: |
+          cd khabar-flutter
+          flutter pub get
+
+      - name: Install CocoaPods
+        script: |
+          cd khabar-flutter/ios
+          pod install
+
+      - name: Build iOS
+        script: |
+          cd khabar-flutter
+          flutter build ios --release --no-codesign
+
+      - name: Build IPA
+        script: |
+          cd khabar-flutter
+          xcode-project build-ipa \
+            --workspace ios/Runner.xcworkspace \
+            --scheme Runner
+
+    artifacts:
+      - khabar-flutter/build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+
+    publishing:
+      email:
+        recipients:
+          - manan.aggrawal@vegapay.tech
+        notify:
+          success: true
+          failure: true
