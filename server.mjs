@@ -393,6 +393,7 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
     </div>
   </div>
   <div id="err"></div>
+  <div class="muted" id="dataNote" style="font-size:11px;margin:-4px 0 12px"></div>
   <div class="cards">
     <div class="card"><div class="k">Active users</div><div class="v" id="kpiUsers">–</div></div>
     <div class="card"><div class="k">Minutes listened</div><div class="v" id="kpiListen">–</div></div>
@@ -437,6 +438,8 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
   function fmtMin(m){ return m >= 60 ? (Math.floor(m/60) + 'h ' + (m%60) + 'm') : (m + 'm'); }
 
   function render(d){
+    var dn = document.getElementById('dataNote');
+    if (dn) dn.textContent = (d.totalEvents || 0) + ' events · ' + (d.heartbeats || 0) + ' heartbeats received in range';
     txt('kpiUsers', d.activeUsers != null ? d.activeUsers : 0);
     txt('kpiListen', fmtMin(d.minutesListened || 0));
     txt('kpiApp', fmtMin(d.timeOnAppMin || 0));

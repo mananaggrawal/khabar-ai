@@ -534,6 +534,8 @@ export async function handleAnalytics(request: Request): Promise<Response> {
     return json({
       days,
       perDay,
+      totalEvents: rows.length,
+      heartbeats:  rows.filter((r: any) => r.event === "heartbeat").length,
       activeUsers,
       timeOnAppMin:    Math.round(totalAppSec / 60),
       minutesListened: Math.round(totalListenSec / 60),
