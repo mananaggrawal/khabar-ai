@@ -10,19 +10,10 @@ workflows:
       cocoapods: default
 
     scripts:
-      - name: Get Flutter packages
-        script: |
-          cd khabar-flutter
-          flutter pub get
-
-      - name: Install CocoaPods
-        script: |
-          cd khabar-flutter/ios
-          pod install
-
       - name: Build iOS (no code signing)
         script: |
           cd khabar-flutter
+          flutter pub get
           flutter build ios --release --no-codesign
 
     artifacts:
