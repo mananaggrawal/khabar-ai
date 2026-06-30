@@ -704,9 +704,11 @@ async function clusterAndSelect(
     `${i}. [${s.source}]${headlineIds.has(s.id) ? " ★" : ""} [${s.section}] ${s.title}`
   ).join("\n");
 
-  // Per-section cap: a MAX so one feed can't take the whole briefing — it does
-  // NOT floor/limit the smaller sections, which fill from whatever they produce.
-  const perSectionCap = Math.ceil(maxStories * 0.6);
+  // Per-section cap: a MAX so one feed (India) can't take most of the briefing.
+  // Lowered to ~40% so the freed slots flow to the other sections (more World/
+  // Tech/Sports/etc. coverage within the same ~30-min budget). Ceiling only —
+  // never pads a section that lacks news.
+  const perSectionCap = Math.ceil(maxStories * 0.4);
 
   const prompt = `You are the news editor for Khabar AI — India's top audio news briefing.
 

@@ -124,5 +124,10 @@ export async function edgeTTS(
 
   console.log(`[tts/edge] ${lang.toUpperCase()} → ${voice} (story: ${storyId.slice(0, 8)}…)`);
   const mp3 = await synthesize(script, voice);
+  // Reject empty/near-empty output — even the shortest valid clip is tens of KB.
+  // An empty file would still upload and show a play button that plays nothing.
+  if (!mp3 || mp3.length < 2000) {
+    throw new Error(`Edge TTS produced empty audio (${mp3?.length ?? 0} bytes)`);
+  }
   return saveMp3(mp3, filename, voice);
 }
