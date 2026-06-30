@@ -22,13 +22,20 @@ export async function uploadAudio(
   contentType = "audio/wav",
 ): Promise<string> {
   const path = `audio/${filename}`;
-  const { error } = await client().storage.from(BUCKET).upload(path, data, {
-    contentType,
-    upsert: true,
-  });
-  if (error) throw new Error(`Storage audio upload failed: ${error.message}`);
-  const { data: urlData } = client().storage.from(BUCKET).getPublicUrl(path);
-  return urlData.publicUrl;
+  let lastErr: string | undefined;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, 800 * attempt));
+    const { error } = await client().storage.from(BUCKET).upload(path, data, {
+      contentType,
+      upsert: true,
+    });
+    if (!error) {
+      const { data: urlData } = client().storage.from(BUCKET).getPublicUrl(path);
+      return urlData.publicUrl;
+    }
+    lastErr = error.message;
+  }
+  throw new Error(`Storage audio upload failed: ${lastErr}`);
 }
 
 export async function saveBriefingToStorage(date: string, briefing: unknown): Promise<void> {

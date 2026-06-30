@@ -75,19 +75,51 @@ function prepareSpoken(text: string): string {
   return t;
 }
 
-async function synthesize(script: string, voice: string): Promise<Buffer> {
-  const tts = new MsEdgeTTS();
-  await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3);
-  const { audioStream } = tts.toStream(prepareSpoken(script), { rate: TTS_RATE });
+const TTS_TIMEOUT_MS = 25_000;
 
-  const chunks: Buffer[] = [];
-  await new Promise<void>((resolve, reject) => {
-    audioStream.on("data", (chunk: Buffer) => chunks.push(chunk));
-    audioStream.on("end", resolve);
-    audioStream.on("error", reject);
+// One synthesis attempt with a hard timeout (the websocket can hang silently).
+function synthesizeOnce(input: string, voice: string): Promise<Buffer> {
+  return new Promise<Buffer>((resolve, reject) => {
+    let settled = false;
+    const finish = (err: Error | null, buf?: Buffer) => {
+      if (settled) return; settled = true; clearTimeout(timer);
+      if (err) reject(err); else resolve(buf!);
+    };
+    const timer = setTimeout(() => finish(new Error("Edge TTS timeout")), TTS_TIMEOUT_MS);
+    (async () => {
+      try {
+        const tts = new MsEdgeTTS();
+        await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3);
+        const { audioStream } = tts.toStream(input, { rate: TTS_RATE });
+        const chunks: Buffer[] = [];
+        audioStream.on("data", (c: Buffer) => chunks.push(c));
+        audioStream.on("end", () => finish(null, Buffer.concat(chunks)));
+        audioStream.on("error", (e: any) => finish(e instanceof Error ? e : new Error(String(e))));
+      } catch (e: any) {
+        finish(e instanceof Error ? e : new Error(String(e)));
+      }
+    })();
   });
+}
 
-  return Buffer.concat(chunks);
+// Retry transient failures (websocket drops, EAI_AGAIN, timeouts) and treat an
+// empty/too-small result as a failure to retry. Last attempt falls back to plain
+// text in case the SSML transform is what Edge is choking on.
+async function synthesize(script: string, voice: string): Promise<Buffer> {
+  const ssml = prepareSpoken(script);
+  let lastErr: Error | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, 600 * attempt));
+    const input = attempt < 2 ? ssml : ssmlEscape(script); // final attempt: plain
+    try {
+      const buf = await synthesizeOnce(input, voice);
+      if (buf && buf.length >= 2000) return buf;
+      lastErr = new Error(`empty audio (${buf?.length ?? 0} bytes)`);
+    } catch (e: any) {
+      lastErr = e instanceof Error ? e : new Error(String(e));
+    }
+  }
+  throw lastErr ?? new Error("Edge TTS failed");
 }
 
 async function saveMp3(
