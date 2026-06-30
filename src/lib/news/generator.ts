@@ -33,8 +33,9 @@ const LOCAL_MODE = process.env.LOCAL_MODE === "true";
 const WORDS_PER_MINUTE  = 150;
 // Very quick headline+gist scripts (~60 words) → maximize story coverage per minute.
 const WORDS_PER_STORY   = 60;
-// Override via TARGET_MINUTES env var (default: 30 min → ~75 stories)
-const TARGET_MINUTES    = Number(process.env.TARGET_MINUTES ?? 30);
+// Override via TARGET_MINUTES env var (default: 35 min → ~87 stories — room for
+// ~10 per section across the non-India sections)
+const TARGET_MINUTES    = Number(process.env.TARGET_MINUTES ?? 35);
 const MAX_STORIES       = Math.round(TARGET_MINUTES * WORDS_PER_MINUTE / WORDS_PER_STORY);
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -563,13 +564,14 @@ function titlesSimilar(a: Set<string>, b: Set<string>): boolean {
   if (a.size === 0 || b.size === 0) return false;
   let inter = 0;
   for (const w of a) if (b.has(w)) inter++;
-  if (inter < 2) return false; // need at least 2 shared content words
+  if (inter < 3) return false; // need several shared content words
   const union       = a.size + b.size - inter;
   const jaccard     = inter / union;
   const containment = inter / Math.min(a.size, b.size);
-  // Same story worded differently → high token overlap, or one title's content
-  // words are mostly contained in the other's.
-  return jaccard >= 0.5 || containment >= 0.6;
+  // Conservative: only merge near-IDENTICAL titles here (avoids merging unrelated
+  // stories that merely share a few words). The LLM dedupe pass + shared-source
+  // matching catch same-event stories that are worded differently.
+  return jaccard >= 0.65 || containment >= 0.85;
 }
 
 /** Two events are the same if they share any underlying source article. */
@@ -667,7 +669,7 @@ ${list}`;
 }
 
 // Each section's top-N (by importance order) are guaranteed into the cap.
-const PER_SECTION_GUARANTEE = Number(process.env.PER_SECTION_GUARANTEE) || 3;
+const PER_SECTION_GUARANTEE = Number(process.env.PER_SECTION_GUARANTEE) || 5;
 
 /**
  * Cap to `max` events but never drop a section's most important stories.
@@ -704,11 +706,10 @@ async function clusterAndSelect(
     `${i}. [${s.source}]${headlineIds.has(s.id) ? " ★" : ""} [${s.section}] ${s.title}`
   ).join("\n");
 
-  // Per-section cap: a MAX so one feed (India) can't take most of the briefing.
-  // Lowered to ~40% so the freed slots flow to the other sections (more World/
-  // Tech/Sports/etc. coverage within the same ~30-min budget). Ceiling only —
-  // never pads a section that lacks news.
-  const perSectionCap = Math.ceil(maxStories * 0.4);
+  // Per-section cap: a MAX so India can't take most of the briefing (~35%),
+  // leaving room for the other sections to reach ~10 each. Ceiling only — never
+  // pads a section that lacks news.
+  const perSectionCap = Math.ceil(maxStories * 0.35);
 
   const prompt = `You are the news editor for Khabar AI — India's top audio news briefing.
 
@@ -716,10 +717,10 @@ Here are ${stories.length} articles from today's Google News feeds (India, World
 ★ = appeared on Google's homepage — stronger editorial signal.
 
 TASK:
-1. Group every article about the same underlying event into ONE cluster — even when the headlines are worded differently or come from different publishers. Be aggressive about merging: if two headlines describe the same ruling, announcement, incident, or statement, they are the SAME event and must share one cluster. Put every article index covering that event in its sourceIndices.
+1. Group articles about the SAME SPECIFIC event into one cluster (the same incident, ruling, announcement, or statement), even if worded differently by different publishers. CRITICAL: do NOT merge stories that are merely on the same topic, in the same section, or involve the same person/country but are actually DIFFERENT events — keep those separate. When in doubt, keep them separate. A cluster's articles must all be about the one same event, or the summary will mix unrelated facts.
 2. Cover as many genuinely DISTINCT events as possible — up to ${maxStories}. Include every unique story, but never list the same event twice.
 3. Order from most to least important.
-4. PER-SECTION GUARANTEE: for EVERY section that has news, FIRST secure that section's 2-3 most significant stories — judged on importance WITHIN that topic, not against politics. The biggest sports story (e.g. a World Cup or major tournament), the biggest science/technology/health story of the day, etc. MUST be included even though it would rank below political news on the overall scale. A section's headline story must never be dropped in favour of one more political story. Only after each section's top stories are secured, fill the rest by overall importance. No single section should exceed ${perSectionCap} events.
+4. PER-SECTION GUARANTEE & BREADTH: for EVERY section that has news, FIRST secure that section's most significant stories — judged on importance WITHIN that topic, not against politics. The biggest sports story (e.g. a World Cup or major tournament), the biggest world/business/science/technology/health story of the day, etc. MUST be included even though it would rank below political news on the overall scale. A section's headline story must never be dropped in favour of one more political story. AIM for up to ~10 distinct events per section where there genuinely is that much news (fewer if not — never pad). No single section should exceed ${perSectionCap} events.
 
 IMPORTANCE GUIDE (for ORDERING and for filling remaining slots after the per-section guarantee):
 - Major: Parliament/Cabinet decisions, elections, RBI/budget/market moves, India-Pakistan/China, Supreme Court, major disasters
@@ -900,13 +901,13 @@ SOURCES (${ev.publisherCount} publisher${ev.publisherCount !== 1 ? "s" : ""}${ev
 ${sourcesText}
 
 STRUCTURE (very short):
-- Sentence 1: the headline fact — what happened, with the concrete specifics (who/what/when/where)
+- Sentence 1: the headline fact — what happened, with the concrete specifics (who / what / where)
 - Sentence 2-3: the remaining key facts or numbers straight from the sources, then stop
 
 VOICE & STYLE:
 - Plain, factual, neutral — like a newsreader, not a columnist
 - Active voice throughout
-- Use the real numbers, names, dates and places from the sources; nothing vague
+- Use the real numbers, names and places from the sources; nothing vague
 - State facts directly; do not characterize them as good, bad, surprising, or important
 
 HARD RULES:
@@ -917,7 +918,7 @@ HARD RULES:
 - NO demographic mentions: "Indians", "citizens", "the public", "people"
 - NO bullet points, no parentheses, no lists
 - NEVER invent facts — only use what is in the sources
-- DATES & NUMBERS: use ONLY dates, years and figures that appear in the sources above. Never add a date or year from memory. If the sources give no date, do not state one. This is today's news — do not present a past anniversary or old event as if it just happened.
+- NO DATES OR YEARS: never state a year (e.g. "2023", "2026") or a specific calendar date in the script. This is today's news — refer to time only relatively and only when certain from the sources ("today", "this week"); otherwise omit the timeframe entirely. The only exception is a clearly upcoming scheduled event whose date is explicitly in the sources. Use figures (amounts, counts) only if they appear in the sources.
 
 TITLE RULES — "title" must be a clean, factual headline for THIS exact story:
 - max 9 words, plain text, accurate to the script and the sources
