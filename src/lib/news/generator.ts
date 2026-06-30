@@ -717,7 +717,7 @@ Here are ${stories.length} articles from today's Google News feeds (India, World
 ★ = appeared on Google's homepage — stronger editorial signal.
 
 TASK:
-1. Group articles about the SAME SPECIFIC event into one cluster (the same incident, ruling, announcement, or statement), even if worded differently by different publishers. CRITICAL: do NOT merge stories that are merely on the same topic, in the same section, or involve the same person/country but are actually DIFFERENT events — keep those separate. When in doubt, keep them separate. A cluster's articles must all be about the one same event, or the summary will mix unrelated facts.
+1. Group articles about the SAME SPECIFIC event into one cluster (the same incident, ruling, announcement, or statement), even if worded differently by different publishers. CRITICAL: do NOT merge stories that are merely on the same topic, in the same section, or involve the same person/country but are actually DIFFERENT events — keep those separate. Two SEPARATE incidents are DIFFERENT events even if the same KIND — e.g. a lightning strike that kills two and a highway crash that kills a family are two different stories and must NEVER share a cluster just because both involve deaths/accidents. When in doubt, keep them separate. A cluster's articles must all be about the one same event, or the summary will mix unrelated facts.
 2. Cover as many genuinely DISTINCT events as possible — up to ${maxStories}. Include every unique story, but never list the same event twice.
 3. Order from most to least important.
 4. PER-SECTION GUARANTEE & BREADTH: for EVERY section that has news, FIRST secure that section's most significant stories — judged on importance WITHIN that topic, not against politics. The biggest sports story (e.g. a World Cup or major tournament), the biggest world/business/science/technology/health story of the day, etc. MUST be included even though it would rank below political news on the overall scale. A section's headline story must never be dropped in favour of one more political story. AIM for up to ~10 distinct events per section where there genuinely is that much news (fewer if not — never pad). No single section should exceed ${perSectionCap} events.
@@ -918,6 +918,7 @@ HARD RULES:
 - NO demographic mentions: "Indians", "citizens", "the public", "people"
 - NO bullet points, no parentheses, no lists
 - NEVER invent facts — only use what is in the sources
+- COVER EVERY EVENT IN THE SOURCES: the sources are usually one event — summarise that. But if they actually describe MORE THAN ONE distinct event (e.g. two different accidents), you MUST cover ALL of them — never drop one. Give each its own short sentence (you may exceed the word target slightly), and the title must reflect all of them, not just the first.
 - NO DATES OR YEARS: never state a year (e.g. "2023", "2026") or a specific calendar date in the script. This is today's news — refer to time only relatively and only when certain from the sources ("today", "this week"); otherwise omit the timeframe entirely. The only exception is a clearly upcoming scheduled event whose date is explicitly in the sources. Use figures (amounts, counts) only if they appear in the sources.
 
 TITLE RULES — "title" must be a clean, factual headline for THIS exact story:
