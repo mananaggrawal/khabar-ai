@@ -251,13 +251,6 @@ function HomePage() {
       .finally(() => track(EVENTS.APP_OPEN));
   }, []);
 
-  // Analytics: briefing loaded (once per briefing date)
-  useEffect(() => {
-    if (briefing?.stories?.length) {
-      track(EVENTS.BRIEFING_LOADED, { date: briefing.date, stories: briefing.stories.length });
-    }
-  }, [briefing?.date]);
-
   // Persist which languages are available in this briefing to localStorage
   useEffect(() => {
     if (!briefing?.stories?.length) return;
@@ -359,7 +352,7 @@ function HomePage() {
               return (
                 <button
                   key={id}
-                  onClick={() => { setActiveSection(id); track(EVENTS.SECTION_VIEW, { section: id }); }}
+                  onClick={() => setActiveSection(id)}
                   className={`shrink-0 rounded-full border px-3.5 py-1 text-xs font-semibold transition-all whitespace-nowrap ${
                     isActive
                       ? "border-primary bg-primary text-primary-foreground"
@@ -405,7 +398,6 @@ function HomePage() {
                           onTap={() => {
                             detailFollowsRef.current = mono.currentStory?.id === story.id;
                             setDetailStory(story);
-                            track(EVENTS.DETAIL_OPEN, { storyId: story.id, section: story.section, source: "home" });
                           }}
                         />
                       );

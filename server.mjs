@@ -395,16 +395,16 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
   <div id="err"></div>
   <div class="cards">
     <div class="card"><div class="k">Active users</div><div class="v" id="kpiUsers">–</div></div>
-    <div class="card"><div class="k">Stories played</div><div class="v" id="kpiStories">–</div></div>
-    <div class="card"><div class="k">Completion</div><div class="v" id="kpiCompletion">–</div></div>
-    <div class="card"><div class="k">Avg story</div><div class="v" id="kpiAvg">–</div></div>
+    <div class="card"><div class="k">Minutes listened</div><div class="v" id="kpiListen">–</div></div>
+    <div class="card"><div class="k">Time on app (min)</div><div class="v" id="kpiApp">–</div></div>
+    <div class="card"><div class="k">Avg time / story</div><div class="v" id="kpiPerStory">–</div></div>
   </div>
-  <div class="panel"><h2>Activity per day</h2><div class="chartbox" style="height:260px"><canvas id="dailyChart"></canvas></div></div>
-  <div class="panel"><h2>Funnel — opens → briefings → stories → completed</h2><div class="chartbox" style="height:220px"><canvas id="funnelChart"></canvas></div></div>
-  <div class="panel"><h2>Story starts by section</h2><div class="chartbox" style="height:220px"><canvas id="sectionChart"></canvas></div></div>
-  <div class="panel"><h2>Users <span class="muted" id="usersCount"></span></h2><table id="usersTbl"><thead><tr><th>User</th><th>Stories</th><th>Completed</th><th>Last active</th></tr></thead><tbody></tbody></table></div>
-  <div class="panel"><h2>Top stories <span class="muted">(by play; ids until titles are joined)</span></h2><table id="topTbl"><thead><tr><th>Story id</th><th>Plays</th></tr></thead><tbody></tbody></table></div>
-  <div class="panel"><h2>Recent generation runs</h2><table id="genTbl"><thead><tr><th>Date</th><th>Stories</th><th>TTS $</th><th>Elapsed</th></tr></thead><tbody></tbody></table></div>
+  <div class="cards" style="grid-template-columns:repeat(2,1fr)">
+    <div class="card"><div class="k">Stories played</div><div class="v" id="kpiStories">–</div></div>
+    <div class="card"><div class="k">Avg minutes / user</div><div class="v" id="kpiPerUser">–</div></div>
+  </div>
+  <div class="panel"><h2>Per day — minutes listened, time on app, users</h2><div class="chartbox" style="height:260px"><canvas id="dailyChart"></canvas></div></div>
+  <div class="panel"><h2>Users <span class="muted" id="usersCount"></span></h2><table id="usersTbl"><thead><tr><th>User</th><th>Days</th><th>On app (min)</th><th>Listened (min)</th><th>Stories</th><th>Last active</th></tr></thead><tbody></tbody></table></div>
   </div> <!-- /#app -->
 
 <script>
@@ -434,46 +434,31 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
     });
   }
 
+  function fmtMin(m){ return m >= 60 ? (Math.floor(m/60) + 'h ' + (m%60) + 'm') : (m + 'm'); }
+
   function render(d){
-    txt('kpiUsers', d.totalUsers != null ? d.totalUsers : 0);
+    txt('kpiUsers', d.activeUsers != null ? d.activeUsers : 0);
+    txt('kpiListen', fmtMin(d.minutesListened || 0));
+    txt('kpiApp', fmtMin(d.timeOnAppMin || 0));
+    txt('kpiPerStory', (d.avgSecPerStory || 0) + 's');
     txt('kpiStories', d.storiesPlayed != null ? d.storiesPlayed : 0);
-    txt('kpiCompletion', d.completionRate + '%');
-    txt('kpiAvg', d.avgStorySec + 's');
+    txt('kpiPerUser', (d.avgMinPerUser || 0) + 'm');
 
     var labels = d.perDay.map(function(x){ return x.day.slice(5); });
     drawChart('dailyChart', 'line', labels, [
-      { label:'Stories', data:d.perDay.map(function(x){return x.starts;}), borderColor:'#34d399', backgroundColor:'#34d39933', tension:.3 },
-      { label:'Users',   data:d.perDay.map(function(x){return x.users;}),  borderColor:'#f59e0b', backgroundColor:'#f59e0b33', tension:.3 }
+      { label:'Listened (min)', data:d.perDay.map(function(x){return x.listenMin;}), borderColor:'#34d399', backgroundColor:'#34d39933', tension:.3 },
+      { label:'On app (min)',   data:d.perDay.map(function(x){return x.appMin;}),    borderColor:'#a78bfa', backgroundColor:'#a78bfa33', tension:.3 },
+      { label:'Users',          data:d.perDay.map(function(x){return x.users;}),     borderColor:'#f59e0b', backgroundColor:'#f59e0b33', tension:.3 }
     ]);
-    drawChart('funnelChart', 'bar', ['Opens','Briefings','Stories','Completed'],
-      [{ label:'Count', data:[d.funnel.opens,d.funnel.briefings,d.funnel.played,d.funnel.completed], backgroundColor:'#a78bfa' }]);
-    drawChart('sectionChart', 'bar', d.sections.map(function(s){return s.section;}),
-      [{ label:'Stories', data:d.sections.map(function(s){return s.count;}), backgroundColor:'#34d399' }]);
 
     var uc = document.getElementById('usersCount');
-    if (uc) uc.textContent = (d.totalUsers != null ? ('· ' + d.totalUsers + ' total') : '');
+    if (uc) uc.textContent = (d.activeUsers != null ? ('· ' + d.activeUsers + ' active') : '');
     var ub = document.querySelector('#usersTbl tbody'); ub.innerHTML = '';
     (d.users || []).forEach(function(u){
       var tr = document.createElement('tr');
       var la = (u.lastActive || '').replace('T', ' ').slice(0, 16);
-      tr.innerHTML = '<td>' + (u.email || '–') + '</td><td>' + u.stories + '</td><td>' + u.completes + '</td><td class="muted">' + la + '</td>';
+      tr.innerHTML = '<td>' + (u.email || '–') + '</td><td>' + u.daysActive + '</td><td>' + u.appMin + '</td><td>' + u.listenMin + '</td><td>' + u.stories + '</td><td class="muted">' + la + '</td>';
       ub.appendChild(tr);
-    });
-
-    var tb = document.querySelector('#topTbl tbody'); tb.innerHTML = '';
-    d.topStories.forEach(function(s){
-      var tr = document.createElement('tr');
-      tr.innerHTML = '<td class="muted">' + s.storyId + '</td><td>' + s.count + '</td>';
-      tb.appendChild(tr);
-    });
-
-    var gb = document.querySelector('#genTbl tbody'); gb.innerHTML = '';
-    d.generationRuns.forEach(function(g){
-      var tr = document.createElement('tr');
-      var usd = g.ttsEstUsd != null ? ('$' + Number(g.ttsEstUsd).toFixed(3)) : '–';
-      var el  = g.elapsedSec != null ? (Math.round(g.elapsedSec) + 's') : '–';
-      tr.innerHTML = '<td>' + (g.date || (g.at || '').slice(0,10)) + '</td><td>' + (g.stories != null ? g.stories : '–') + '</td><td>' + usd + '</td><td>' + el + '</td>';
-      gb.appendChild(tr);
     });
   }
 

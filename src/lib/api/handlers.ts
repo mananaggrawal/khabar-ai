@@ -464,51 +464,53 @@ export async function handleAnalytics(request: Request): Promise<Response> {
     if (error) return json({ error: error.message }, 500);
 
     const rows: any[] = data ?? [];
-    const dayMap = new Map<string, { events: number; users: Set<string>; plays: number; starts: number; completes: number }>();
-    const eventCounts: Record<string, number> = {};
-    const sectionCounts: Record<string, number> = {};
-    const storyCounts: Record<string, number> = {};
-    const userMap = new Map<string, { stories: number; completes: number; last: string }>();
-    let durSum = 0, durN = 0;
-    const generationRuns: any[] = [];
+
+    // Simple model: app_open = a visit; story_start = a story played; heartbeat =
+    // HEARTBEAT_SEC seconds of activity (tagged playing/visible). Everything below
+    // is just sums of those — minutes on app, minutes listened, time per story.
+    const day = (iso: string) => String(iso).slice(0, 10);
+    const dayMap = new Map<string, { users: Set<string>; appSec: number; listenSec: number; stories: number }>();
+    const userMap = new Map<string, { appSec: number; listenSec: number; stories: number; days: Set<string>; last: string }>();
+    const storyListenSec = new Map<string, number>();
+    let totalAppSec = 0, totalListenSec = 0, totalStories = 0;
+
+    const dayRec = (k: string) => {
+      let d = dayMap.get(k);
+      if (!d) { d = { users: new Set(), appSec: 0, listenSec: 0, stories: 0 }; dayMap.set(k, d); }
+      return d;
+    };
+    const userRec = (id: string) => {
+      let u = userMap.get(id);
+      if (!u) { u = { appSec: 0, listenSec: 0, stories: 0, days: new Set(), last: "" }; userMap.set(id, u); }
+      return u;
+    };
 
     for (const r of rows) {
-      const day = String(r.occurred_at).slice(0, 10);
-      let d = dayMap.get(day);
-      if (!d) { d = { events: 0, users: new Set(), plays: 0, starts: 0, completes: 0 }; dayMap.set(day, d); }
-      d.events++;
-      if (r.user_id) {
-        d.users.add(r.user_id);
-        let u = userMap.get(r.user_id);
-        if (!u) { u = { stories: 0, completes: 0, last: r.occurred_at }; userMap.set(r.user_id, u); }
-        if (r.event === "story_start") u.stories++;
-        if (r.event === "story_complete") u.completes++;
-        if (r.occurred_at > u.last) u.last = r.occurred_at;
-      }
-      eventCounts[r.event] = (eventCounts[r.event] || 0) + 1;
+      const k = day(r.occurred_at);
+      const d = dayRec(k);
       const p = r.props || {};
-      if (r.event === "play") d.plays++;
-      if (r.event === "story_start") {
-        d.starts++;
-        if (p.section) sectionCounts[p.section] = (sectionCounts[p.section] || 0) + 1;
-        if (p.storyId) storyCounts[p.storyId] = (storyCounts[p.storyId] || 0) + 1;
+      const uid = r.user_id as string | null;
+      if (uid) { d.users.add(uid); const u = userRec(uid); u.days.add(k); if (r.occurred_at > u.last) u.last = r.occurred_at; }
+
+      if (r.event === "heartbeat") {
+        const sec = Number(p.seconds) || 20;
+        if (p.visible !== false) { d.appSec += sec; totalAppSec += sec; if (uid) userRec(uid).appSec += sec; }
+        if (p.playing === true) {
+          d.listenSec += sec; totalListenSec += sec;
+          if (uid) userRec(uid).listenSec += sec;
+          if (p.storyId) storyListenSec.set(String(p.storyId), (storyListenSec.get(String(p.storyId)) ?? 0) + sec);
+        }
+      } else if (r.event === "story_start") {
+        d.stories++; totalStories++; if (uid) userRec(uid).stories++;
       }
-      if (r.event === "story_complete") {
-        d.completes++;
-        const ds = Number(p.durationSec);
-        if (ds > 0) { durSum += ds; durN++; }
-      }
-      if (r.event === "generation_run" && generationRuns.length < 10) generationRuns.push({ ...p, at: r.occurred_at });
     }
 
-    const perDay = [...dayMap.keys()].sort().map((day) => {
-      const d = dayMap.get(day)!;
-      return { day, events: d.events, users: d.users.size, plays: d.plays, starts: d.starts, completes: d.completes };
+    const perDay = [...dayMap.keys()].sort().map((k) => {
+      const d = dayMap.get(k)!;
+      return { day: k, users: d.users.size, appMin: +(d.appSec / 60).toFixed(1), listenMin: +(d.listenSec / 60).toFixed(1), stories: d.stories };
     });
-    const starts    = eventCounts["story_start"] || 0;
-    const completes = eventCounts["story_complete"] || 0;
 
-    // Map user ids → email (service role can read auth.users) so the admin sees who's who
+    // user_id → email so the admin sees who's who
     const emailById = new Map<string, string>();
     try {
       const { data: list } = await (supabaseAdmin as any).auth.admin.listUsers({ page: 1, perPage: 1000 });
@@ -516,30 +518,29 @@ export async function handleAnalytics(request: Request): Promise<Response> {
     } catch { /* fall back to ids */ }
 
     const users = [...userMap.entries()]
-      .map(([id, u]) => ({ email: emailById.get(id) ?? id, stories: u.stories, completes: u.completes, lastActive: u.last }))
-      .sort((a, b) => b.stories - a.stories)
+      .map(([id, u]) => ({
+        email: emailById.get(id) ?? id,
+        appMin: Math.round(u.appSec / 60),
+        listenMin: Math.round(u.listenSec / 60),
+        stories: u.stories,
+        daysActive: u.days.size,
+        lastActive: u.last,
+      }))
+      .sort((a, b) => b.listenMin - a.listenMin)
       .slice(0, 50);
+
+    const activeUsers = new Set(rows.filter(r => r.user_id).map(r => r.user_id)).size;
 
     return json({
       days,
-      totalEvents: rows.length,
       perDay,
-      eventCounts,
-      sections: Object.entries(sectionCounts).map(([section, count]) => ({ section, count })).sort((a, b) => b.count - a.count),
-      topStories: Object.entries(storyCounts).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([storyId, count]) => ({ storyId, count })),
-      storiesPlayed: starts,
-      storiesCompleted: completes,
-      funnel: {
-        opens:     eventCounts["app_open"] || 0,
-        briefings: eventCounts["briefing_loaded"] || 0,
-        played:    starts,      // stories played = story_start (accurate)
-        completed: completes,
-      },
-      completionRate: starts ? +((completes / starts) * 100).toFixed(1) : 0,
-      avgStorySec:    durN ? Math.round(durSum / durN) : 0,
+      activeUsers,
+      timeOnAppMin:    Math.round(totalAppSec / 60),
+      minutesListened: Math.round(totalListenSec / 60),
+      storiesPlayed:   totalStories,
+      avgMinPerUser:   activeUsers ? +((totalAppSec / 60) / activeUsers).toFixed(1) : 0,
+      avgSecPerStory:  totalStories ? Math.round(totalListenSec / totalStories) : 0,
       users,
-      totalUsers: userMap.size,
-      generationRuns,
     });
   } catch (e: any) {
     return json({ error: e?.message ?? "analytics failed" }, 500);

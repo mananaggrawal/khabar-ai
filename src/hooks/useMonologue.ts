@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DailyBriefing, Story } from "@/lib/news/generator";
 import { FEED_MAP, type SectionId } from "@/lib/news/sources";
 import { track } from "@/lib/analytics/track";
-import { EVENTS } from "@/lib/analytics/events";
+import { EVENTS, HEARTBEAT_SEC } from "@/lib/analytics/events";
 
 export type MonologueState = "idle" | "playing" | "paused" | "error";
 export type Language = "en" | "hi" | "ta" | "mr";
@@ -275,15 +275,6 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
 
       const onEnded = mode !== null
         ? () => {
-            // Completion of the story that just finished
-            const finished = storiesWithAudio[currentIdxRef.current];
-            if (finished) {
-              track(EVENTS.STORY_COMPLETE, {
-                storyId: finished.id,
-                section: finished.section,
-                durationSec: Math.round(audioRef.current?.duration ?? 0),
-              });
-            }
             // Find the next story with a different audio file (next section)
             let next = currentIdxRef.current + 1;
             while (next < storiesWithAudio.length) {
@@ -402,7 +393,6 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
   }, [playAt, storiesWithAudio]);
 
   const play = useCallback(() => {
-    track(EVENTS.PLAY, {});
     try {
       const saved = localStorage.getItem(RESUME_KEY);
       if (saved) {
@@ -422,7 +412,6 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
     const pos = audioRef.current?.currentTime ?? 0;
     if (audioRef.current) { pauseTimeRef.current = pos; audioRef.current.pause(); }
     setState("paused");
-    track(EVENTS.PAUSE, { positionSec: Math.round(pos) });
   }, []);
 
   const resume = useCallback(async () => {
@@ -478,6 +467,28 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
       case "error":  setError(null); setState("idle"); break;
     }
   }, [state, play, pause, resume]);
+
+  // ── Analytics heartbeat ───────────────────────────────────────────────────
+  // Every HEARTBEAT_SEC while the app is open, log one tick tagged with whether
+  // audio is playing and whether the app is foreground. Minutes listened =
+  // playing ticks; time on app = foreground ticks. That's the whole measurement.
+  useEffect(() => {
+    const id = setInterval(() => {
+      const a = audioRef.current;
+      const playing = !!a && !a.paused && !a.ended && a.currentTime > 0;
+      const visible = typeof document === "undefined" ? true : !document.hidden;
+      if (!playing && !visible) return;
+      const s = playing ? storiesWithAudio[currentIdxRef.current] : undefined;
+      track(EVENTS.HEARTBEAT, {
+        seconds: HEARTBEAT_SEC,
+        playing,
+        visible,
+        storyId: s?.id ?? null,
+        section: s?.section ?? null,
+      });
+    }, HEARTBEAT_SEC * 1000);
+    return () => clearInterval(id);
+  }, [storiesWithAudio]);
 
   // ── MediaSession API — enables background audio on iOS PWA ────────────────
   // Without this, iOS suspends audio the moment you switch apps.

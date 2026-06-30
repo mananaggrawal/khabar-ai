@@ -4,29 +4,18 @@
  * depend on them. Add new events here rather than inline strings.
  */
 
+// Deliberately small. We only measure: who uses the app (app_open), what they
+// play (story_start), and how long they actually listen (heartbeat). Everything
+// else (minutes, time-per-story, completion) is derived from these.
 export const EVENTS = {
-  APP_OPEN:        "app_open",
-  AUTH_LOGIN:      "auth_login",
-  AUTH_LOGOUT:     "auth_logout",
-  BRIEFING_LOADED: "briefing_loaded",
-  SECTION_VIEW:    "section_view",
-  PLAY:            "play",
-  PAUSE:           "pause",
-  STORY_START:     "story_start",
-  STORY_COMPLETE:  "story_complete",
-  NEXT:            "next",
-  PREV:            "prev",
-  SEEK:            "seek",
-  DETAIL_OPEN:     "detail_open",
-  SOURCE_CLICK:    "source_click",
-  EXPLORE_CLICK:   "explore_click",
-  LANGUAGE_CHANGE: "language_change",
-  SAVE_STORY:      "save_story",
-  UNSAVE_STORY:    "unsave_story",
-  PLAYER_OPEN:     "player_open",
-  PLAYER_CLOSE:    "player_close",
-  GENERATION_RUN:  "generation_run", // server-side
+  APP_OPEN:       "app_open",       // a visit → daily/active users
+  STORY_START:    "story_start",    // a story began → stories played
+  HEARTBEAT:      "heartbeat",      // fires every HEARTBEAT_SEC while playing → minutes listened
+  GENERATION_RUN: "generation_run", // server-side, for generation health
 } as const;
+
+// Seconds of listening each heartbeat represents.
+export const HEARTBEAT_SEC = 20;
 
 export type EventName = (typeof EVENTS)[keyof typeof EVENTS];
 
