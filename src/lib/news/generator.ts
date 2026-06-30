@@ -33,9 +33,9 @@ const LOCAL_MODE = process.env.LOCAL_MODE === "true";
 const WORDS_PER_MINUTE  = 150;
 // Very quick headline+gist scripts (~60 words) → maximize story coverage per minute.
 const WORDS_PER_STORY   = 60;
-// Override via TARGET_MINUTES env var (default: 35 min → ~87 stories — room for
-// ~10 per section across the non-India sections)
-const TARGET_MINUTES    = Number(process.env.TARGET_MINUTES ?? 35);
+// Override via TARGET_MINUTES env var (default: 40 min → ~100 stories — room for
+// India ~25 + up to ~10 across the other sections, where supply exists)
+const TARGET_MINUTES    = Number(process.env.TARGET_MINUTES ?? 40);
 const MAX_STORIES       = Math.round(TARGET_MINUTES * WORDS_PER_MINUTE / WORDS_PER_STORY);
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -706,6 +706,12 @@ async function clusterAndSelect(
     `${i}. [${s.source}]${headlineIds.has(s.id) ? " ★" : ""} [${s.section}] ${s.title}`
   ).join("\n");
 
+  // Per-section supply (fresh articles fetched) — lets the model size each
+  // section by how much news actually came in, instead of guessing.
+  const secCounts = new Map<string, number>();
+  for (const s of stories) secCounts.set(s.section, (secCounts.get(s.section) ?? 0) + 1);
+  const supplyLine = SECTION_ORDER.map(x => `${x}: ${secCounts.get(x) ?? 0}`).join(", ");
+
   // Per-section cap: a MAX so India can't take most of the briefing (~35%),
   // leaving room for the other sections to reach ~10 each. Ceiling only — never
   // pads a section that lacks news.
@@ -715,12 +721,13 @@ async function clusterAndSelect(
 
 Here are ${stories.length} articles from today's Google News feeds (India, World, Business, Technology, Sports, Science, Health, Local, Headlines).
 ★ = appeared on Google's homepage — stronger editorial signal.
+Fresh articles available per section: ${supplyLine}.
 
 TASK:
 1. Group articles about the SAME SPECIFIC event into one cluster (the same incident, ruling, announcement, or statement), even if worded differently by different publishers. CRITICAL: do NOT merge stories that are merely on the same topic, in the same section, or involve the same person/country but are actually DIFFERENT events — keep those separate. Two SEPARATE incidents are DIFFERENT events even if the same KIND — e.g. a lightning strike that kills two and a highway crash that kills a family are two different stories and must NEVER share a cluster just because both involve deaths/accidents. When in doubt, keep them separate. A cluster's articles must all be about the one same event, or the summary will mix unrelated facts.
 2. Cover as many genuinely DISTINCT events as possible — up to ${maxStories}. Include every unique story, but never list the same event twice.
 3. Order from most to least important.
-4. PER-SECTION GUARANTEE & BREADTH: for EVERY section that has news, FIRST secure that section's most significant stories — judged on importance WITHIN that topic, not against politics. The biggest sports story (e.g. a World Cup or major tournament), the biggest world/business/science/technology/health story of the day, etc. MUST be included even though it would rank below political news on the overall scale. A section's headline story must never be dropped in favour of one more political story. AIM for up to ~10 distinct events per section where there genuinely is that much news (fewer if not — never pad). No single section should exceed ${perSectionCap} events.
+4. PER-SECTION GUARANTEE & TARGET SIZES: for EVERY section that has news, FIRST secure that section's most significant stories — judged on importance WITHIN that topic, not against politics (the biggest sports/world/business/science/tech/health story MUST be included even if it ranks below political news overall; a section's headline story is never dropped for one more political story). TARGET sizes, scaled to the per-section supply above: India about 25; each other section up to ~10. Include only as many DISTINCT events as genuinely exist — a section with few articles has few distinct events, so include only those and NEVER pad, repeat, or split one event into several. No single section may exceed ${perSectionCap}.
 
 IMPORTANCE GUIDE (for ORDERING and for filling remaining slots after the per-section guarantee):
 - Major: Parliament/Cabinet decisions, elections, RBI/budget/market moves, India-Pakistan/China, Supreme Court, major disasters
