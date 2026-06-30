@@ -8,9 +8,6 @@ workflows:
       flutter: 3.44.4
       xcode: latest
       cocoapods: default
-      ios_signing:
-        distribution_type: development
-        bundle_identifier: io.khabar.app
 
     scripts:
       - name: Get Flutter packages
@@ -23,20 +20,13 @@ workflows:
           cd khabar-flutter/ios
           pod install
 
-      - name: Build iOS
+      - name: Build iOS (no code signing)
         script: |
           cd khabar-flutter
           flutter build ios --release --no-codesign
 
-      - name: Build IPA
-        script: |
-          cd khabar-flutter
-          xcode-project build-ipa \
-            --workspace ios/Runner.xcworkspace \
-            --scheme Runner
-
     artifacts:
-      - khabar-flutter/build/ios/ipa/*.ipa
+      - khabar-flutter/build/ios/iphoneos/Runner.app
       - /tmp/xcodebuild_logs/*.log
 
     publishing:
