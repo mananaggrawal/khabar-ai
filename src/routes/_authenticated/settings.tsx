@@ -6,8 +6,8 @@ import { cn } from "@/lib/utils";
 import { CITY_KEY, DEFAULT_CITY, MAJOR_CITIES } from "@/lib/news/sources";
 import { BottomNav } from "@/components/BottomNav";
 
-// WhatsApp number for feedback (country code, digits only, no +). Set via env.
-const FEEDBACK_WHATSAPP = (import.meta as any).env?.VITE_FEEDBACK_WHATSAPP || "";
+// WhatsApp number for feedback (country code, digits only, no +).
+const FEEDBACK_WHATSAPP = "917447434554";
 
 const LANGUAGE_KEY = "khabar-language";
 const AVAILABLE_LANGS_KEY = "khabar-available-languages";
