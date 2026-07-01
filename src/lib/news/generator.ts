@@ -1262,12 +1262,27 @@ export async function generateDailyBriefing(
   }
   const fetchSec = (Date.now() - t0) / 1000;
 
+  // Cap raw articles per section before the single clustering call. 399 titles
+  // in one call is slow and can hang/truncate; feed a bounded, freshest set
+  // (enough headroom above the final per-section caps to cluster well).
+  const RAW_INDIA = Number(process.env.CLUSTER_RAW_INDIA) || 45;
+  const RAW_OTHER = Number(process.env.CLUSTER_RAW_OTHER) || 22;
+  const rawSeen = new Map<SectionId, number>();
+  const clusterInput = rawStories.filter(s => {
+    const cap = s.section === "india" ? RAW_INDIA : RAW_OTHER;
+    const c = rawSeen.get(s.section) ?? 0;
+    if (c >= cap) return false;
+    rawSeen.set(s.section, c + 1);
+    return true;
+  });
+  log(`Clustering input capped to ${clusterInput.length} articles (from ${rawStories.length})`);
+
   // Steps 2b + 4 in parallel: OG images + cluster
   const t1 = Date.now();
   const liveImageById = new Map<string, string>();
   const [withImages, selectedEvents] = await Promise.all([
-    fetchAllOgImages(rawStories, log, liveImageById),
-    clusterAndSelect(rawStories, headlineIds, MAX_STORIES, log),
+    fetchAllOgImages(clusterInput, log, liveImageById),
+    clusterAndSelect(clusterInput, headlineIds, MAX_STORIES, log),
   ]);
   const clusterSec = (Date.now() - t1) / 1000;
 
