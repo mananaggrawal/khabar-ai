@@ -377,6 +377,16 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
   th{color:#8b7fb0;font-weight:600}
   .muted{color:#8b7fb0}
   #err{color:#fca5a5}
+  .hero{display:flex;gap:14px;align-items:center;background:linear-gradient(135deg,#1f1340,#160d27);border:1px solid #2e2150;border-radius:16px;padding:16px;margin-bottom:14px}
+  .hero .streak{text-align:center;min-width:92px}
+  .hero .big{font-size:46px;font-weight:800;line-height:1;color:#a78bfa}
+  .hero .lbl{font-size:11px;color:#8b7fb0;text-transform:uppercase;letter-spacing:.06em;margin-top:4px}
+  .hero .heroR{flex:1;display:flex;flex-direction:column;gap:9px;min-width:0}
+  .hero .hi{display:flex;justify-content:space-between;gap:10px;font-size:13px}
+  .hero .hi .k{color:#8b7fb0}
+  .hero .hi .v{font-weight:700;text-align:right}
+  details.panel summary{list-style:none}
+  details.panel summary::-webkit-details-marker{display:none}
   @media(max-width:640px){.cards{grid-template-columns:repeat(2,1fr)}}
 </style>
 </head><body>
@@ -394,18 +404,34 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
   </div>
   <div id="err"></div>
   <div class="muted" id="dataNote" style="font-size:11px;margin:-4px 0 12px"></div>
+  <!-- Habit hero -->
+  <div class="hero">
+    <div class="streak"><div class="big" id="kpiStreak">–</div><div class="lbl">day streak</div></div>
+    <div class="heroR">
+      <div class="hi"><span class="k">Listened today</span><span class="v" id="kpiToday">–</span></div>
+      <div class="hi"><span class="k">Avg / day</span><span class="v" id="kpiPerDay">–</span></div>
+      <div class="hi"><span class="k">Briefing finished (avg)</span><span class="v" id="kpiCompletion">–</span></div>
+    </div>
+  </div>
+
   <div class="cards">
-    <div class="card"><div class="k">Active users</div><div class="v" id="kpiUsers">–</div></div>
     <div class="card"><div class="k">Minutes listened</div><div class="v" id="kpiListen">–</div></div>
-    <div class="card"><div class="k">Time on app (min)</div><div class="v" id="kpiApp">–</div></div>
+    <div class="card"><div class="k">Days listened</div><div class="v" id="kpiDays">–</div></div>
+    <div class="card"><div class="k">Stories played</div><div class="v" id="kpiStories">–</div></div>
     <div class="card"><div class="k">Avg time / story</div><div class="v" id="kpiPerStory">–</div></div>
   </div>
-  <div class="cards" style="grid-template-columns:repeat(2,1fr)">
-    <div class="card"><div class="k">Stories played</div><div class="v" id="kpiStories">–</div></div>
-    <div class="card"><div class="k">Avg minutes / user</div><div class="v" id="kpiPerUser">–</div></div>
-  </div>
-  <div class="panel"><h2>Per day — minutes listened, time on app, users</h2><div class="chartbox" style="height:260px"><canvas id="dailyChart"></canvas></div></div>
-  <div class="panel"><h2>Users <span class="muted" id="usersCount"></span></h2><table id="usersTbl"><thead><tr><th>User</th><th>Days</th><th>On app (min)</th><th>Listened (min)</th><th>Stories</th><th>Last active</th></tr></thead><tbody></tbody></table></div>
+
+  <div class="panel"><h2>Minutes listened per day · % of briefing finished</h2><div class="chartbox" style="height:240px"><canvas id="dailyChart"></canvas></div></div>
+  <div class="panel"><h2>When you listen — hour of day (IST)</h2><div class="chartbox" style="height:200px"><canvas id="hourChart"></canvas></div></div>
+
+  <details class="panel">
+    <summary>More · usage & users ▾</summary>
+    <div class="cards" style="margin-top:12px">
+      <div class="card"><div class="k">Time on app</div><div class="v" id="kpiApp">–</div></div>
+      <div class="card"><div class="k">Active users</div><div class="v" id="kpiUsers">–</div></div>
+    </div>
+    <table id="usersTbl" style="margin-top:10px"><thead><tr><th>User</th><th>Days</th><th>On app</th><th>Listened</th><th>Stories</th><th>Last</th></tr></thead><tbody></tbody></table>
+  </details>
   </div> <!-- /#app -->
 
 <script>
@@ -439,23 +465,49 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
 
   function render(d){
     var dn = document.getElementById('dataNote');
-    if (dn) dn.textContent = (d.totalEvents || 0) + ' events · ' + (d.heartbeats || 0) + ' heartbeats received in range';
-    txt('kpiUsers', d.activeUsers != null ? d.activeUsers : 0);
-    txt('kpiListen', fmtMin(d.minutesListened || 0));
-    txt('kpiApp', fmtMin(d.timeOnAppMin || 0));
-    txt('kpiPerStory', (d.avgSecPerStory || 0) + 's');
-    txt('kpiStories', d.storiesPlayed != null ? d.storiesPlayed : 0);
-    txt('kpiPerUser', (d.avgMinPerUser || 0) + 'm');
+    if (dn) dn.textContent = (d.totalEvents || 0) + ' events in range';
 
+    // Habit hero
+    txt('kpiStreak', d.streak != null ? d.streak : 0);
+    var nowIST = new Date(Date.now() + 5.5*3600*1000).toISOString().slice(0,10);
+    var todayRec = (d.perDay || []).find(function(x){ return x.day === nowIST; });
+    txt('kpiToday', (todayRec && todayRec.listenMin > 0) ? ('Yes · ' + fmtMin(Math.round(todayRec.listenMin))) : 'Not yet');
+    txt('kpiPerDay', (d.avgMinPerDay || 0) + 'm');
+    txt('kpiCompletion', d.avgCompletionPct != null ? (d.avgCompletionPct + '%') : '—');
+
+    // Core cards
+    txt('kpiListen', fmtMin(d.minutesListened || 0));
+    txt('kpiDays', d.daysListened != null ? d.daysListened : 0);
+    txt('kpiStories', d.storiesPlayed != null ? d.storiesPlayed : 0);
+    txt('kpiPerStory', (d.avgSecPerStory || 0) + 's');
+    txt('kpiApp', fmtMin(d.timeOnAppMin || 0));
+    txt('kpiUsers', d.activeUsers != null ? d.activeUsers : 0);
+
+    // Daily chart: minutes listened (bars) + % of briefing finished (line, right axis)
     var labels = d.perDay.map(function(x){ return x.day.slice(5); });
-    drawChart('dailyChart', 'line', labels, [
-      { label:'Listened (min)', data:d.perDay.map(function(x){return x.listenMin;}), borderColor:'#34d399', backgroundColor:'#34d39933', tension:.3 },
-      { label:'On app (min)',   data:d.perDay.map(function(x){return x.appMin;}),    borderColor:'#a78bfa', backgroundColor:'#a78bfa33', tension:.3 },
-      { label:'Users',          data:d.perDay.map(function(x){return x.users;}),     borderColor:'#f59e0b', backgroundColor:'#f59e0b33', tension:.3 }
+    if (charts.dailyChart) charts.dailyChart.destroy();
+    charts.dailyChart = new Chart(document.getElementById('dailyChart').getContext('2d'), {
+      data: { labels: labels, datasets: [
+        { type:'bar',  label:'Min listened', data:d.perDay.map(function(x){return x.listenMin;}), backgroundColor:'#34d399', borderRadius:4, yAxisID:'y', order:2 },
+        { type:'line', label:'% finished',   data:d.perDay.map(function(x){return x.completionPct;}), borderColor:'#f59e0b', backgroundColor:'#f59e0b22', tension:.3, spanGaps:true, yAxisID:'y1', order:1 }
+      ]},
+      options: {
+        responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{ labels:{ color:'#cbb8f0', boxWidth:12 } } },
+        scales:{
+          x:{ ticks:{ color:'#8b7fb0', maxRotation:0, autoSkip:true }, grid:{ color:'#241941' } },
+          y:{ position:'left', beginAtZero:true, ticks:{ color:'#8b7fb0' }, grid:{ color:'#241941' }, title:{ display:true, text:'minutes', color:'#8b7fb0' } },
+          y1:{ position:'right', min:0, max:100, ticks:{ color:'#f59e0b', callback:function(v){return v+'%';} }, grid:{ drawOnChartArea:false }, title:{ display:true, text:'% finished', color:'#f59e0b' } }
+        }
+      }
+    });
+
+    // Hour-of-day chart
+    var hrs = d.hourly || [];
+    drawChart('hourChart', 'bar', hrs.map(function(_,i){ return (i<10?'0':'')+i; }), [
+      { label:'Min listened', data:hrs.map(function(s){ return +(s/60).toFixed(1); }), backgroundColor:'#a78bfa', borderRadius:3 }
     ]);
 
-    var uc = document.getElementById('usersCount');
-    if (uc) uc.textContent = (d.activeUsers != null ? ('· ' + d.activeUsers + ' active') : '');
     var ub = document.querySelector('#usersTbl tbody'); ub.innerHTML = '';
     (d.users || []).forEach(function(u){
       var tr = document.createElement('tr');

@@ -492,11 +492,17 @@ export async function handleAnalytics(request: Request): Promise<Response> {
     // Simple model: app_open = a visit; story_start = a story played; heartbeat =
     // HEARTBEAT_SEC seconds of activity (tagged playing/visible). Everything below
     // is just sums of those — minutes on app, minutes listened, time per story.
-    const day = (iso: string) => String(iso).slice(0, 10);
+    const day = (iso: string) => istDay(iso);
     const dayMap = new Map<string, { users: Set<string>; appSec: number; listenSec: number; stories: number }>();
     const userMap = new Map<string, { appSec: number; listenSec: number; stories: number; days: Set<string>; last: string }>();
     const storyListenSec = new Map<string, number>();
+    const hourly = new Array(24).fill(0);      // listen-seconds by hour-of-day (IST)
     let totalAppSec = 0, totalListenSec = 0, totalStories = 0;
+
+    const IST_MS = 5.5 * 3_600_000;
+    const istDay  = (iso: string) => new Date(new Date(iso).getTime() + IST_MS).toISOString().slice(0, 10);
+    const istHour = (iso: string) => new Date(new Date(iso).getTime() + IST_MS).getUTCHours();
+    const prevDay = (k: string) => new Date(new Date(k + "T00:00:00Z").getTime() - 86_400_000).toISOString().slice(0, 10);
 
     const dayRec = (k: string) => {
       let d = dayMap.get(k);
@@ -521,6 +527,7 @@ export async function handleAnalytics(request: Request): Promise<Response> {
         if (p.visible !== false) { d.appSec += sec; totalAppSec += sec; if (uid) userRec(uid).appSec += sec; }
         if (p.playing === true) {
           d.listenSec += sec; totalListenSec += sec;
+          hourly[istHour(r.occurred_at)] += sec;
           if (uid) userRec(uid).listenSec += sec;
           if (p.storyId) storyListenSec.set(String(p.storyId), (storyListenSec.get(String(p.storyId)) ?? 0) + sec);
         }
@@ -529,10 +536,38 @@ export async function handleAnalytics(request: Request): Promise<Response> {
       }
     }
 
+    // Depth: how many minutes each day's briefing actually contained, so we can show
+    // "% of the briefing you finished". Fetch only days with listening (bounded).
+    const activeDays = [...dayMap.keys()].filter((k) => (dayMap.get(k)!.listenSec) > 0);
+    const availMinByDay = new Map<string, number>();
+    await Promise.all(activeDays.map(async (k) => {
+      try {
+        const { data: file } = await (supabaseAdmin as any).storage.from("khabar").download(`briefings/${k}.json`);
+        if (!file) return;
+        const b = JSON.parse(await file.text());
+        let sec = Number(b?.meta?.estimatedDurationSec) || 0;
+        if (!sec && Array.isArray(b?.stories)) sec = b.stories.reduce((n: number, s: any) => n + ((Number(s.wordCount) || 115) / 150) * 60, 0);
+        if (sec > 0) availMinByDay.set(k, sec / 60);
+      } catch { /* no briefing for that day → completion unknown */ }
+    }));
+
     const perDay = [...dayMap.keys()].sort().map((k) => {
       const d = dayMap.get(k)!;
-      return { day: k, users: d.users.size, appMin: +(d.appSec / 60).toFixed(1), listenMin: +(d.listenSec / 60).toFixed(1), stories: d.stories };
+      const listenMin = +(d.listenSec / 60).toFixed(1);
+      const availMin  = availMinByDay.get(k);
+      const completionPct = availMin && availMin > 0 ? Math.min(100, Math.round((listenMin / availMin) * 100)) : null;
+      return { day: k, users: d.users.size, appMin: +(d.appSec / 60).toFixed(1), listenMin, stories: d.stories, availMin: availMin ? +availMin.toFixed(1) : null, completionPct };
     });
+
+    // Habit: current listening streak (consecutive days up to today, IST) + days listened.
+    const listenedSet = new Set(perDay.filter((d) => d.listenMin > 0).map((d) => d.day));
+    const todayIST = istDay(new Date().toISOString());
+    let streak = 0;
+    let cursor = listenedSet.has(todayIST) ? todayIST : prevDay(todayIST); // today optional so an unlistened today doesn't zero the streak mid-day
+    while (listenedSet.has(cursor)) { streak++; cursor = prevDay(cursor); }
+    const daysListened = listenedSet.size;
+    const completions = perDay.map((d) => d.completionPct).filter((v): v is number => v != null);
+    const avgCompletionPct = completions.length ? Math.round(completions.reduce((a, b) => a + b, 0) / completions.length) : null;
 
     // user_id → email so the admin sees who's who
     const emailById = new Map<string, string>();
@@ -558,12 +593,17 @@ export async function handleAnalytics(request: Request): Promise<Response> {
     return json({
       days,
       perDay,
+      hourly,
+      streak,
+      daysListened,
+      avgCompletionPct,
       totalEvents: rows.length,
       heartbeats:  rows.filter((r: any) => r.event === "heartbeat").length,
       activeUsers,
       timeOnAppMin:    Math.round(totalAppSec / 60),
       minutesListened: Math.round(totalListenSec / 60),
       storiesPlayed:   totalStories,
+      avgMinPerDay:    daysListened ? +((totalListenSec / 60) / daysListened).toFixed(1) : 0,
       avgMinPerUser:   activeUsers ? +((totalAppSec / 60) / activeUsers).toFixed(1) : 0,
       avgSecPerStory:  totalStories ? Math.round(totalListenSec / totalStories) : 0,
       users,
