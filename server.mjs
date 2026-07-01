@@ -436,7 +436,6 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
 
   <details class="panel">
     <summary>Per-user breakdown ▾</summary>
-    <p class="muted" style="font-size:11px;margin:10px 2px">One row per signed-in user (top 50 by listening). <b>Active days</b> = distinct days they opened the app · <b>On app</b> = minutes with the app open · <b>Listened</b> = minutes of audio actually playing · <b>Stories</b> = stories they started · <b>Last seen</b> = most recent activity.</p>
     <div class="tablewrap"><table id="usersTbl"><thead><tr><th>User</th><th>Active days</th><th>On app (min)</th><th>Listened (min)</th><th>Stories</th><th>Last seen</th></tr></thead><tbody></tbody></table></div>
   </details>
   </div> <!-- /#app -->
