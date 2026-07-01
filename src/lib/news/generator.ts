@@ -675,7 +675,7 @@ ${list}`;
  * India / Business / World up and Science / Local / Health down.
  */
 const SECTION_BIAS: Record<string, number> = {
-  headlines: 1.6, india: 1.3, world: 1.4, business: 1.4,
+  headlines: 2.4, india: 1.3, world: 1.4, business: 1.4,
   technology: 1.0, sports: 1.0, science: 0.5, health: 0.6, local: 0.6,
 };
 
