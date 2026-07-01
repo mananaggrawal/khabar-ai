@@ -1275,6 +1275,23 @@ export async function generateDailyBriefing(
   const rawTotal = [...feedMap.values()].reduce((n, v) => n + v.length, 0);
   log(`Fetched ${rawTotal} raw items from ${feedMap.size} feeds (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
 
+  // TEMP DEBUG (2026-07-02): publisher breakdown of the PURE RSS response —
+  // every item as returned by Google News, before dedup/freshness/blocklist filtering.
+  {
+    const bySource = new Map<string, number>();
+    for (const items of feedMap.values()) {
+      for (const item of items) {
+        const src = item.source || "UNKNOWN";
+        bySource.set(src, (bySource.get(src) ?? 0) + 1);
+      }
+    }
+    const sorted = [...bySource.entries()].sort((a, b) => b[1] - a[1]);
+    log(`[debug] PURE RSS publisher breakdown (${rawTotal} raw items incl. cross-feed dupes, ${sorted.length} unique sources):`);
+    for (const [src, n] of sorted) {
+      log(`  ${n.toString().padStart(3)}  (${((100 * n) / rawTotal).toFixed(1)}%)  ${src}`);
+    }
+  }
+
   if (isAbortRequested()) throw new Error("Aborted by user");
 
   // Step 2: Dedup
@@ -1283,18 +1300,6 @@ export async function generateDailyBriefing(
   for (const [sectionId, config] of FEED_MAP) {
     const n = rawStories.filter(s => s.section === sectionId).length;
     if (n > 0) log(`  ${config.emoji} ${config.label}: ${n}`);
-  }
-
-  // TEMP DEBUG (2026-07-02): publisher breakdown of the raw (post-dedup) fetch —
-  // remove once we've answered "how would raw supply split per newspaper".
-  {
-    const bySource = new Map<string, number>();
-    for (const s of rawStories) bySource.set(s.source || "UNKNOWN", (bySource.get(s.source || "UNKNOWN") ?? 0) + 1);
-    const sorted = [...bySource.entries()].sort((a, b) => b[1] - a[1]);
-    log(`[debug] Publisher breakdown (${rawStories.length} stories, ${sorted.length} unique sources):`);
-    for (const [src, n] of sorted) {
-      log(`  ${n.toString().padStart(3)}  (${((100 * n) / rawStories.length).toFixed(1)}%)  ${src}`);
-    }
   }
 
   const fetchSec = (Date.now() - t0) / 1000;
