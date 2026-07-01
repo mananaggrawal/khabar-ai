@@ -671,7 +671,7 @@ ${list}`;
 // Hard per-section maximums, enforced in code (the model ignores prompt caps and
 // over-stuffs India). India gets a larger share; every other section is smaller.
 const INDIA_MAX   = Number(process.env.INDIA_MAX_STORIES)   || 25;
-const SECTION_MAX = Number(process.env.SECTION_MAX_STORIES) || 12;
+const SECTION_MAX = Number(process.env.SECTION_MAX_STORIES) || 15;
 
 /**
  * Balance the briefing: walk events in importance order and keep each until its
