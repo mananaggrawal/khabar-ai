@@ -13,6 +13,12 @@ import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 import { PlayerProvider } from "@/context/player";
 
+// Absolute base URL for social-share previews. Set VITE_PUBLIC_URL in Render for
+// guaranteed-absolute og:image (WhatsApp/iMessage need absolute); falls back to a
+// root-relative path otherwise.
+const SITE_URL = ((import.meta as any).env?.VITE_PUBLIC_URL || "").replace(/\/$/, "");
+const OG_IMAGE = `${SITE_URL}/og-image.jpg`;
+
 function NotFoundComponent() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
@@ -85,14 +91,15 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "mobile-web-app-capable", content: "yes" },
       { name: "apple-mobile-web-app-status-bar-style", content: "black-translucent" },
       { name: "apple-mobile-web-app-title", content: "Khabar AI" },
+      { property: "og:site_name", content: "Khabar AI" },
       { property: "og:title", content: "Khabar AI — Today's news, spoken." },
-      { property: "og:description", content: "An AI-native voice agent that hears, learns, and discusses the day's global news with you." },
+      { property: "og:description", content: "Your daily news, spoken. Khabar AI reads the day's top stories to you in a few minutes." },
       { property: "og:type", content: "website" },
+      { property: "og:image", content: OG_IMAGE },
       { name: "twitter:card", content: "summary_large_image" },
       { name: "twitter:title", content: "Khabar AI — Today's news, spoken." },
-      { name: "twitter:description", content: "An AI-native voice agent that hears, learns, and discusses the day's global news with you." },
-      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/eb10811e-d05a-4df3-ae43-db308582b8a1/id-preview-b9d11e37--a7d99a72-ab38-48d5-b27a-9f3e5026c8ea.lovable.app-1781630419384.png" },
-      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/eb10811e-d05a-4df3-ae43-db308582b8a1/id-preview-b9d11e37--a7d99a72-ab38-48d5-b27a-9f3e5026c8ea.lovable.app-1781630419384.png" },
+      { name: "twitter:description", content: "Your daily news, spoken. Khabar AI reads the day's top stories to you in a few minutes." },
+      { name: "twitter:image", content: OG_IMAGE },
     ],
     links: [
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
