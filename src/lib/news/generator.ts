@@ -1012,12 +1012,12 @@ async function scriptAllEvents(
 
 // ─── Step 6: TTS (English only) ───────────────────────────────────────────────
 
-async function synthesizeOne(text: string, filename: string, provider: TtsProvider): Promise<string> {
-  if (provider === "google")     { const { url } = await googleTTS(text, filename);    return url; }
-  if (provider === "elevenlabs") { const { url } = await elevenLabsTTS(text, filename); return url; }
-  if (provider === "edge")       { const { url } = await edgeTTS(text, filename);       return url; }
-  if (provider === "kokoro")     { const { url } = await kokoroTTS(text, filename);     return url; }
-  if (provider === "openai")     { const { url } = await openaiTTS(text, filename);     return url; }
+async function synthesizeOne(text: string, filename: string, provider: TtsProvider, index?: number): Promise<string> {
+  if (provider === "google")     { const { url } = await googleTTS(text, filename);        return url; }
+  if (provider === "elevenlabs") { const { url } = await elevenLabsTTS(text, filename);     return url; }
+  if (provider === "edge")       { const { url } = await edgeTTS(text, filename, index);    return url; }
+  if (provider === "kokoro")     { const { url } = await kokoroTTS(text, filename);         return url; }
+  if (provider === "openai")     { const { url } = await openaiTTS(text, filename);         return url; }
   throw new Error(`Unknown TTS provider: ${provider}`);
 }
 
@@ -1148,7 +1148,7 @@ async function generateAllTTS(
         if (!script) return;
 
         try {
-          const url = await synthesizeOne(script, `${date}-${updated[i].id}-${lang}`, provider);
+          const url = await synthesizeOne(script, `${date}-${updated[i].id}-${lang}`, provider, i);
           setAudioUrl(updated[i], lang, url);
           updated[i].audioStartSec = 0;
           totalChars += script.length;

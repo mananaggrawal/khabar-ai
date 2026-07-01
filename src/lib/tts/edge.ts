@@ -2,8 +2,10 @@
  * Edge TTS — Microsoft's neural voices via the msedge-tts package.
  *
  * Completely free, no API key required.
- * Two voices per language for A/B quality testing — split deterministically
- * by story ID so results are consistent across re-runs.
+ * Two voices per language, alternated by story position in the briefing
+ * (1st story = A, 2nd = B, 3rd = A, …) so no two consecutive stories share
+ * a voice. Falls back to a per-story-ID hash split when no position is
+ * available (e.g. Kokoro's Hindi fallback path).
  *
  * Voice roster (A = index 0, B = index 1):
  *   EN: en-IN-PrabhatNeural (male)   | en-IN-NeerjaExpressiveNeural (female, expressive)
@@ -39,6 +41,16 @@ function pickVoice(lang: string, storyId: string): string {
   const firstHex = parseInt(storyId[0] ?? "0", 16); // 0–15
   const variant  = firstHex < 8 ? 0 : 1;            // 50/50 split
   return pair[variant];
+}
+
+/**
+ * Strictly alternate voice A/B by position in the briefing (0=A, 1=B, 2=A, …)
+ * so consecutive stories in playback order never share the same voice.
+ * Used instead of pickVoice() whenever a position index is available.
+ */
+function pickVoiceByIndex(lang: string, index: number): string {
+  const pair = VOICES[lang] ?? VOICES.en;
+  return pair[index % 2];
 }
 
 // Estimate duration from MP3 bitrate (96 kbps = 12 KB/s)
@@ -146,13 +158,17 @@ async function saveMp3(
 export async function edgeTTS(
   script: string,
   filename: string,
+  index?: number,
 ): Promise<{ url: string; durationSec: number }> {
   // Filename format: "YYYY-MM-DD-<storyId16>-<lang>"
   // e.g. "2026-06-22-3a9f1b2c4d5e6f7a-hi"
   const parts = filename.split("-");
   const lang    = parts[parts.length - 1] ?? "en";         // last segment
   const storyId = parts[parts.length - 2] ?? "";           // second-to-last = 16-char hex ID
-  const voice   = pickVoice(lang, storyId);
+  // Alternate strictly by position in the briefing when an index is given
+  // (normal case, from generateAllTTS); fall back to the old per-story hash
+  // split for callers that don't have a position (e.g. Kokoro's Hindi fallback).
+  const voice   = index !== undefined ? pickVoiceByIndex(lang, index) : pickVoice(lang, storyId);
 
   console.log(`[tts/edge] ${lang.toUpperCase()} → ${voice} (story: ${storyId.slice(0, 8)}…)`);
   const mp3 = await synthesize(script, voice);
