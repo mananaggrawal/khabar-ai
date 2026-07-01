@@ -103,7 +103,9 @@ const server = createServer(async (req, res) => {
     pathname === "/robots.txt" ||
     pathname === "/site.webmanifest";
 
-  const isStatic = pathname.startsWith("/assets/") || isIcon;
+  // Any static image/font file that exists in the client build (e.g. /hero-orb.jpg)
+  const staticExt = /\.(png|jpe?g|webp|gif|svg|ico|woff2?|ttf|otf)$/i.test(pathname);
+  const isStatic = !pathname.includes("..") && (pathname.startsWith("/assets/") || isIcon || staticExt);
 
   if (isStatic) {
     const filePath = join(CLIENT_DIR, pathname);
