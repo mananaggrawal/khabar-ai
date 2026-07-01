@@ -62,28 +62,34 @@ export function useSavedStories() {
       return;
     }
 
-    try {
-      const { supabase } = await import("@/integrations/supabase/client");
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+    // Optimistic: flip the UI immediately so the icon colour changes instantly.
+    setSaved((prev) =>
+      exists
+        ? prev.filter((s) => s.id !== story.id)
+        : [{ ...story, savedAt: new Date().toISOString() }, ...prev],
+    );
 
-      if (exists) {
-        await supabase
-          .from("saved_stories")
-          .delete()
-          .eq("user_id", user.id)
-          .eq("story_id", story.id);
-        setSaved((prev) => prev.filter((s) => s.id !== story.id));
-      } else {
-        const { data } = await supabase
-          .from("saved_stories")
-          .insert({ user_id: user.id, story_id: story.id, story_data: story as any })
-          .select("saved_at")
-          .single();
-        const savedAt = data?.saved_at ?? new Date().toISOString();
-        setSaved((prev) => [{ ...story, savedAt }, ...prev]);
+    // Persist in the background; revert only if the write fails.
+    (async () => {
+      try {
+        const { supabase } = await import("@/integrations/supabase/client");
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+        if (exists) {
+          await supabase.from("saved_stories").delete().eq("user_id", user.id).eq("story_id", story.id);
+        } else {
+          await supabase.from("saved_stories").insert({ user_id: user.id, story_id: story.id, story_data: story as any });
+        }
+      } catch (e) {
+        console.error("useSavedStories toggle:", e);
+        // revert
+        setSaved((prev) =>
+          exists
+            ? [{ ...story, savedAt: new Date().toISOString() }, ...prev]
+            : prev.filter((s) => s.id !== story.id),
+        );
       }
-    } catch (e) { console.error("useSavedStories toggle:", e); }
+    })();
   }, [saved]);
 
   const remove = useCallback(async (id: string) => {
