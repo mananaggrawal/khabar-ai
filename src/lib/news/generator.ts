@@ -1284,6 +1284,19 @@ export async function generateDailyBriefing(
     const n = rawStories.filter(s => s.section === sectionId).length;
     if (n > 0) log(`  ${config.emoji} ${config.label}: ${n}`);
   }
+
+  // TEMP DEBUG (2026-07-02): publisher breakdown of the raw (post-dedup) fetch —
+  // remove once we've answered "how would raw supply split per newspaper".
+  {
+    const bySource = new Map<string, number>();
+    for (const s of rawStories) bySource.set(s.source || "UNKNOWN", (bySource.get(s.source || "UNKNOWN") ?? 0) + 1);
+    const sorted = [...bySource.entries()].sort((a, b) => b[1] - a[1]);
+    log(`[debug] Publisher breakdown (${rawStories.length} stories, ${sorted.length} unique sources):`);
+    for (const [src, n] of sorted) {
+      log(`  ${n.toString().padStart(3)}  (${((100 * n) / rawStories.length).toFixed(1)}%)  ${src}`);
+    }
+  }
+
   const fetchSec = (Date.now() - t0) / 1000;
 
   // True supply per section (all fresh articles) → proportional per-section targets
