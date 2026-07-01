@@ -1,6 +1,6 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createPortal } from "react-dom";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { motion, AnimatePresence } from "motion/react";
@@ -235,6 +235,20 @@ function HomePage() {
   // it should follow along as autoplay advances. False when opened on another story.
   const detailFollowsRef = useRef(false);
 
+  // Stable per-card callbacks so StoryCard (memoized) doesn't re-render the whole
+  // list on every section switch / save / playback tick.
+  const currentIdRef = useRef<string | undefined>(undefined);
+  currentIdRef.current = mono.currentStory?.id;
+  const handlePlay = useCallback((story: Story) => {
+    const idx = mono.storiesWithAudio.findIndex((s) => s.id === story.id);
+    if (idx >= 0) mono.playFrom(idx);
+  }, [mono.storiesWithAudio, mono.playFrom]);
+  const handlePause = useCallback(() => { mono.pause(); }, [mono.pause]);
+  const handleTap = useCallback((story: Story) => {
+    detailFollowsRef.current = currentIdRef.current === story.id;
+    setDetailStory(story);
+  }, []);
+
   // Analytics: init PostHog, identify the user FIRST, then log app open so the
   // event carries the user id (avoids anonymous first events).
   useEffect(() => {
@@ -378,27 +392,19 @@ function HomePage() {
 
                   {/* Stories in this section */}
                   <div className="space-y-2">
-                    {stories.map((story) => {
-                      const hasAudio = !!getAudioUrl(story, mono.language);
-                      const storyIdx = mono.storiesWithAudio.findIndex((s) => s.id === story.id);
-                      const isActive = mono.currentStory?.id === story.id;
-                      return (
-                        <StoryCard
-                          key={story.id}
-                          story={story}
-                          language={mono.language}
-                          isPlaying={isActive && mono.state === "playing"}
-                          hasAudio={hasAudio}
-                          isCompleted={mono.completedIds.has(story.id)}
-                          onPlay={() => storyIdx >= 0 && mono.playFrom(storyIdx)}
-                          onPause={mono.pause}
-                          onTap={() => {
-                            detailFollowsRef.current = mono.currentStory?.id === story.id;
-                            setDetailStory(story);
-                          }}
-                        />
-                      );
-                    })}
+                    {stories.map((story) => (
+                      <StoryCard
+                        key={story.id}
+                        story={story}
+                        language={mono.language}
+                        isPlaying={mono.currentStory?.id === story.id && mono.state === "playing"}
+                        hasAudio={!!getAudioUrl(story, mono.language)}
+                        isCompleted={mono.completedIds.has(story.id)}
+                        onPlay={handlePlay}
+                        onPause={handlePause}
+                        onTap={handleTap}
+                      />
+                    ))}
                   </div>
                 </section>
               );

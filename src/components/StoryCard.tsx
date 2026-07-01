@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Play, Check, Flame, LandmarkIcon, Globe, TrendingUp, MapPin, Cpu, Trophy, FlaskConical, HeartPulse } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Story } from "@/lib/news/generator";
@@ -74,12 +75,12 @@ interface StoryCardProps {
   hasAudio: boolean;
   isCompleted?: boolean;
   language?: import("@/hooks/useMonologue").Language;
-  onPlay: () => void;
+  onPlay: (story: Story) => void;
   onPause: () => void;
-  onTap?: () => void;
+  onTap?: (story: Story) => void;
 }
 
-export function StoryCard({ story, isPlaying, hasAudio, isCompleted = false, language = "en", onPlay, onPause, onTap }: StoryCardProps) {
+function StoryCardBase({ story, isPlaying, hasAudio, isCompleted = false, language = "en", onPlay, onPause, onTap }: StoryCardProps) {
   const section = resolveSection(story.section);
   const feed    = FEED_MAP.get(section);
   const accent  = SECTION_COLOR[section] ?? "#EF4444";
@@ -90,8 +91,8 @@ export function StoryCard({ story, isPlaying, hasAudio, isCompleted = false, lan
     <div
       role="button"
       tabIndex={0}
-      onClick={onTap}
-      onKeyDown={(e) => e.key === "Enter" && onTap?.()}
+      onClick={() => onTap?.(story)}
+      onKeyDown={(e) => e.key === "Enter" && onTap?.(story)}
       className={cn(
         "flex items-center gap-3 rounded-2xl px-3 py-3 transition-all duration-150 cursor-pointer overflow-hidden",
         "border-l-[3px]",
@@ -148,7 +149,7 @@ export function StoryCard({ story, isPlaying, hasAudio, isCompleted = false, lan
       <div className="flex shrink-0 flex-col items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
         {hasAudio && (
           <button
-            onClick={() => isPlaying ? onPause() : onPlay()}
+            onClick={() => isPlaying ? onPause() : onPlay(story)}
             aria-label={isPlaying ? "Pause" : "Play"}
             className={cn(
               "relative flex size-9 items-center justify-center rounded-full border transition-all",
@@ -175,3 +176,5 @@ export function StoryCard({ story, isPlaying, hasAudio, isCompleted = false, lan
     </div>
   );
 }
+
+export const StoryCard = memo(StoryCardBase);
