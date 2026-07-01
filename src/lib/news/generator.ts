@@ -837,9 +837,17 @@ ${articleList}`;
     const sourceStories = indices.map((i: number) => stories[i]);
     const inHeadlines   = sourceStories.some(s => headlineIds.has(s.id));
 
+    const cleanedTitle = cleanTitle(title, publishers);
     events.push({
-      eventId:         storyId(stories[imageIdx]?.link ?? stories[indices[0]].link),
-      title:           cleanTitle(title, publishers),
+      // ID is derived from BOTH the representative article's link AND the title
+      // the clustering pass assigned it, not the link alone. Clustering is an LLM
+      // call and isn't perfectly stable across regenerations: the same anchor
+      // article can end up grouped into a materially different event/title on a
+      // re-run. Hashing link-only would keep the OLD id (and wrongly inherit its
+      // "already heard" mark) even though the story shown is now different;
+      // folding the title in means a changed grouping gets a new id instead.
+      eventId:         storyId(`${stories[imageIdx]?.link ?? stories[indices[0]].link}|${cleanedTitle}`),
+      title:           cleanedTitle,
       section,
       sourceStories,
       publisherCount:  publishers.length,
