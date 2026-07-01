@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { Check } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
-import { CITY_KEY, DEFAULT_CITY, MAJOR_CITIES, FEED_MAP, SECTIONS_KEY, readPreferredSections, type SectionId } from "@/lib/news/sources";
+import { CITY_KEY, DEFAULT_CITY, MAJOR_CITIES } from "@/lib/news/sources";
 import { BottomNav } from "@/components/BottomNav";
 
 const LANGUAGE_KEY = "khabar-language";
@@ -34,9 +34,6 @@ function SettingsPage() {
   const [selectedLang, setSelectedLang]       = useState<string>(readLanguage);
   const [availableLangs, setAvailableLangs]   = useState<string[]>(readAvailableLanguages);
   const [selectedCity, setSelectedCity]       = useState<string>(readCity);
-  const [preferredSections, setPreferredSections] = useState<Set<SectionId>>(
-    () => typeof window !== "undefined" ? readPreferredSections() : new Set([...FEED_MAP.keys()])
-  );
 
   // Re-read available languages on mount
   useEffect(() => {
@@ -61,24 +58,6 @@ function SettingsPage() {
   function selectCity(city: string) {
     setSelectedCity(city);
     try { localStorage.setItem(CITY_KEY, city); } catch {}
-  }
-
-  function toggleSection(id: SectionId) {
-    setPreferredSections(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        if (next.size <= 1) return prev; // must keep at least one
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      try {
-        const arr = [...next];
-        localStorage.setItem(SECTIONS_KEY, JSON.stringify(arr));
-        window.dispatchEvent(new StorageEvent("storage", { key: SECTIONS_KEY, newValue: JSON.stringify(arr) }));
-      } catch {}
-      return next;
-    });
   }
 
   async function signOut() {
@@ -145,50 +124,6 @@ function SettingsPage() {
                   ) : !available ? (
                     <span className="text-[10px] uppercase tracking-widest text-muted-foreground/40">Not generated</span>
                   ) : null}
-                </button>
-              );
-            })}
-          </div>
-        </section>
-
-        {/* Sections */}
-        <section>
-          <h2 className="font-serif text-lg">Sections</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Choose which news sections appear in your briefing.
-          </p>
-          <div className="mt-4 space-y-2">
-            {[...FEED_MAP.values()].map((feed) => {
-              const on = preferredSections.has(feed.id);
-              const isLast = preferredSections.size === 1 && on;
-              return (
-                <button
-                  key={feed.id}
-                  onClick={() => toggleSection(feed.id)}
-                  disabled={isLast}
-                  className={cn(
-                    "flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-colors",
-                    on
-                      ? "border-primary/40 bg-primary/10 text-foreground"
-                      : "border-border text-foreground/60 hover:border-border/80",
-                    isLast && "cursor-not-allowed opacity-60",
-                  )}
-                >
-                  <span className="flex-1 text-sm font-medium">{feed.label}</span>
-                  {/* Toggle pill */}
-                  <span
-                    className={cn(
-                      "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border-2 transition-colors",
-                      on ? "border-primary bg-primary" : "border-border bg-border/40",
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "pointer-events-none block size-4 rounded-full bg-white shadow transition-transform",
-                        on ? "translate-x-[22px]" : "translate-x-[2px]",
-                      )}
-                    />
-                  </span>
                 </button>
               );
             })}
