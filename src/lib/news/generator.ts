@@ -670,14 +670,26 @@ ${list}`;
 }
 
 /**
- * Per-section target counts, proportional to how many articles each section
- * fetched, summing to ~maxTotal. target_i = round(maxTotal * supply_i / total),
- * min 1 for any section that has news.
+ * Editorial bias applied on top of raw fetch volume: >1 boosts a section's share,
+ * <1 shrinks it. Keeps the split proportional to supply, but weights Top Stories /
+ * India / Business / World up and Science / Local / Health down.
+ */
+const SECTION_BIAS: Record<string, number> = {
+  headlines: 1.6, india: 1.3, world: 1.4, business: 1.4,
+  technology: 1.0, sports: 1.0, science: 0.5, health: 0.6, local: 0.6,
+};
+
+/**
+ * Per-section target counts, proportional to each section's (bias-weighted) fetch
+ * volume, summing to ~maxTotal. target_i = round(maxTotal * w_i / totalW), where
+ * w_i = supply_i * bias_i. min 1 for any section that has news.
  */
 function proportionalTargets(supply: Map<string, number>, maxTotal: number): Map<string, number> {
-  const total = [...supply.values()].reduce((a, b) => a + b, 0) || 1;
+  const weighted = new Map<string, number>();
+  for (const [sec, n] of supply) if (n > 0) weighted.set(sec, n * (SECTION_BIAS[sec] ?? 1));
+  const totalW = [...weighted.values()].reduce((a, b) => a + b, 0) || 1;
   const targets = new Map<string, number>();
-  for (const [sec, n] of supply) if (n > 0) targets.set(sec, Math.max(1, Math.round(maxTotal * n / total)));
+  for (const [sec, w] of weighted) targets.set(sec, Math.max(1, Math.round(maxTotal * w / totalW)));
   return targets;
 }
 
