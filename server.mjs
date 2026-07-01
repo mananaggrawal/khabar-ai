@@ -423,18 +423,18 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
   <!-- Usage volume -->
   <div class="grouplbl">Usage</div>
   <div class="cards">
-    <div class="card"><div class="k">Minutes listened</div><div class="v" id="kListen">–</div></div>
-    <div class="card"><div class="k">Stories played</div><div class="v" id="kStories">–</div></div>
-    <div class="card"><div class="k">Avg briefing finished</div><div class="v" id="kComp">–</div></div>
-    <div class="card"><div class="k">Avg min / user</div><div class="v" id="kPerUser">–</div></div>
+    <div class="card"><div class="k">Minutes listened</div><div class="v" id="kListen">–</div><div class="sub">audio actually played</div></div>
+    <div class="card"><div class="k">Stories played</div><div class="v" id="kStories">–</div><div class="sub">stories started</div></div>
+    <div class="card"><div class="k">Avg min / user</div><div class="v" id="kPerUser">–</div><div class="sub">listened ÷ users</div></div>
+    <div class="card"><div class="k">Avg / story</div><div class="v" id="kPerStory">–</div><div class="sub">listen time per story</div></div>
   </div>
 
-  <div class="panel"><h2>Minutes listened per day · % of briefing finished</h2><div class="chartbox" style="height:240px"><canvas id="dailyChart"></canvas></div></div>
   <div class="panel"><h2>When users listen — hour of day (IST)</h2><div class="chartbox" style="height:200px"><canvas id="hourChart"></canvas></div></div>
 
   <details class="panel">
     <summary>Per-user breakdown ▾</summary>
-    <div class="tablewrap"><table id="usersTbl"><thead><tr><th>User</th><th>Days</th><th>On app</th><th>Listened</th><th>Stories</th><th>Last</th></tr></thead><tbody></tbody></table></div>
+    <p class="muted" style="font-size:11px;margin:10px 2px">One row per signed-in user (top 50 by listening). <b>Active days</b> = distinct days they opened the app · <b>On app</b> = minutes with the app open · <b>Listened</b> = minutes of audio actually playing · <b>Stories</b> = stories they started · <b>Last seen</b> = most recent activity.</p>
+    <div class="tablewrap"><table id="usersTbl"><thead><tr><th>User</th><th>Active days</th><th>On app (min)</th><th>Listened (min)</th><th>Stories</th><th>Last seen</th></tr></thead><tbody></tbody></table></div>
   </details>
   </div> <!-- /#app -->
 
@@ -490,8 +490,8 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
     // Usage volume
     txt('kListen', fmtMin(d.minutesListened || 0));
     txt('kStories', d.storiesPlayed != null ? d.storiesPlayed : 0);
-    txt('kComp', d.avgCompletionPct != null ? (d.avgCompletionPct + '%') : '—');
     txt('kPerUser', (d.avgMinPerActiveUser || 0) + 'm');
+    txt('kPerStory', (d.avgSecPerStory || 0) + 's');
 
     // Active users per day: new vs returning (stacked bars) + total base (line)
     var g = d.perDayGrowth || [];
@@ -510,25 +510,6 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
           x:{ stacked:true, ticks:{ color:'#8b7fb0', maxRotation:0, autoSkip:true }, grid:{ color:'#241941' } },
           y:{ stacked:true, beginAtZero:true, ticks:{ color:'#8b7fb0', precision:0 }, grid:{ color:'#241941' }, title:{ display:true, text:'active users', color:'#8b7fb0' } },
           y1:{ position:'right', beginAtZero:true, ticks:{ color:'#f59e0b', precision:0 }, grid:{ drawOnChartArea:false }, title:{ display:true, text:'total', color:'#f59e0b' } }
-        }
-      }
-    });
-
-    // Daily chart: minutes listened (bars) + % of briefing finished (line, right axis)
-    var labels = d.perDay.map(function(x){ return x.day.slice(5); });
-    if (charts.dailyChart) charts.dailyChart.destroy();
-    charts.dailyChart = new Chart(ctx('dailyChart'), {
-      data: { labels: labels, datasets: [
-        { type:'bar',  label:'Min listened', data:d.perDay.map(function(x){return x.listenMin;}), backgroundColor:'#34d399', borderRadius:4, yAxisID:'y', order:2 },
-        { type:'line', label:'% finished',   data:d.perDay.map(function(x){return x.completionPct;}), borderColor:'#f59e0b', backgroundColor:'#f59e0b22', tension:.3, spanGaps:true, yAxisID:'y1', order:1 }
-      ]},
-      options: {
-        responsive:true, maintainAspectRatio:false,
-        plugins:{ legend:{ labels:{ color:'#cbb8f0', boxWidth:12 } } },
-        scales:{
-          x:{ ticks:{ color:'#8b7fb0', maxRotation:0, autoSkip:true }, grid:{ color:'#241941' } },
-          y:{ position:'left', beginAtZero:true, ticks:{ color:'#8b7fb0' }, grid:{ color:'#241941' }, title:{ display:true, text:'minutes', color:'#8b7fb0' } },
-          y1:{ position:'right', min:0, max:100, ticks:{ color:'#f59e0b', callback:function(v){return v+'%';} }, grid:{ drawOnChartArea:false }, title:{ display:true, text:'% finished', color:'#f59e0b' } }
         }
       }
     });

@@ -549,38 +549,11 @@ export async function handleAnalytics(request: Request): Promise<Response> {
       }
     }
 
-    // Depth: how many minutes each day's briefing actually contained, so we can show
-    // "% of the briefing you finished". Fetch only days with listening (bounded).
-    const activeDays = [...dayMap.keys()].filter((k) => (dayMap.get(k)!.listenSec) > 0);
-    const availMinByDay = new Map<string, number>();
-    await Promise.all(activeDays.map(async (k) => {
-      try {
-        const { data: file } = await (supabaseAdmin as any).storage.from("khabar").download(`briefings/${k}.json`);
-        if (!file) return;
-        const b = JSON.parse(await file.text());
-        let sec = Number(b?.meta?.estimatedDurationSec) || 0;
-        if (!sec && Array.isArray(b?.stories)) sec = b.stories.reduce((n: number, s: any) => n + ((Number(s.wordCount) || 115) / 150) * 60, 0);
-        if (sec > 0) availMinByDay.set(k, sec / 60);
-      } catch { /* no briefing for that day → completion unknown */ }
-    }));
-
     const perDay = [...dayMap.keys()].sort().map((k) => {
       const d = dayMap.get(k)!;
-      const listenMin = +(d.listenSec / 60).toFixed(1);
-      const availMin  = availMinByDay.get(k);
-      const completionPct = availMin && availMin > 0 ? Math.min(100, Math.round((listenMin / availMin) * 100)) : null;
-      return { day: k, users: d.users.size, appMin: +(d.appSec / 60).toFixed(1), listenMin, stories: d.stories, availMin: availMin ? +availMin.toFixed(1) : null, completionPct };
+      return { day: k, users: d.users.size, appMin: +(d.appSec / 60).toFixed(1), listenMin: +(d.listenSec / 60).toFixed(1), stories: d.stories };
     });
-
-    // Habit: current listening streak (consecutive days up to today, IST) + days listened.
-    const listenedSet = new Set(perDay.filter((d) => d.listenMin > 0).map((d) => d.day));
     const todayIST = istDay(new Date().toISOString());
-    let streak = 0;
-    let cursor = listenedSet.has(todayIST) ? todayIST : prevDay(todayIST); // today optional so an unlistened today doesn't zero the streak mid-day
-    while (listenedSet.has(cursor)) { streak++; cursor = prevDay(cursor); }
-    const daysListened = listenedSet.size;
-    const completions = perDay.map((d) => d.completionPct).filter((v): v is number => v != null);
-    const avgCompletionPct = completions.length ? Math.round(completions.reduce((a, b) => a + b, 0) / completions.length) : null;
 
     // ── Multi-user: engagement, growth, retention ──────────────────────────────
     const allDays = [...dayMap.keys()].sort();
@@ -595,8 +568,9 @@ export async function handleAnalytics(request: Request): Promise<Response> {
     }
     const isNew = (id: string) => !preExisting.has(id);   // first-ever activity is in-window
 
-    // New vs returning + cumulative user base, per day
-    let cumNew = 0;
+    // New vs returning + cumulative user base, per day. The base line starts at the
+    // count of users who already existed before this window, then adds new users.
+    let cumUsers = preExisting.size;
     const perDayGrowth = allDays.map((k) => {
       const d = dayMap.get(k)!;
       let newUsers = 0, returning = 0;
@@ -604,8 +578,8 @@ export async function handleAnalytics(request: Request): Promise<Response> {
         if (isNew(id) && userFirstDay.get(id) === k) newUsers++;
         else returning++;
       }
-      cumNew += newUsers;
-      return { day: k, dau: d.users.size, newUsers, returning, cumUsers: cumNew };
+      cumUsers += newUsers;
+      return { day: k, dau: d.users.size, newUsers, returning, cumUsers };
     });
 
     // DAU (latest day) / WAU (rolling 7) / MAU (rolling 30) + stickiness
@@ -673,16 +647,10 @@ export async function handleAnalytics(request: Request): Promise<Response> {
       // Usage volume
       minutesListened: Math.round(totalListenSec / 60),
       storiesPlayed:   totalStories,
-      avgCompletionPct,
       avgMinPerActiveUser,
       timeOnAppMin:    Math.round(totalAppSec / 60),
       avgSecPerStory:  totalStories ? Math.round(totalListenSec / totalStories) : 0,
-      // Kept for compatibility
-      streak,
-      daysListened,
       activeUsers: totalUsers,
-      avgMinPerDay:    daysListened ? +((totalListenSec / 60) / daysListened).toFixed(1) : 0,
-      avgMinPerUser:   totalUsers ? +((totalAppSec / 60) / totalUsers).toFixed(1) : 0,
       totalEvents: rows.length,
       heartbeats:  rows.filter((r: any) => r.event === "heartbeat").length,
       users,

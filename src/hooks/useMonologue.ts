@@ -24,8 +24,9 @@ import { EVENTS, HEARTBEAT_SEC } from "@/lib/analytics/events";
 export type MonologueState = "idle" | "playing" | "paused" | "error";
 export type Language = "en" | "hi" | "ta" | "mr";
 
-const RESUME_KEY   = "khabar-resume-pos";
-const LANGUAGE_KEY = "khabar-language";
+const RESUME_KEY    = "khabar-resume-pos";
+const LANGUAGE_KEY  = "khabar-language";
+const COMPLETED_KEY = "khabar-completed";   // { date, ids: [] } — persists "listened" marks
 
 // How early (seconds) to advance to the next clip when the app is backgrounded.
 // iOS freezes page JS during the silent gap between clips, so we swap just before
@@ -77,11 +78,30 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
   const playAtRef      = useRef<((idx: number, mode: "all" | SectionId | null, startAt?: number) => void) | null>(null);
   const endedHandlerRef = useRef<(() => void) | null>(null); // current track's advance handler
   const advancedRef     = useRef(false);                     // guard: one advance per track
+  const currentDateRef  = useRef<string>("");                // briefing date, for persisting completed marks
 
   const markCompleted = useCallback((id: string | undefined) => {
     if (!id) return;
-    setCompletedIds((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+    setCompletedIds((prev) => {
+      if (prev.has(id)) return prev;
+      const next = new Set(prev).add(id);
+      // Write through so the "listened" marks survive an app kill/relaunch
+      try { localStorage.setItem(COMPLETED_KEY, JSON.stringify({ date: currentDateRef.current, ids: [...next] })); } catch {}
+      return next;
+    });
   }, []);
+
+  // Load persisted "listened" marks for the current briefing (reset on a new day)
+  useEffect(() => {
+    const d = briefing?.date;
+    if (!d) return;
+    currentDateRef.current = d;
+    try {
+      const raw = localStorage.getItem(COMPLETED_KEY);
+      const obj = raw ? JSON.parse(raw) : null;
+      setCompletedIds(obj?.date === d && Array.isArray(obj.ids) ? new Set(obj.ids) : new Set());
+    } catch { setCompletedIds(new Set()); }
+  }, [briefing?.date]);
 
   // Keep refs in sync
   useEffect(() => { currentIdxRef.current = currentStoryIdx; }, [currentStoryIdx]);
@@ -286,16 +306,17 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
       const dateMatch = !date || date === briefing?.date;
       const langMatch = !lang || lang === language;
       if (idx >= 0 && idx < storiesWithAudio.length && time > 2 && dateMatch && langMatch) {
-        const url = getAudioUrl(storiesWithAudio[idx], language);
-        if (!url) return;
+        if (!getAudioUrl(storiesWithAudio[idx], language)) return;
+        // Cue the mini-player WITHOUT attaching audio. The first play() goes through
+        // playAt (via resume), which fully wires queue auto-advance. Attaching here
+        // would leave an un-wired element that plays one clip then stops.
         setCurrentStoryIdx(idx);
         setQueueMode("all");
         pauseTimeRef.current = time;
-        attachAudio(url, time);   // loads + seeks; does NOT autoplay
         setState("paused");
       }
     } catch {}
-  }, [storiesWithAudio, briefing, language, attachAudio]);
+  }, [storiesWithAudio, briefing, language]);
 
   // ── Core play function ────────────────────────────────────────────────────
 
@@ -453,17 +474,13 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
   }, []);
 
   const resume = useCallback(async () => {
-    if (audioRef.current?.paused) {
-      await audioRef.current.play().catch(() => {});
-    } else if (currentStoryIdx >= 0) {
-      const story = storiesWithAudio[currentStoryIdx];
-      if (story) {
-        const url = getAudioUrl(story, language)!;
-        const audio = attachAudio(url, pauseTimeRef.current);
-        await audio.play().catch(() => {});
-      }
-    }
-  }, [currentStoryIdx, storiesWithAudio, language, attachAudio]);
+    const a = audioRef.current;
+    if (a && !a.ended && a.paused) { await a.play().catch(() => {}); return; }
+    // No live audio element (e.g. resumed after relaunch) — (re)start via playAt so
+    // queue auto-advance is properly wired instead of playing an un-wired element.
+    const idx = currentIdxRef.current;
+    if (idx >= 0) playAtRef.current?.(idx, queueModeRef.current ?? "all", pauseTimeRef.current || 0);
+  }, []);
 
   const stop = useCallback(() => {
     audioRef.current?.pause();
