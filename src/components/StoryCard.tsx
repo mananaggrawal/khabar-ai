@@ -163,7 +163,7 @@ export function StoryCard({ story, isPlaying, hasAudio, isCompleted = false, lan
             {isPlaying ? <WaveformIcon /> : <Play className="size-3.5 fill-current ml-0.5" />}
             {isCompleted && !isPlaying && (
               <span
-                className="absolute -bottom-0.5 -right-0.5 flex size-3.5 items-center justify-center rounded-full bg-background"
+                className="absolute -bottom-0.5 -right-0.5 flex size-3.5 items-center justify-center"
                 aria-label="Listened"
               >
                 <Check className="size-3" style={{ color: accent }} strokeWidth={3} />
