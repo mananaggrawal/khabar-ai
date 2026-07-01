@@ -5,6 +5,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import { CITY_KEY, DEFAULT_CITY, MAJOR_CITIES } from "@/lib/news/sources";
 import { BottomNav } from "@/components/BottomNav";
+import { usePlayer } from "@/context/player";
 
 // WhatsApp number for feedback (country code, digits only, no +).
 const FEEDBACK_WHATSAPP = "917447434554";
@@ -34,6 +35,8 @@ function readCity(): string {
 
 function SettingsPage() {
   const router = useRouter();
+  const { mono } = usePlayer();
+  const hasMiniPlayer = mono.state === "playing" || mono.state === "paused";
   const [selectedLang, setSelectedLang]       = useState<string>(readLanguage);
   const [availableLangs, setAvailableLangs]   = useState<string[]>(readAvailableLanguages);
   const [selectedCity, setSelectedCity]       = useState<string>(readCity);
@@ -71,7 +74,7 @@ function SettingsPage() {
   return (
     <div
       className="min-h-screen bg-background text-foreground flex flex-col"
-      style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 60px)" }}
+      style={{ paddingBottom: `calc(env(safe-area-inset-bottom, 0px) + ${hasMiniPlayer ? 132 : 60}px)` }}
     >
       <header
         className="sticky top-0 z-20 flex items-center justify-between px-5 pb-2 bg-background/95 backdrop-blur-sm"
