@@ -14,6 +14,7 @@ workflows:
         script: |
           cd khabar-flutter
           flutter pub get
+          flutter create --platforms=ios .
           flutter build ios --release --no-codesign
 
     artifacts:
