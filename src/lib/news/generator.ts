@@ -668,30 +668,28 @@ ${list}`;
   return events.filter((_, i) => !removed.has(i));
 }
 
-// Each section's top-N (by importance order) are guaranteed into the cap.
-const PER_SECTION_GUARANTEE = Number(process.env.PER_SECTION_GUARANTEE) || 5;
+// Hard per-section maximums, enforced in code (the model ignores prompt caps and
+// over-stuffs India). India gets a larger share; every other section is smaller.
+const INDIA_MAX   = Number(process.env.INDIA_MAX_STORIES)   || 25;
+const SECTION_MAX = Number(process.env.SECTION_MAX_STORIES) || 12;
 
 /**
- * Cap to `max` events but never drop a section's most important stories.
- * Events arrive in importance order; we reserve each section's first N, then
- * fill the remaining budget in order. Preserves overall ordering.
+ * Balance the briefing: walk events in importance order and keep each until its
+ * section hits its cap (India ≤ INDIA_MAX, others ≤ SECTION_MAX) or the total
+ * hits maxTotal. Thin sections keep all they have; India can't dominate.
  */
-function capWithPerSectionGuarantee(events: SelectedEvent[], max: number): SelectedEvent[] {
-  if (events.length <= max) return events;
+function capBalanced(events: SelectedEvent[], maxTotal: number): SelectedEvent[] {
   const perSec = new Map<string, number>();
-  const reserved = new Set<number>();
-  events.forEach((e, i) => {
-    const c = perSec.get(e.section) ?? 0;
-    if (c < PER_SECTION_GUARANTEE) { reserved.add(i); perSec.set(e.section, c + 1); }
-  });
-  const fillBudget = max - reserved.size;
-  const result: SelectedEvent[] = [];
-  let filled = 0;
-  for (let i = 0; i < events.length && result.length < max; i++) {
-    if (reserved.has(i)) result.push(events[i]);
-    else if (filled < fillBudget) { result.push(events[i]); filled++; }
+  const out: SelectedEvent[] = [];
+  for (const ev of events) {
+    if (out.length >= maxTotal) break;
+    const cap = ev.section === "india" ? INDIA_MAX : SECTION_MAX;
+    const c = perSec.get(ev.section) ?? 0;
+    if (c >= cap) continue;
+    out.push(ev);
+    perSec.set(ev.section, c + 1);
   }
-  return result;
+  return out;
 }
 
 // ─── Step 4: Cluster same-event articles (single AI call) ────────────────────
@@ -712,10 +710,6 @@ async function clusterAndSelect(
   for (const s of stories) secCounts.set(s.section, (secCounts.get(s.section) ?? 0) + 1);
   const supplyLine = SECTION_ORDER.map(x => `${x}: ${secCounts.get(x) ?? 0}`).join(", ");
 
-  // Per-section cap: a MAX so India can't take most of the briefing (~35%),
-  // leaving room for the other sections to reach ~10 each. Ceiling only — never
-  // pads a section that lacks news.
-  const perSectionCap = Math.ceil(maxStories * 0.35);
 
   const prompt = `You are the news editor for Khabar AI — India's top audio news briefing.
 
@@ -727,7 +721,7 @@ TASK:
 1. Group articles about the SAME SPECIFIC event into one cluster (the same incident, ruling, announcement, or statement), even if worded differently by different publishers. CRITICAL: do NOT merge stories that are merely on the same topic, in the same section, or involve the same person/country but are actually DIFFERENT events — keep those separate. Two SEPARATE incidents are DIFFERENT events even if the same KIND — e.g. a lightning strike that kills two and a highway crash that kills a family are two different stories and must NEVER share a cluster just because both involve deaths/accidents. When in doubt, keep them separate. A cluster's articles must all be about the one same event, or the summary will mix unrelated facts.
 2. Cover as many genuinely DISTINCT events as possible — up to ${maxStories}. Include every unique story, but never list the same event twice.
 3. Order from most to least important.
-4. PER-SECTION GUARANTEE & TARGET SIZES: for EVERY section that has news, FIRST secure that section's most significant stories — judged on importance WITHIN that topic, not against politics (the biggest sports/world/business/science/tech/health story MUST be included even if it ranks below political news overall; a section's headline story is never dropped for one more political story). TARGET sizes, scaled to the per-section supply above: India about 25; each other section up to ~10. Include only as many DISTINCT events as genuinely exist — a section with few articles has few distinct events, so include only those and NEVER pad, repeat, or split one event into several. No single section may exceed ${perSectionCap}.
+4. PER-SECTION GUARANTEE & TARGET SIZES: for EVERY section that has news, FIRST secure that section's most significant stories — judged on importance WITHIN that topic, not against politics (the biggest sports/world/business/science/tech/health story MUST be included even if it ranks below political news overall; a section's headline story is never dropped for one more political story). TARGET sizes, scaled to the per-section supply above: India about ${INDIA_MAX}; each other section up to ~${SECTION_MAX}. Include only as many DISTINCT events as genuinely exist — a section with few articles has few distinct events, so include only those and NEVER pad, repeat, or split one event into several. India must not exceed ${INDIA_MAX} events; no other section more than ${SECTION_MAX}.
 
 IMPORTANCE GUIDE (for ORDERING and for filling remaining slots after the per-section guarantee):
 - Major: Parliament/Cabinet decisions, elections, RBI/budget/market moves, India-Pakistan/China, Supreme Court, major disasters
@@ -852,11 +846,9 @@ ${articleList}`;
   // Second pass: focused LLM dedupe catches same-event stories worded differently
   const deduped = await llmDedupeEvents(merged, logger);
 
-  // Cap with a PER-SECTION GUARANTEE: reserve each section's top few (by the
-  // model's order = importance within that section) so a section's biggest story
-  // can't be crowded out of the cap by political news, then fill the rest by
-  // overall importance. No keywords — purely structural.
-  const capped = capWithPerSectionGuarantee(deduped, maxStories);
+  // Balance deterministically: hard per-section caps (India ≤ INDIA_MAX, others
+  // ≤ SECTION_MAX) so India can't dominate, thin sections keep all they have.
+  const capped = capBalanced(deduped, maxStories);
   logger(`Clustered into ${capped.length} events (target: ${maxStories}, ~${Math.round(capped.length * WORDS_PER_STORY / WORDS_PER_MINUTE)} min)`);
   return capped;
 }

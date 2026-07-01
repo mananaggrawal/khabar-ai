@@ -47,6 +47,30 @@ async function requireAnalyticsUser(request: Request): Promise<Response | null> 
   }
 }
 
+// Verify any valid Supabase user (not restricted to analytics emails).
+async function requireSupabaseUser(request: Request): Promise<Response | null> {
+  const authz = request.headers.get("authorization") || "";
+  const token = authz.startsWith("Bearer ") ? authz.slice(7) : "";
+  if (!token) return json({ error: "Sign in required" }, 401);
+  try {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data, error } = await (supabaseAdmin as any).auth.getUser(token);
+    if (error || !data?.user) return json({ error: "Invalid session" }, 401);
+    return null;
+  } catch {
+    return json({ error: "Auth check failed" }, 401);
+  }
+}
+
+// GET /api/briefing — returns today's DailyBriefing for authenticated users (Flutter + PWA).
+export async function handleBriefing(request: Request): Promise<Response> {
+  const err = await requireSupabaseUser(request);
+  if (err) return err;
+  const briefing = await getTodayBriefing();
+  if (!briefing) return json({ error: "No briefing available yet" }, 404);
+  return json(briefing);
+}
+
 // POST /api/admin/generate — streams SSE log events during generation
 export async function handleGenerate(request: Request): Promise<Response> {
   const err = authCheck(request);
