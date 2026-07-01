@@ -3,7 +3,7 @@
  * Opens when the user taps a story card (not the play button).
  */
 import { createPortal } from "react-dom";
-import { motion, AnimatePresence } from "motion/react";
+import { motion, AnimatePresence, useDragControls } from "motion/react";
 import { X, ExternalLink, ArrowUpRight, Bookmark, Newspaper } from "lucide-react";
 import type { Story } from "@/lib/news/generator";
 import { FEED_MAP } from "@/lib/news/sources";
@@ -89,6 +89,7 @@ export function StoryDetailSheet({
   onSave,
   elevated = false,
 }: StoryDetailSheetProps) {
+  const dragControls = useDragControls();
   if (typeof document === "undefined") return null;
 
   // Above the full-screen player (z-60) when opened from it; default otherwise.
@@ -125,12 +126,20 @@ export function StoryDetailSheet({
             animate={{ y: 0 }}
             exit={{ y: "100%" }}
             transition={{ type: "spring", damping: 32, stiffness: 300 }}
+            drag="y"
+            dragControls={dragControls}
+            dragListener={false}
+            dragConstraints={{ top: 0, bottom: 0 }}
+            dragElastic={{ top: 0, bottom: 0.6 }}
+            onDragEnd={(_e, info) => { if (info.offset.y > 110 || info.velocity.y > 600) onClose(); }}
             className={`fixed inset-x-0 bottom-0 ${sheetZ} flex max-h-[85vh] flex-col rounded-t-3xl bg-white shadow-2xl`}
             style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
           >
+            {/* Drag-to-dismiss zone: handle + header (content below stays scrollable) */}
+            <div onPointerDown={(e) => dragControls.start(e)} style={{ touchAction: "none", cursor: "grab" }}>
             {/* Drag handle */}
             <div className="flex justify-center pt-3 pb-1">
-              <div className="h-1 w-10 rounded-full bg-border" />
+              <div className="h-1.5 w-10 rounded-full bg-border" />
             </div>
 
             {/* Header */}
@@ -148,7 +157,7 @@ export function StoryDetailSheet({
                   <p className="mt-1 text-xs text-muted-foreground">{story.source}</p>
                 )}
               </div>
-              <div className="ml-3 mt-0.5 flex shrink-0 items-center gap-1">
+              <div className="ml-3 mt-0.5 flex shrink-0 items-center gap-1" onPointerDown={(e) => e.stopPropagation()}>
                 {onSave && (
                   <button
                     type="button"
@@ -172,6 +181,7 @@ export function StoryDetailSheet({
                 </button>
               </div>
             </div>
+            </div>{/* /drag-to-dismiss zone */}
 
             {/* Scrollable body */}
             <div className="flex-1 overflow-y-auto px-5 pb-4">
