@@ -487,6 +487,7 @@ async function fetchAllOgImages(stories: Story[], logger: Logger, liveMap?: Map<
   const updated = stories.map(s => ({ ...s }));
   const CONCURRENCY = 10;
   for (let i = 0; i < stories.length; i += CONCURRENCY) {
+    if (isAbortRequested()) break;
     await Promise.allSettled(
       stories.slice(i, i + CONCURRENCY).map(async (story, j) => {
         const idx = i + j;
@@ -1296,6 +1297,8 @@ export async function generateDailyBriefing(
   const scriptSec = (Date.now() - t2) / 1000;
   log(`Scripts done in ${scriptSec.toFixed(1)}s`);
 
+  if (isAbortRequested()) throw new Error("Aborted by user");
+
   // Step 5b: Translate English → other languages (before the pre-TTS checkpoint)
   const translateLangs = targetLangs.filter(l => l !== "en");
   if (translateLangs.length && !isAbortRequested()) {
@@ -1303,6 +1306,8 @@ export async function generateDailyBriefing(
     await translateAll(stories, translateLangs, log);
     log(`Translation done in ${((Date.now() - tT) / 1000).toFixed(1)}s`);
   }
+
+  if (isAbortRequested()) throw new Error("Aborted by user");
 
   // Meta
   const estimatedWords       = stories.reduce((n, s) => n + (s.wordCount ?? s.scriptEn.split(/\s+/).length), 0);
