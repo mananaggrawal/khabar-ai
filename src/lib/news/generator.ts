@@ -669,24 +669,41 @@ ${list}`;
   return events.filter((_, i) => !removed.has(i));
 }
 
-// Hard per-section maximums, enforced in code (the model ignores prompt caps and
-// over-stuffs India). India gets a larger share; every other section is smaller.
+// Per-section bounds. Allocation is PROPORTIONAL to how much news each section
+// actually fetched (supply), floored so small sections still appear and ceilinged
+// so no section runs away. All env-tunable.
 const INDIA_MAX   = Number(process.env.INDIA_MAX_STORIES)   || 25;
 const SECTION_MAX = Number(process.env.SECTION_MAX_STORIES) || 15;
+const SECTION_MIN = Number(process.env.SECTION_MIN_STORIES) || 3;
 
 /**
- * Balance the briefing: walk events in importance order and keep each until its
- * section hits its cap (India ≤ INDIA_MAX, others ≤ SECTION_MAX) or the total
- * hits maxTotal. Thin sections keep all they have; India can't dominate.
+ * Allocate the briefing proportionally to each section's supply (fresh articles
+ * fetched). quota_i = clamp( round(maxTotal * supply_i / totalSupply),
+ * [SECTION_MIN, sectionMax], available_events_i ). Then keep up to quota per
+ * section in importance order. Big-news sections get more; thin ones keep a floor.
  */
-function capBalanced(events: SelectedEvent[], maxTotal: number): SelectedEvent[] {
+function capProportional(
+  events: SelectedEvent[],
+  maxTotal: number,
+  supply: Map<string, number>,
+): SelectedEvent[] {
+  const totalSupply = [...supply.values()].reduce((a, b) => a + b, 0) || 1;
+  const avail = new Map<string, number>();
+  for (const ev of events) avail.set(ev.section, (avail.get(ev.section) ?? 0) + 1);
+
+  const quota = new Map<string, number>();
+  for (const [sec, av] of avail) {
+    const max  = sec === "india" ? INDIA_MAX : SECTION_MAX;
+    const prop = Math.round(maxTotal * (supply.get(sec) ?? 0) / totalSupply);
+    quota.set(sec, Math.min(Math.max(prop, SECTION_MIN), max, av));
+  }
+
   const perSec = new Map<string, number>();
   const out: SelectedEvent[] = [];
   for (const ev of events) {
     if (out.length >= maxTotal) break;
-    const cap = ev.section === "india" ? INDIA_MAX : SECTION_MAX;
     const c = perSec.get(ev.section) ?? 0;
-    if (c >= cap) continue;
+    if (c >= (quota.get(ev.section) ?? 0)) continue;
     out.push(ev);
     perSec.set(ev.section, c + 1);
   }
@@ -700,6 +717,7 @@ async function clusterAndSelect(
   headlineIds: Set<string>,
   maxStories: number,
   logger: Logger,
+  supply: Map<string, number>,
 ): Promise<SelectedEvent[]> {
   const articleList = stories.map((s, i) =>
     `${i}. [${s.source}]${headlineIds.has(s.id) ? " ★" : ""} [${s.section}] ${s.title}`
@@ -722,7 +740,7 @@ TASK:
 1. Group articles about the SAME SPECIFIC event into one cluster (the same incident, ruling, announcement, or statement), even if worded differently by different publishers. CRITICAL: do NOT merge stories that are merely on the same topic, in the same section, or involve the same person/country but are actually DIFFERENT events — keep those separate. Two SEPARATE incidents are DIFFERENT events even if the same KIND — e.g. a lightning strike that kills two and a highway crash that kills a family are two different stories and must NEVER share a cluster just because both involve deaths/accidents. When in doubt, keep them separate. A cluster's articles must all be about the one same event, or the summary will mix unrelated facts.
 2. Cover as many genuinely DISTINCT events as possible — up to ${maxStories}. Include every unique story, but never list the same event twice.
 3. Order from most to least important.
-4. PER-SECTION GUARANTEE & TARGET SIZES: for EVERY section that has news, FIRST secure that section's most significant stories — judged on importance WITHIN that topic, not against politics (the biggest sports/world/business/science/tech/health story MUST be included even if it ranks below political news overall; a section's headline story is never dropped for one more political story). TARGET sizes, scaled to the per-section supply above: India about ${INDIA_MAX}; each other section up to ~${SECTION_MAX}. Include only as many DISTINCT events as genuinely exist — a section with few articles has few distinct events, so include only those and NEVER pad, repeat, or split one event into several. India must not exceed ${INDIA_MAX} events; no other section more than ${SECTION_MAX}.
+4. COVER EVERY SECTION with its most significant DISTINCT events — judged on importance WITHIN that topic, not against politics (the biggest sports/world/business/science/tech/health/local story matters on its own terms, not only if it beats political news). Surface up to ~${INDIA_MAX} candidates for India and up to ~${SECTION_MAX} for each other section, but ONLY genuinely distinct events — a thin section has few, so give only those and NEVER pad, repeat, or split one event. The final briefing is chosen from your candidates in PROPORTION to how many articles each section has (shown above), so provide good candidates for every section, including small ones.
 
 IMPORTANCE GUIDE (for ORDERING and for filling remaining slots after the per-section guarantee):
 - Major: Parliament/Cabinet decisions, elections, RBI/budget/market moves, India-Pakistan/China, Supreme Court, major disasters
@@ -847,9 +865,8 @@ ${articleList}`;
   // Second pass: focused LLM dedupe catches same-event stories worded differently
   const deduped = await llmDedupeEvents(merged, logger);
 
-  // Balance deterministically: hard per-section caps (India ≤ INDIA_MAX, others
-  // ≤ SECTION_MAX) so India can't dominate, thin sections keep all they have.
-  const capped = capBalanced(deduped, maxStories);
+  // Allocate proportionally to each section's supply (floored + ceilinged).
+  const capped = capProportional(deduped, maxStories, supply);
   logger(`Clustered into ${capped.length} events (target: ${maxStories}, ~${Math.round(capped.length * WORDS_PER_STORY / WORDS_PER_MINUTE)} min)`);
   return capped;
 }
@@ -1277,12 +1294,16 @@ export async function generateDailyBriefing(
   });
   log(`Clustering input capped to ${clusterInput.length} articles (from ${rawStories.length})`);
 
+  // True supply per section (from ALL fresh articles) → proportional allocation
+  const supplyBySection = new Map<string, number>();
+  for (const s of rawStories) supplyBySection.set(s.section, (supplyBySection.get(s.section) ?? 0) + 1);
+
   // Steps 2b + 4 in parallel: OG images + cluster
   const t1 = Date.now();
   const liveImageById = new Map<string, string>();
   const [withImages, selectedEvents] = await Promise.all([
     fetchAllOgImages(clusterInput, log, liveImageById),
-    clusterAndSelect(clusterInput, headlineIds, MAX_STORIES, log),
+    clusterAndSelect(clusterInput, headlineIds, MAX_STORIES, log, supplyBySection),
   ]);
   const clusterSec = (Date.now() - t1) / 1000;
 
