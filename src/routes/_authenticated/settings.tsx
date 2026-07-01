@@ -1,10 +1,13 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
-import { Check } from "lucide-react";
+import { Check, MessageCircle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import { CITY_KEY, DEFAULT_CITY, MAJOR_CITIES } from "@/lib/news/sources";
 import { BottomNav } from "@/components/BottomNav";
+
+// WhatsApp number for feedback (country code, digits only, no +). Set via env.
+const FEEDBACK_WHATSAPP = (import.meta as any).env?.VITE_FEEDBACK_WHATSAPP || "";
 
 const LANGUAGE_KEY = "khabar-language";
 const AVAILABLE_LANGS_KEY = "khabar-available-languages";
@@ -156,6 +159,23 @@ function SettingsPage() {
               );
             })}
           </div>
+        </section>
+
+        {/* Feedback */}
+        <section>
+          <h2 className="font-serif text-lg">Feedback</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Tell us what you love or what's missing — it goes straight to the team.
+          </p>
+          <a
+            href={`https://wa.me/${FEEDBACK_WHATSAPP}?text=${encodeURIComponent("Khabar AI feedback: ")}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-4 inline-flex items-center gap-2 rounded-2xl border border-border px-5 py-2.5 text-sm font-medium text-foreground hover:bg-black/[0.02] transition-colors"
+          >
+            <MessageCircle className="size-4 text-primary" />
+            Send feedback on WhatsApp
+          </a>
         </section>
 
         {/* Account */}

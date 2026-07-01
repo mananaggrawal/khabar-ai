@@ -12,6 +12,9 @@ export const EVENTS = {
   STORY_START:    "story_start",    // a story began → stories played
   HEARTBEAT:      "heartbeat",      // fires every HEARTBEAT_SEC while playing → minutes listened
   GENERATION_RUN: "generation_run", // server-side, for generation health
+  REFERRAL_VISIT: "referral_visit", // someone opened a /?ref= link → word-of-mouth reach
+  REFERRAL_SIGNUP:"referral_signup",// a (new) user logged in carrying a referral code
+  INVITE_SHARED:  "invite_shared",  // user tapped the share/invite action
 } as const;
 
 // Seconds of listening each heartbeat represents.

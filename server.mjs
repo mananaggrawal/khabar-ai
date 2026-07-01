@@ -419,6 +419,10 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
     <div class="card"><div class="k">D1 return</div><div class="v" id="kD1">–</div><div class="sub" id="kD1n"></div></div>
     <div class="card"><div class="k">D7 return</div><div class="v" id="kD7">–</div><div class="sub" id="kD7n"></div></div>
   </div>
+  <div class="cards">
+    <div class="card"><div class="k">Referral visits</div><div class="v" id="kRefVisit">–</div><div class="sub">/?ref= link opens</div></div>
+    <div class="card"><div class="k">Referred signups</div><div class="v" id="kRefSignup">–</div><div class="sub">word-of-mouth</div></div>
+  </div>
 
   <div class="panel"><h2>Active users per day — new vs returning · total user base</h2><div class="chartbox" style="height:240px"><canvas id="dauChart"></canvas></div></div>
 
@@ -488,6 +492,8 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
     txt('kD7', d.d7Pct != null ? (d.d7Pct + '%') : '—');
     txt('kD1n', d.d1Elig ? ('of ' + d.d1Elig + ' new') : '');
     txt('kD7n', d.d7Elig ? ('of ' + d.d7Elig + ' new') : '');
+    txt('kRefVisit', d.referralVisits != null ? d.referralVisits : 0);
+    txt('kRefSignup', d.referredSignups != null ? d.referredSignups : 0);
 
     // Usage volume
     txt('kListen', fmtMin(d.minutesListened || 0));

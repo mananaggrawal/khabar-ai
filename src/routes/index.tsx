@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { motion, AnimatePresence } from "motion/react";
-import { Play, Pause, SkipBack, SkipForward } from "lucide-react";
+import { Play, Pause, SkipBack, SkipForward, Share2 } from "lucide-react";
 import { VoiceOrb } from "@/components/VoiceOrb";
 
 import { StoryCard } from "@/components/StoryCard";
@@ -38,6 +38,17 @@ export const Route = createFileRoute("/")({
   head: () => ({ meta: [{ title: "Khabar AI" }] }),
   ssr: false,
   beforeLoad: async () => {
+    // Capture a referral code from the link BEFORE any auth redirect can drop the
+    // query string. Stored in localStorage so it survives the OAuth round-trip.
+    if (typeof window !== "undefined") {
+      try {
+        const ref = new URLSearchParams(window.location.search).get("ref");
+        if (ref) {
+          localStorage.setItem("khabar-ref", ref);
+          import("@/lib/analytics/track").then(({ track }) => track(EVENTS.REFERRAL_VISIT, { ref })).catch(() => {});
+        }
+      } catch {}
+    }
     if (LOCAL_MODE) return;
     const { supabase } = await import("@/integrations/supabase/client");
     const { data, error } = await supabase.auth.getUser();
@@ -230,6 +241,7 @@ function HomePage() {
   const [playerOpen, setPlayerOpen] = useState(false);
   const [detailStory, setDetailStory] = useState<Story | null>(null);
   const [activeSection, setActiveSection] = useState<SectionId | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
   const pillsRef = useRef<HTMLDivElement>(null);
   // True when the open detail drawer is showing the currently-playing story, so
   // it should follow along as autoplay advances. False when opened on another story.
@@ -256,10 +268,41 @@ function HomePage() {
     if (LOCAL_MODE) { track(EVENTS.APP_OPEN); return; }
     import("@/integrations/supabase/client")
       .then(({ supabase }) => supabase.auth.getUser())
-      .then(({ data }) => { if (data?.user) identify(data.user.id, { email: data.user.email ?? undefined }); })
+      .then(({ data }) => {
+        if (!data?.user) return;
+        identify(data.user.id, { email: data.user.email ?? undefined });
+        setUserId(data.user.id);
+        // Attribute a referral once, on the first login carrying a stored code.
+        try {
+          const ref = localStorage.getItem("khabar-ref");
+          const claimed = localStorage.getItem("khabar-ref-claimed");
+          if (ref && !claimed && ref !== data.user.id) {
+            const ageSec = (Date.now() - new Date(data.user.created_at).getTime()) / 1000;
+            track(EVENTS.REFERRAL_SIGNUP, { ref, isNew: ageSec < 86400 });
+            localStorage.setItem("khabar-ref-claimed", "1");
+          }
+          if (ref) localStorage.removeItem("khabar-ref");
+        } catch {}
+      })
       .catch(() => {})
       .finally(() => track(EVENTS.APP_OPEN));
   }, []);
+
+  // Share / invite via the native share sheet, carrying the user's referral code.
+  async function handleInvite() {
+    const code = userId ?? "";
+    const url = `${window.location.origin}/?ref=${code}`;
+    const text = "Khabar AI — your daily news, spoken. Try it:";
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: "Khabar AI", text, url });
+      } else {
+        await navigator.clipboard.writeText(url);
+        alert("Link copied — share it with a friend!");
+      }
+      track(EVENTS.INVITE_SHARED);
+    } catch { /* user cancelled the share sheet */ }
+  }
 
   // Persist which languages are available in this briefing to localStorage
   useEffect(() => {
@@ -314,9 +357,18 @@ function HomePage() {
         <span className="font-serif text-xl tracking-tight">
           Khabar <em className="italic text-primary">AI</em>
         </span>
-        <span className="text-xs text-muted-foreground">
-          Today's news, <em className="font-semibold italic">spoken.</em>
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-muted-foreground">
+            Today's news, <em className="font-semibold italic">spoken.</em>
+          </span>
+          <button
+            onClick={handleInvite}
+            aria-label="Invite a friend"
+            className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-black/5 hover:text-foreground transition-colors"
+          >
+            <Share2 className="size-4" />
+          </button>
+        </div>
       </header>
 
       {/* Loading state */}

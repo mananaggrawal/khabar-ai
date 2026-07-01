@@ -599,6 +599,10 @@ export async function handleAnalytics(request: Request): Promise<Response> {
     const totalUsers = userMap.size;                              // distinct active in window
     const newUsersInRange = [...userMap.keys()].filter(isNew).length;
 
+    // Word-of-mouth: referral link opens and referral-attributed signups
+    const referralVisits  = rows.filter((r: any) => r.event === "referral_visit").length;
+    const referredSignups = rows.filter((r: any) => r.event === "referral_signup").length;
+
     // Retention among NEW users (their first-ever activity landed in this window)
     let d1Elig = 0, d1Ret = 0, d7Elig = 0, d7Ret = 0;
     for (const [id, u] of userMap) {
@@ -649,6 +653,8 @@ export async function handleAnalytics(request: Request): Promise<Response> {
       newUsers: newUsersInRange,
       // Retention (new-user cohort)
       d1Pct, d7Pct, d1Elig, d7Elig,
+      // Word-of-mouth
+      referralVisits, referredSignups,
       // Usage volume
       minutesListened: Math.round(totalListenSec / 60),
       storiesPlayed:   totalStories,
