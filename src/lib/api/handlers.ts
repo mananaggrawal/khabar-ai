@@ -489,6 +489,19 @@ export async function handleAnalytics(request: Request): Promise<Response> {
 
     const rows: any[] = data ?? [];
 
+    // Users seen BEFORE this window — so "new users" in range excludes anyone
+    // who already existed. Only user_id is pulled (cheap).
+    const preExisting = new Set<string>();
+    try {
+      const { data: prior } = await (supabaseAdmin as any)
+        .from("analytics_events")
+        .select("user_id")
+        .lt("occurred_at", since)
+        .not("user_id", "is", null)
+        .limit(50000);
+      for (const r of (prior ?? [])) if (r.user_id) preExisting.add(r.user_id);
+    } catch { /* best-effort; new-user counts may be slightly high without it */ }
+
     // Simple model: app_open = a visit; story_start = a story played; heartbeat =
     // HEARTBEAT_SEC seconds of activity (tagged playing/visible). Everything below
     // is just sums of those — minutes on app, minutes listened, time per story.
@@ -569,6 +582,63 @@ export async function handleAnalytics(request: Request): Promise<Response> {
     const completions = perDay.map((d) => d.completionPct).filter((v): v is number => v != null);
     const avgCompletionPct = completions.length ? Math.round(completions.reduce((a, b) => a + b, 0) / completions.length) : null;
 
+    // ── Multi-user: engagement, growth, retention ──────────────────────────────
+    const allDays = [...dayMap.keys()].sort();
+    const maxDay  = allDays[allDays.length - 1] ?? todayIST;
+    const dayPlus = (k: string, n: number) => new Date(new Date(k + "T00:00:00Z").getTime() + n * 86_400_000).toISOString().slice(0, 10);
+
+    // First active day per user (within window)
+    const userFirstDay = new Map<string, string>();
+    for (const [id, u] of userMap) {
+      const ds = [...u.days].sort();
+      if (ds.length) userFirstDay.set(id, ds[0]);
+    }
+    const isNew = (id: string) => !preExisting.has(id);   // first-ever activity is in-window
+
+    // New vs returning + cumulative user base, per day
+    let cumNew = 0;
+    const perDayGrowth = allDays.map((k) => {
+      const d = dayMap.get(k)!;
+      let newUsers = 0, returning = 0;
+      for (const id of d.users) {
+        if (isNew(id) && userFirstDay.get(id) === k) newUsers++;
+        else returning++;
+      }
+      cumNew += newUsers;
+      return { day: k, dau: d.users.size, newUsers, returning, cumUsers: cumNew };
+    });
+
+    // DAU (latest day) / WAU (rolling 7) / MAU (rolling 30) + stickiness
+    const activeInLastNDays = (n: number) => {
+      const cutoff = dayPlus(maxDay, -(n - 1));
+      const set = new Set<string>();
+      for (const [id, u] of userMap) { for (const dd of u.days) if (dd >= cutoff) { set.add(id); break; } }
+      return set.size;
+    };
+    const dau = dayMap.get(maxDay)?.users.size ?? 0;
+    const wau = activeInLastNDays(7);
+    const mau = activeInLastNDays(30);
+    const stickiness = wau ? Math.round((dau / wau) * 100) : 0;
+
+    const totalUsers = userMap.size;                              // distinct active in window
+    const newUsersInRange = [...userMap.keys()].filter(isNew).length;
+
+    // Retention among NEW users (their first-ever activity landed in this window)
+    let d1Elig = 0, d1Ret = 0, d7Elig = 0, d7Ret = 0;
+    for (const [id, u] of userMap) {
+      if (!isNew(id)) continue;
+      const f = userFirstDay.get(id)!;
+      if (dayPlus(f, 1) <= maxDay) { d1Elig++; if (u.days.has(dayPlus(f, 1))) d1Ret++; }
+      if (dayPlus(f, 7) <= maxDay) {
+        d7Elig++;
+        for (let n = 1; n <= 7; n++) if (u.days.has(dayPlus(f, n))) { d7Ret++; break; }
+      }
+    }
+    const d1Pct = d1Elig ? Math.round((d1Ret / d1Elig) * 100) : null;
+    const d7Pct = d7Elig ? Math.round((d7Ret / d7Elig) * 100) : null;
+
+    const avgMinPerActiveUser = totalUsers ? +((totalListenSec / 60) / totalUsers).toFixed(1) : 0;
+
     // user_id → email so the admin sees who's who
     const emailById = new Map<string, string>();
     try {
@@ -588,24 +658,33 @@ export async function handleAnalytics(request: Request): Promise<Response> {
       .sort((a, b) => b.listenMin - a.listenMin)
       .slice(0, 50);
 
-    const activeUsers = new Set(rows.filter(r => r.user_id).map(r => r.user_id)).size;
-
     return json({
       days,
       perDay,
+      perDayGrowth,
       hourly,
-      streak,
-      daysListened,
-      avgCompletionPct,
-      totalEvents: rows.length,
-      heartbeats:  rows.filter((r: any) => r.event === "heartbeat").length,
-      activeUsers,
-      timeOnAppMin:    Math.round(totalAppSec / 60),
+      // Engagement
+      dau, wau, mau, stickiness,
+      // Growth
+      totalUsers,
+      newUsers: newUsersInRange,
+      // Retention (new-user cohort)
+      d1Pct, d7Pct, d1Elig, d7Elig,
+      // Usage volume
       minutesListened: Math.round(totalListenSec / 60),
       storiesPlayed:   totalStories,
-      avgMinPerDay:    daysListened ? +((totalListenSec / 60) / daysListened).toFixed(1) : 0,
-      avgMinPerUser:   activeUsers ? +((totalAppSec / 60) / activeUsers).toFixed(1) : 0,
+      avgCompletionPct,
+      avgMinPerActiveUser,
+      timeOnAppMin:    Math.round(totalAppSec / 60),
       avgSecPerStory:  totalStories ? Math.round(totalListenSec / totalStories) : 0,
+      // Kept for compatibility
+      streak,
+      daysListened,
+      activeUsers: totalUsers,
+      avgMinPerDay:    daysListened ? +((totalListenSec / 60) / daysListened).toFixed(1) : 0,
+      avgMinPerUser:   totalUsers ? +((totalAppSec / 60) / totalUsers).toFixed(1) : 0,
+      totalEvents: rows.length,
+      heartbeats:  rows.filter((r: any) => r.event === "heartbeat").length,
       users,
     });
   } catch (e: any) {

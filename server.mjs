@@ -377,15 +377,11 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
   th{color:#8b7fb0;font-weight:600}
   .muted{color:#8b7fb0}
   #err{color:#fca5a5}
-  .hero{display:flex;gap:14px;align-items:center;background:linear-gradient(135deg,#1f1340,#160d27);border:1px solid #2e2150;border-radius:16px;padding:16px;margin-bottom:14px}
-  .hero .streak{text-align:center;min-width:92px}
-  .hero .big{font-size:46px;font-weight:800;line-height:1;color:#a78bfa}
-  .hero .lbl{font-size:11px;color:#8b7fb0;text-transform:uppercase;letter-spacing:.06em;margin-top:4px}
-  .hero .heroR{flex:1;display:flex;flex-direction:column;gap:9px;min-width:0}
-  .hero .hi{display:flex;justify-content:space-between;gap:10px;font-size:13px}
-  .hero .hi .k{color:#8b7fb0}
-  .hero .hi .v{font-weight:700;text-align:right}
-  details.panel summary{list-style:none}
+  .grouplbl{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:#8b7fb0;margin:6px 2px 8px;font-weight:700}
+  .card .sub{font-size:10px;color:#7a6ea0;margin-top:2px}
+  .tablewrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin-top:10px}
+  #usersTbl th,#usersTbl td{white-space:nowrap}
+  details.panel summary{list-style:none;cursor:pointer;color:#8b7fb0;font-size:12px;text-transform:uppercase;letter-spacing:.06em}
   details.panel summary::-webkit-details-marker{display:none}
   @media(max-width:640px){.cards{grid-template-columns:repeat(2,1fr)}}
 </style>
@@ -404,33 +400,41 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
   </div>
   <div id="err"></div>
   <div class="muted" id="dataNote" style="font-size:11px;margin:-4px 0 12px"></div>
-  <!-- Habit hero -->
-  <div class="hero">
-    <div class="streak"><div class="big" id="kpiStreak">–</div><div class="lbl">day streak</div></div>
-    <div class="heroR">
-      <div class="hi"><span class="k">Listened today</span><span class="v" id="kpiToday">–</span></div>
-      <div class="hi"><span class="k">Avg / day</span><span class="v" id="kpiPerDay">–</span></div>
-      <div class="hi"><span class="k">Briefing finished (avg)</span><span class="v" id="kpiCompletion">–</span></div>
-    </div>
+  <!-- Engagement -->
+  <div class="grouplbl">Engagement</div>
+  <div class="cards">
+    <div class="card"><div class="k">DAU (latest)</div><div class="v" id="kDau">–</div></div>
+    <div class="card"><div class="k">WAU</div><div class="v" id="kWau">–</div></div>
+    <div class="card"><div class="k">MAU</div><div class="v" id="kMau">–</div></div>
+    <div class="card"><div class="k">Stickiness</div><div class="v" id="kStick">–</div><div class="sub">DAU / WAU</div></div>
   </div>
 
+  <!-- Growth & retention -->
+  <div class="grouplbl">Growth & retention</div>
   <div class="cards">
-    <div class="card"><div class="k">Minutes listened</div><div class="v" id="kpiListen">–</div></div>
-    <div class="card"><div class="k">Days listened</div><div class="v" id="kpiDays">–</div></div>
-    <div class="card"><div class="k">Stories played</div><div class="v" id="kpiStories">–</div></div>
-    <div class="card"><div class="k">Avg time / story</div><div class="v" id="kpiPerStory">–</div></div>
+    <div class="card"><div class="k">Total users</div><div class="v" id="kTotal">–</div></div>
+    <div class="card"><div class="k">New users</div><div class="v" id="kNew">–</div></div>
+    <div class="card"><div class="k">D1 return</div><div class="v" id="kD1">–</div><div class="sub" id="kD1n"></div></div>
+    <div class="card"><div class="k">D7 return</div><div class="v" id="kD7">–</div><div class="sub" id="kD7n"></div></div>
+  </div>
+
+  <div class="panel"><h2>Active users per day — new vs returning · total user base</h2><div class="chartbox" style="height:240px"><canvas id="dauChart"></canvas></div></div>
+
+  <!-- Usage volume -->
+  <div class="grouplbl">Usage</div>
+  <div class="cards">
+    <div class="card"><div class="k">Minutes listened</div><div class="v" id="kListen">–</div></div>
+    <div class="card"><div class="k">Stories played</div><div class="v" id="kStories">–</div></div>
+    <div class="card"><div class="k">Avg briefing finished</div><div class="v" id="kComp">–</div></div>
+    <div class="card"><div class="k">Avg min / user</div><div class="v" id="kPerUser">–</div></div>
   </div>
 
   <div class="panel"><h2>Minutes listened per day · % of briefing finished</h2><div class="chartbox" style="height:240px"><canvas id="dailyChart"></canvas></div></div>
-  <div class="panel"><h2>When you listen — hour of day (IST)</h2><div class="chartbox" style="height:200px"><canvas id="hourChart"></canvas></div></div>
+  <div class="panel"><h2>When users listen — hour of day (IST)</h2><div class="chartbox" style="height:200px"><canvas id="hourChart"></canvas></div></div>
 
   <details class="panel">
-    <summary>More · usage & users ▾</summary>
-    <div class="cards" style="margin-top:12px">
-      <div class="card"><div class="k">Time on app</div><div class="v" id="kpiApp">–</div></div>
-      <div class="card"><div class="k">Active users</div><div class="v" id="kpiUsers">–</div></div>
-    </div>
-    <table id="usersTbl" style="margin-top:10px"><thead><tr><th>User</th><th>Days</th><th>On app</th><th>Listened</th><th>Stories</th><th>Last</th></tr></thead><tbody></tbody></table>
+    <summary>Per-user breakdown ▾</summary>
+    <div class="tablewrap"><table id="usersTbl"><thead><tr><th>User</th><th>Days</th><th>On app</th><th>Listened</th><th>Stories</th><th>Last</th></tr></thead><tbody></tbody></table></div>
   </details>
   </div> <!-- /#app -->
 
@@ -463,30 +467,57 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
 
   function fmtMin(m){ return m >= 60 ? (Math.floor(m/60) + 'h ' + (m%60) + 'm') : (m + 'm'); }
 
+  function ctx(id){ return document.getElementById(id).getContext('2d'); }
+
   function render(d){
     var dn = document.getElementById('dataNote');
     if (dn) dn.textContent = (d.totalEvents || 0) + ' events in range';
 
-    // Habit hero
-    txt('kpiStreak', d.streak != null ? d.streak : 0);
-    var nowIST = new Date(Date.now() + 5.5*3600*1000).toISOString().slice(0,10);
-    var todayRec = (d.perDay || []).find(function(x){ return x.day === nowIST; });
-    txt('kpiToday', (todayRec && todayRec.listenMin > 0) ? ('Yes · ' + fmtMin(Math.round(todayRec.listenMin))) : 'Not yet');
-    txt('kpiPerDay', (d.avgMinPerDay || 0) + 'm');
-    txt('kpiCompletion', d.avgCompletionPct != null ? (d.avgCompletionPct + '%') : '—');
+    // Engagement
+    txt('kDau', d.dau != null ? d.dau : 0);
+    txt('kWau', d.wau != null ? d.wau : 0);
+    txt('kMau', d.mau != null ? d.mau : 0);
+    txt('kStick', (d.stickiness || 0) + '%');
 
-    // Core cards
-    txt('kpiListen', fmtMin(d.minutesListened || 0));
-    txt('kpiDays', d.daysListened != null ? d.daysListened : 0);
-    txt('kpiStories', d.storiesPlayed != null ? d.storiesPlayed : 0);
-    txt('kpiPerStory', (d.avgSecPerStory || 0) + 's');
-    txt('kpiApp', fmtMin(d.timeOnAppMin || 0));
-    txt('kpiUsers', d.activeUsers != null ? d.activeUsers : 0);
+    // Growth & retention
+    txt('kTotal', d.totalUsers != null ? d.totalUsers : 0);
+    txt('kNew', d.newUsers != null ? d.newUsers : 0);
+    txt('kD1', d.d1Pct != null ? (d.d1Pct + '%') : '—');
+    txt('kD7', d.d7Pct != null ? (d.d7Pct + '%') : '—');
+    txt('kD1n', d.d1Elig ? ('of ' + d.d1Elig + ' new') : '');
+    txt('kD7n', d.d7Elig ? ('of ' + d.d7Elig + ' new') : '');
+
+    // Usage volume
+    txt('kListen', fmtMin(d.minutesListened || 0));
+    txt('kStories', d.storiesPlayed != null ? d.storiesPlayed : 0);
+    txt('kComp', d.avgCompletionPct != null ? (d.avgCompletionPct + '%') : '—');
+    txt('kPerUser', (d.avgMinPerActiveUser || 0) + 'm');
+
+    // Active users per day: new vs returning (stacked bars) + total base (line)
+    var g = d.perDayGrowth || [];
+    var glabels = g.map(function(x){ return x.day.slice(5); });
+    if (charts.dauChart) charts.dauChart.destroy();
+    charts.dauChart = new Chart(ctx('dauChart'), {
+      data: { labels: glabels, datasets: [
+        { type:'bar',  label:'New',        data:g.map(function(x){return x.newUsers;}),  backgroundColor:'#34d399', stack:'u', yAxisID:'y', borderRadius:3 },
+        { type:'bar',  label:'Returning',  data:g.map(function(x){return x.returning;}), backgroundColor:'#a78bfa', stack:'u', yAxisID:'y', borderRadius:3 },
+        { type:'line', label:'Total users',data:g.map(function(x){return x.cumUsers;}),  borderColor:'#f59e0b', backgroundColor:'#f59e0b22', tension:.3, yAxisID:'y1' }
+      ]},
+      options: {
+        responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{ labels:{ color:'#cbb8f0', boxWidth:12 } } },
+        scales:{
+          x:{ stacked:true, ticks:{ color:'#8b7fb0', maxRotation:0, autoSkip:true }, grid:{ color:'#241941' } },
+          y:{ stacked:true, beginAtZero:true, ticks:{ color:'#8b7fb0', precision:0 }, grid:{ color:'#241941' }, title:{ display:true, text:'active users', color:'#8b7fb0' } },
+          y1:{ position:'right', beginAtZero:true, ticks:{ color:'#f59e0b', precision:0 }, grid:{ drawOnChartArea:false }, title:{ display:true, text:'total', color:'#f59e0b' } }
+        }
+      }
+    });
 
     // Daily chart: minutes listened (bars) + % of briefing finished (line, right axis)
     var labels = d.perDay.map(function(x){ return x.day.slice(5); });
     if (charts.dailyChart) charts.dailyChart.destroy();
-    charts.dailyChart = new Chart(document.getElementById('dailyChart').getContext('2d'), {
+    charts.dailyChart = new Chart(ctx('dailyChart'), {
       data: { labels: labels, datasets: [
         { type:'bar',  label:'Min listened', data:d.perDay.map(function(x){return x.listenMin;}), backgroundColor:'#34d399', borderRadius:4, yAxisID:'y', order:2 },
         { type:'line', label:'% finished',   data:d.perDay.map(function(x){return x.completionPct;}), borderColor:'#f59e0b', backgroundColor:'#f59e0b22', tension:.3, spanGaps:true, yAxisID:'y1', order:1 }
