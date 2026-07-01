@@ -180,7 +180,7 @@ function HomePage() {
   async function handleInvite() {
     const code = userId ?? "";
     const url = `${window.location.origin}/?ref=${code}`;
-    const text = "Khabar AI — your daily news, spoken. Try it:";
+    const text = "I listen to my daily news on Khabar AI — it reads the day's top stories to me in a few minutes. Give it a try:";
     try {
       if (navigator.share) {
         await navigator.share({ title: "Khabar AI", text, url });

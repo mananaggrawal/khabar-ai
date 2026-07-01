@@ -168,7 +168,7 @@ function SettingsPage() {
             Tell us what you love or what's missing — it goes straight to the team.
           </p>
           <a
-            href={`https://wa.me/${FEEDBACK_WHATSAPP}?text=${encodeURIComponent("Khabar AI feedback: ")}`}
+            href={`https://wa.me/${FEEDBACK_WHATSAPP}?text=${encodeURIComponent("Hi! I'm using Khabar AI and wanted to share some feedback: ")}`}
             target="_blank"
             rel="noopener noreferrer"
             className="mt-4 inline-flex items-center gap-2 rounded-2xl border border-border px-5 py-2.5 text-sm font-medium text-foreground hover:bg-black/[0.02] transition-colors"
