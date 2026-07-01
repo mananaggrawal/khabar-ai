@@ -33,18 +33,10 @@ const LOCAL_MODE = process.env.LOCAL_MODE === "true";
 const WORDS_PER_MINUTE  = 150;
 // Very quick headline+gist scripts (~60 words) → maximize story coverage per minute.
 const WORDS_PER_STORY   = 60;
-// Override via TARGET_MINUTES env var (default: 15 min → ~38 stories — a curated,
-// signal-first briefing selected by importance + corroboration, not raw volume).
-const TARGET_MINUTES    = Number(process.env.TARGET_MINUTES ?? 15);
+// Override via TARGET_MINUTES env var (default: 40 min → ~100 stories — room for
+// India ~25 + up to ~10 across the other sections, where supply exists)
+const TARGET_MINUTES    = Number(process.env.TARGET_MINUTES ?? 40);
 const MAX_STORIES       = Math.round(TARGET_MINUTES * WORDS_PER_MINUTE / WORDS_PER_STORY);
-
-// Editorial section weights → per-section caps (importance/balance, NOT fetch
-// volume). A curated, India-forward mix; niche sections are capped so high-volume-
-// but-repetitive feeds (e.g. science press releases) can't flood the briefing.
-const SECTION_WEIGHT: Record<string, number> = {
-  headlines: 0.14, india: 0.22, world: 0.13, business: 0.11,
-  technology: 0.08, sports: 0.08, science: 0.06, health: 0.08, local: 0.10,
-};
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -682,53 +674,34 @@ ${list}`;
  * fetched, summing to ~maxTotal. target_i = round(maxTotal * supply_i / total),
  * min 1 for any section that has news.
  */
-function editorialCaps(maxTotal: number): Map<string, number> {
-  const caps = new Map<string, number>();
-  for (const [sec, w] of Object.entries(SECTION_WEIGHT)) caps.set(sec, Math.max(1, Math.round(maxTotal * w)));
-  return caps;
+function proportionalTargets(supply: Map<string, number>, maxTotal: number): Map<string, number> {
+  const total = [...supply.values()].reduce((a, b) => a + b, 0) || 1;
+  const targets = new Map<string, number>();
+  for (const [sec, n] of supply) if (n > 0) targets.set(sec, Math.max(1, Math.round(maxTotal * n / total)));
+  return targets;
 }
 
 /**
- * Re-rank events by IMPORTANCE + CORROBORATION. The LLM already returns events in
- * importance order; we keep that as the base and boost stories covered by many
- * independent publishers (a 6-outlet story beats a 1-outlet niche item) and stories
- * that appeared on Google's homepage. Stable within equal scores.
+ * Take up to `target` events per section (importance order), then top up to
+ * maxTotal from leftover events. Hits ~maxTotal while honouring the proportional
+ * per-section split; a section short on distinct events yields its slack to others.
  */
-function rankByImportance(events: SelectedEvent[]): SelectedEvent[] {
-  const n = events.length;
-  return events
-    .map((ev, i) => ({
-      ev, i,
-      score:
-        (n - i)                                       // LLM importance (earlier = more important)
-        + Math.min((ev.publisherCount ?? 1) - 1, 5) * 2 // corroboration: each extra publisher ≈ 2 ranks (cap 5)
-        + (ev.inHeadlinesFeed ? 3 : 0),                // homepage editorial signal
-    }))
-    .sort((a, b) => b.score - a.score || a.i - b.i)
-    .map(x => x.ev);
-}
-
-/**
- * Take up to `cap` events per section (in ranked order), then top up to maxTotal
- * from leftovers by rank. Keeps the briefing balanced — no section (or a repetitive
- * feed) can dominate — while a thin section yields its slack to stronger stories.
- */
-function capBySection(
+function capProportional(
   events: SelectedEvent[],
   maxTotal: number,
-  caps: Map<string, number>,
+  targets: Map<string, number>,
 ): SelectedEvent[] {
   const perSec = new Map<string, number>();
   const out: SelectedEvent[] = [];
   const used = new Set<number>();
-  // Pass 1 — per-section cap, in ranked order
+  // Pass 1 — proportional quota per section
   for (let i = 0; i < events.length && out.length < maxTotal; i++) {
     const ev = events[i];
     const c = perSec.get(ev.section) ?? 0;
-    if (c >= (caps.get(ev.section) ?? 0)) continue;
+    if (c >= (targets.get(ev.section) ?? 0)) continue;
     out.push(ev); used.add(i); perSec.set(ev.section, c + 1);
   }
-  // Pass 2 — fill remaining budget from leftovers, by rank
+  // Pass 2 — fill remaining budget from leftovers, by importance
   for (let i = 0; i < events.length && out.length < maxTotal; i++) {
     if (!used.has(i)) out.push(events[i]);
   }
@@ -742,14 +715,15 @@ async function clusterAndSelect(
   headlineIds: Set<string>,
   maxStories: number,
   logger: Logger,
-  caps: Map<string, number>,
+  targets: Map<string, number>,
 ): Promise<SelectedEvent[]> {
   const articleList = stories.map((s, i) =>
     `${i}. [${s.source}]${headlineIds.has(s.id) ? " ★" : ""} [${s.section}] ${s.title}`
   ).join("\n");
 
-  // Per-section caps (editorial balance) — the MOST events to keep from each section.
-  const capsLine = SECTION_ORDER.map(x => caps.get(x) ? `${x}: ${caps.get(x)}` : null)
+  // Per-section target counts (proportional to fetch volume) — what the final
+  // briefing should contain from each section.
+  const targetsLine = SECTION_ORDER.map(x => targets.get(x) ? `${x}: ${targets.get(x)}` : null)
     .filter(Boolean).join(", ");
 
   const prompt = `You are the news editor for Khabar AI — India's top audio news briefing.
@@ -759,11 +733,11 @@ Here are ${stories.length} articles from today's Google News feeds (India, World
 
 TASK:
 1. Group articles about the SAME SPECIFIC event into one cluster (the same incident, ruling, announcement, or statement), even if worded differently by different publishers. CRITICAL: do NOT merge stories that are merely on the same topic, in the same section, or involve the same person/country but are actually DIFFERENT events — keep those separate. Two SEPARATE incidents are DIFFERENT events even if the same KIND — e.g. a lightning strike that kills two and a highway crash that kills a family are two different stories and must NEVER share a cluster just because both involve deaths/accidents. When in doubt, keep them separate. A cluster's articles must all be about the one same event, or the summary will mix unrelated facts.
-2. Select the most IMPORTANT distinct events — this is a tight, curated ${maxStories}-story briefing, not an exhaustive list. Favour stories corroborated by MULTIPLE independent publishers and ★ homepage stories over single-source niche items. Never list the same event twice.
-3. Order from most to least important (most-covered, highest-impact first).
-4. PER-SECTION CAPS (editorial balance): keep AT MOST this many events per section — ${capsLine}. These are ceilings, not quotas: pick only the strongest events in each section up to its cap. Do NOT pad a section to its cap with weak or repetitive stories; a thin section should return fewer. Judge significance WITHIN each topic.
+2. Cover as many genuinely DISTINCT events as possible — up to ${maxStories}. Include every unique story, but never list the same event twice.
+3. Order from most to least important.
+4. PER-SECTION TARGETS (proportional to each section's article volume): aim for about this many DISTINCT events per section — ${targetsLine}. Meet each target where genuinely distinct events exist; a thin section yields fewer (never pad, repeat, or split one event). It's fine to slightly exceed a target — extra good events help fill the briefing. Judge significance WITHIN each topic, not against politics.
 
-IMPORTANCE GUIDE (for ORDERING and for choosing which events make the cut):
+IMPORTANCE GUIDE (for ORDERING and for filling remaining slots after the per-section guarantee):
 - Major: Parliament/Cabinet decisions, elections, RBI/budget/market moves, India-Pakistan/China, Supreme Court, major disasters
 - Medium: International events affecting India, corporate/economic policy, state-level governance
 - Lower: Routine updates, niche stories, individual match results (unless major tournament)
@@ -886,9 +860,8 @@ ${articleList}`;
   // Second pass: focused LLM dedupe catches same-event stories worded differently
   const deduped = await llmDedupeEvents(merged, logger);
 
-  // Rank by importance + corroboration, then apply per-section caps up to maxStories.
-  const ranked = rankByImportance(deduped);
-  const capped = capBySection(ranked, maxStories, caps);
+  // Allocate proportionally to each section's target, topping up to maxStories.
+  const capped = capProportional(deduped, maxStories, targets);
   logger(`Clustered into ${capped.length} events (target: ${maxStories}, ~${Math.round(capped.length * WORDS_PER_STORY / WORDS_PER_MINUTE)} min)`);
   return capped;
 }
@@ -1301,19 +1274,21 @@ export async function generateDailyBriefing(
   }
   const fetchSec = (Date.now() - t0) / 1000;
 
-  // Per-section editorial caps (importance/balance, not fetch volume) → the MOST
-  // events to keep from each section for a curated ~MAX_STORIES briefing.
-  const caps = editorialCaps(MAX_STORIES);
-  log(`Per-section caps (editorial balance): ${SECTION_ORDER.map(x => caps.get(x) ? `${x} ${caps.get(x)}` : null).filter(Boolean).join(", ")}`);
+  // True supply per section (all fresh articles) → proportional per-section targets
+  // that sum to ~MAX_STORIES.
+  const supplyBySection = new Map<string, number>();
+  for (const s of rawStories) supplyBySection.set(s.section, (supplyBySection.get(s.section) ?? 0) + 1);
+  const targets = proportionalTargets(supplyBySection, MAX_STORIES);
+  log(`Per-section targets (proportional to fetch): ${SECTION_ORDER.map(x => targets.get(x) ? `${x} ${targets.get(x)}` : null).filter(Boolean).join(", ")}`);
 
-  // Feed the clustering call a generous but bounded candidate pool: ~4× each
-  // section's cap (min 12) so the model has enough to pick the strongest events by
-  // importance + corroboration, while the single LLM call stays fast (~150 titles).
+  // Feed the clustering call a bounded set: ~2× each section's target (headroom
+  // for de-duping), min 6 so small sections still have candidates. Keeps the one
+  // LLM call fast (≈200 titles, not 399) while supporting the targets.
   const rawSeen = new Map<SectionId, number>();
   const clusterInput = rawStories.filter(s => {
-    const room = Math.max(12, (caps.get(s.section) ?? 1) * 4);
+    const cap = Math.max(6, (targets.get(s.section) ?? 1) * 2);
     const c = rawSeen.get(s.section) ?? 0;
-    if (c >= room) return false;
+    if (c >= cap) return false;
     rawSeen.set(s.section, c + 1);
     return true;
   });
@@ -1324,7 +1299,7 @@ export async function generateDailyBriefing(
   const liveImageById = new Map<string, string>();
   const [withImages, selectedEvents] = await Promise.all([
     fetchAllOgImages(clusterInput, log, liveImageById),
-    clusterAndSelect(clusterInput, headlineIds, MAX_STORIES, log, caps),
+    clusterAndSelect(clusterInput, headlineIds, MAX_STORIES, log, targets),
   ]);
   const clusterSec = (Date.now() - t1) / 1000;
 
