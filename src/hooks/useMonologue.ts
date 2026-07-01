@@ -65,6 +65,8 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
   const [currentStoryIdx, setCurrentStoryIdx] = useState(-1);
   const [queueMode, setQueueMode]       = useState<"all" | SectionId | null>(null);
   const [language, setLanguage]         = useState<Language>(readLanguage);
+  // Story ids the listener has heard to the end (subtle "listened" marker in the UI)
+  const [completedIds, setCompletedIds] = useState<Set<string>>(() => new Set());
 
   const audioRef       = useRef<HTMLAudioElement | null>(null);
   const preloadRef     = useRef<HTMLAudioElement | null>(null);
@@ -75,6 +77,11 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
   const playAtRef      = useRef<((idx: number, mode: "all" | SectionId | null, startAt?: number) => void) | null>(null);
   const endedHandlerRef = useRef<(() => void) | null>(null); // current track's advance handler
   const advancedRef     = useRef(false);                     // guard: one advance per track
+
+  const markCompleted = useCallback((id: string | undefined) => {
+    if (!id) return;
+    setCompletedIds((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+  }, []);
 
   // Keep refs in sync
   useEffect(() => { currentIdxRef.current = currentStoryIdx; }, [currentStoryIdx]);
@@ -175,6 +182,8 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
         if (startAt > 0 && Math.abs(audio.currentTime - startAt) > 0.5) {
           audio.currentTime = startAt;
         }
+        // Reflect the resume position on the progress bar even before play starts
+        if (startAt > 0 && audio.duration > 0) setProgress(startAt / audio.duration);
       };
 
       audio.ontimeupdate = () => {
@@ -194,6 +203,7 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
             audio.duration - ct <= BG_ADVANCE_LEAD_SEC
           ) {
             advancedRef.current = true;
+            markCompleted(storiesWithAudio[currentIdxRef.current]?.id);
             endedHandlerRef.current();
             return;
           }
@@ -205,6 +215,7 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
             const nextUrl = getAudioUrl(next, language)!;
             const nextFilename = nextUrl?.split('/').pop() ?? '';
             if (nextFilename && audio.src.endsWith(nextFilename) && next.audioStartSec !== undefined && ct >= next.audioStartSec) {
+              markCompleted(storiesWithAudio[currentIdxRef.current]?.id);
               setCurrentStoryIdx(nextIdx);
             }
           }
@@ -249,6 +260,7 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
       };
       audio.onended = () => {
         setProgress(0);
+        markCompleted(storiesWithAudio[currentIdxRef.current]?.id);
         if (onEnded) onEnded();
         else setState("idle");
       };
@@ -256,8 +268,34 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
 
       return audio;
     },
-    [briefing, language, storiesWithAudio],
+    [briefing, language, storiesWithAudio, markCompleted],
   );
+
+  // ── Resume on relaunch ──────────────────────────────────────────────────────
+  // If the app was killed mid-briefing, bring back the mini-player showing the last
+  // story, cued to where we left off. iOS blocks autoplay without a gesture, so we
+  // restore in the PAUSED state — one tap on play resumes from the saved position.
+  const hydratedRef = useRef(false);
+  useEffect(() => {
+    if (hydratedRef.current || !storiesWithAudio.length) return;
+    hydratedRef.current = true;
+    try {
+      const saved = localStorage.getItem(RESUME_KEY);
+      if (!saved) return;
+      const { idx, time, date, lang } = JSON.parse(saved);
+      const dateMatch = !date || date === briefing?.date;
+      const langMatch = !lang || lang === language;
+      if (idx >= 0 && idx < storiesWithAudio.length && time > 2 && dateMatch && langMatch) {
+        const url = getAudioUrl(storiesWithAudio[idx], language);
+        if (!url) return;
+        setCurrentStoryIdx(idx);
+        setQueueMode("all");
+        pauseTimeRef.current = time;
+        attachAudio(url, time);   // loads + seeks; does NOT autoplay
+        setState("paused");
+      }
+    } catch {}
+  }, [storiesWithAudio, briefing, language, attachAudio]);
 
   // ── Core play function ────────────────────────────────────────────────────
 
@@ -546,6 +584,7 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
     currentStoryIdx,
     currentStory,
     storiesWithAudio,
+    completedIds,
 
     // Section-level (derived, for UI)
     currentFeed,

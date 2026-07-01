@@ -115,7 +115,7 @@ export function PlayerScreen({ mono, visible, onClose, isSaved, onSave }: Player
                 className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-black/5 hover:text-foreground transition-colors disabled:opacity-40">
                 <FileText className="size-4" />
               </button>
-              <button onClick={onSave} aria-label={isSaved ? "Unsave" : "Save"}
+              <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); onSave?.(); }} aria-label={isSaved ? "Unsave" : "Save"}
                 className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-black/5 transition-colors">
                 <Bookmark className="size-4" fill={isSaved ? "currentColor" : "none"} style={isSaved ? { color: accent } : undefined} />
               </button>

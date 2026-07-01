@@ -1,4 +1,4 @@
-import { Play, Flame, LandmarkIcon, Globe, TrendingUp, MapPin, Cpu, Trophy, FlaskConical, HeartPulse } from "lucide-react";
+import { Play, Check, Flame, LandmarkIcon, Globe, TrendingUp, MapPin, Cpu, Trophy, FlaskConical, HeartPulse } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Story } from "@/lib/news/generator";
 import { FEED_MAP, type SectionId } from "@/lib/news/sources";
@@ -72,13 +72,14 @@ interface StoryCardProps {
   story: Story;
   isPlaying: boolean;
   hasAudio: boolean;
+  isCompleted?: boolean;
   language?: import("@/hooks/useMonologue").Language;
   onPlay: () => void;
   onPause: () => void;
   onTap?: () => void;
 }
 
-export function StoryCard({ story, isPlaying, hasAudio, language = "en", onPlay, onPause, onTap }: StoryCardProps) {
+export function StoryCard({ story, isPlaying, hasAudio, isCompleted = false, language = "en", onPlay, onPause, onTap }: StoryCardProps) {
   const section = resolveSection(story.section);
   const feed    = FEED_MAP.get(section);
   const accent  = SECTION_COLOR[section] ?? "#EF4444";
@@ -135,7 +136,10 @@ export function StoryCard({ story, isPlaying, hasAudio, language = "en", onPlay,
         <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]" style={{ color: accent }}>
           {sectionLabel}
         </p>
-        <p className="text-sm font-medium leading-snug text-foreground line-clamp-2">
+        <p className={cn(
+          "text-sm font-medium leading-snug line-clamp-2",
+          isCompleted && !isPlaying ? "text-foreground/50" : "text-foreground",
+        )}>
           {displayTitle}
         </p>
       </div>
@@ -147,14 +151,24 @@ export function StoryCard({ story, isPlaying, hasAudio, language = "en", onPlay,
             onClick={() => isPlaying ? onPause() : onPlay()}
             aria-label={isPlaying ? "Pause" : "Play"}
             className={cn(
-              "flex size-9 items-center justify-center rounded-full border transition-all",
+              "relative flex size-9 items-center justify-center rounded-full border transition-all",
               isPlaying
                 ? "border-transparent text-white shadow-md"
-                : "border-border bg-background text-muted-foreground hover:text-foreground",
+                : isCompleted
+                  ? "border-border bg-background text-muted-foreground/60 hover:text-foreground"
+                  : "border-border bg-background text-muted-foreground hover:text-foreground",
             )}
             style={isPlaying ? { backgroundColor: accent } : undefined}
           >
             {isPlaying ? <WaveformIcon /> : <Play className="size-3.5 fill-current ml-0.5" />}
+            {isCompleted && !isPlaying && (
+              <span
+                className="absolute -bottom-0.5 -right-0.5 flex size-3.5 items-center justify-center rounded-full bg-background"
+                aria-label="Listened"
+              >
+                <Check className="size-3" style={{ color: accent }} strokeWidth={3} />
+              </span>
+            )}
           </button>
         )}
       </div>

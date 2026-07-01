@@ -151,7 +151,8 @@ export function StoryDetailSheet({
               <div className="ml-3 mt-0.5 flex shrink-0 items-center gap-1">
                 {onSave && (
                   <button
-                    onClick={onSave}
+                    type="button"
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); onSave?.(); }}
                     aria-label={isSaved ? "Unsave" : "Save"}
                     className="flex size-8 items-center justify-center rounded-full bg-muted transition-colors hover:text-foreground"
                   >

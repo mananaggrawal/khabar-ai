@@ -393,6 +393,7 @@ function HomePage() {
                           language={mono.language}
                           isPlaying={isActive && mono.state === "playing"}
                           hasAudio={hasAudio}
+                          isCompleted={mono.completedIds.has(story.id)}
                           onPlay={() => storyIdx >= 0 && mono.playFrom(storyIdx)}
                           onPause={mono.pause}
                           onTap={() => {
