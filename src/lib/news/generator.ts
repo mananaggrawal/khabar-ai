@@ -1277,18 +1277,34 @@ export async function generateDailyBriefing(
 
   // TEMP DEBUG (2026-07-02): publisher breakdown of the PURE RSS response —
   // every item as returned by Google News, before dedup/freshness/blocklist filtering.
+  // Broken out PER FEED (not collapsed into one merged list) so overlap/duplication
+  // across feeds is visible too.
   {
-    const bySource = new Map<string, number>();
-    for (const items of feedMap.values()) {
+    log(`[debug] PURE RSS — per-feed publisher breakdown (${rawTotal} raw items across ${feedMap.size} feeds, before any filtering):`);
+    for (const [feedId, items] of feedMap.entries()) {
+      const bySource = new Map<string, number>();
       for (const item of items) {
         const src = item.source || "UNKNOWN";
         bySource.set(src, (bySource.get(src) ?? 0) + 1);
       }
+      const sorted = [...bySource.entries()].sort((a, b) => b[1] - a[1]);
+      log(`[debug]  ── feed "${feedId}" (${items.length} items, ${sorted.length} unique sources) ──`);
+      for (const [src, n] of sorted) {
+        log(`[debug]   ${n.toString().padStart(3)}  (${((100 * n) / items.length).toFixed(1)}%)  ${src}`);
+      }
     }
-    const sorted = [...bySource.entries()].sort((a, b) => b[1] - a[1]);
-    log(`[debug] PURE RSS publisher breakdown (${rawTotal} raw items incl. cross-feed dupes, ${sorted.length} unique sources):`);
-    for (const [src, n] of sorted) {
-      log(`  ${n.toString().padStart(3)}  (${((100 * n) / rawTotal).toFixed(1)}%)  ${src}`);
+
+    const bySourceAll = new Map<string, number>();
+    for (const items of feedMap.values()) {
+      for (const item of items) {
+        const src = item.source || "UNKNOWN";
+        bySourceAll.set(src, (bySourceAll.get(src) ?? 0) + 1);
+      }
+    }
+    const sortedAll = [...bySourceAll.entries()].sort((a, b) => b[1] - a[1]);
+    log(`[debug]  ── ALL FEEDS COMBINED (${rawTotal} raw items incl. cross-feed dupes, ${sortedAll.length} unique sources) ──`);
+    for (const [src, n] of sortedAll) {
+      log(`[debug]   ${n.toString().padStart(3)}  (${((100 * n) / rawTotal).toFixed(1)}%)  ${src}`);
     }
   }
 
