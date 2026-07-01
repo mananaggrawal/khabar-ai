@@ -429,6 +429,7 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
     <div class="card"><div class="k">Avg / story</div><div class="v" id="kPerStory">–</div><div class="sub">listen time per story</div></div>
   </div>
 
+  <div class="panel"><h2>Listening time by section — what people actually hear</h2><div class="chartbox" style="height:260px"><canvas id="sectionChart"></canvas></div></div>
   <div class="panel"><h2>When users listen — hour of day (IST)</h2><div class="chartbox" style="height:200px"><canvas id="hourChart"></canvas></div></div>
 
   <details class="panel">
@@ -510,6 +511,25 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
           x:{ stacked:true, ticks:{ color:'#8b7fb0', maxRotation:0, autoSkip:true }, grid:{ color:'#241941' } },
           y:{ stacked:true, beginAtZero:true, ticks:{ color:'#8b7fb0', precision:0 }, grid:{ color:'#241941' }, title:{ display:true, text:'active users', color:'#8b7fb0' } },
           y1:{ position:'right', beginAtZero:true, ticks:{ color:'#f59e0b', precision:0 }, grid:{ drawOnChartArea:false }, title:{ display:true, text:'total', color:'#f59e0b' } }
+        }
+      }
+    });
+
+    // Listening time by section (horizontal bars, most-listened first)
+    var bs = d.bySection || [];
+    var SEC_COLOR = { headlines:'#EF4444', india:'#F97316', world:'#0D9488', business:'#16A34A', technology:'#6366F1', sports:'#DB2777', science:'#0EA5E9', health:'#65A30D', local:'#2563EB' };
+    if (charts.sectionChart) charts.sectionChart.destroy();
+    charts.sectionChart = new Chart(ctx('sectionChart'), {
+      type: 'bar',
+      data: { labels: bs.map(function(x){ return x.section; }), datasets: [
+        { label:'Min listened', data:bs.map(function(x){ return x.min; }), backgroundColor:bs.map(function(x){ return SEC_COLOR[x.section] || '#a78bfa'; }), borderRadius:4 }
+      ]},
+      options: {
+        indexAxis:'y', responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{ display:false } },
+        scales:{
+          x:{ beginAtZero:true, ticks:{ color:'#8b7fb0' }, grid:{ color:'#241941' }, title:{ display:true, text:'minutes', color:'#8b7fb0' } },
+          y:{ ticks:{ color:'#cbb8f0' }, grid:{ display:false } }
         }
       }
     });

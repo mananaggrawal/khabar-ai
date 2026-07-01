@@ -510,6 +510,7 @@ export async function handleAnalytics(request: Request): Promise<Response> {
     const userMap = new Map<string, { appSec: number; listenSec: number; stories: number; days: Set<string>; last: string }>();
     const storyListenSec = new Map<string, number>();
     const hourly = new Array(24).fill(0);      // listen-seconds by hour-of-day (IST)
+    const sectionSec = new Map<string, number>(); // listen-seconds by section
     let totalAppSec = 0, totalListenSec = 0, totalStories = 0;
 
     const IST_MS = 5.5 * 3_600_000;
@@ -541,6 +542,7 @@ export async function handleAnalytics(request: Request): Promise<Response> {
         if (p.playing === true) {
           d.listenSec += sec; totalListenSec += sec;
           hourly[istHour(r.occurred_at)] += sec;
+          if (p.section) sectionSec.set(String(p.section), (sectionSec.get(String(p.section)) ?? 0) + sec);
           if (uid) userRec(uid).listenSec += sec;
           if (p.storyId) storyListenSec.set(String(p.storyId), (storyListenSec.get(String(p.storyId)) ?? 0) + sec);
         }
@@ -637,6 +639,9 @@ export async function handleAnalytics(request: Request): Promise<Response> {
       perDay,
       perDayGrowth,
       hourly,
+      bySection: [...sectionSec.entries()]
+        .map(([section, s]) => ({ section, min: +(s / 60).toFixed(1) }))
+        .sort((a, b) => b.min - a.min),
       // Engagement
       dau, wau, mau, stickiness,
       // Growth

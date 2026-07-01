@@ -58,6 +58,36 @@ export function getStoryTitle(story: import("@/lib/news/generator").Story, lang:
   return story.title;
 }
 
+const IS_LOCAL = typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_LOCAL_MODE === "true";
+
+// ── Per-account "listened" sync (Supabase) ─────────────────────────────────
+// Marks are cached in localStorage for instant paint, and mirrored to Supabase
+// (keyed by user + briefing date) so they follow the account across devices.
+async function syncCompletedUp(date: string, id: string): Promise<void> {
+  if (IS_LOCAL || !date) return;
+  try {
+    const { supabase } = await import("@/integrations/supabase/client");
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    await (supabase as any).from("listened_stories").upsert(
+      { user_id: user.id, briefing_date: date, story_id: id },
+      { onConflict: "user_id,briefing_date,story_id" },
+    );
+  } catch { /* offline / not signed in — localStorage still holds it */ }
+}
+async function fetchCompleted(date: string): Promise<string[]> {
+  if (IS_LOCAL || !date) return [];
+  try {
+    const { supabase } = await import("@/integrations/supabase/client");
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return [];
+    const { data } = await (supabase as any)
+      .from("listened_stories").select("story_id")
+      .eq("user_id", user.id).eq("briefing_date", date);
+    return (data ?? []).map((r: any) => r.story_id as string);
+  } catch { return []; }
+}
+
 export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
   const [state, setState]               = useState<MonologueState>("idle");
   const [progress, setProgress]         = useState(0);
@@ -89,9 +119,11 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
       try { localStorage.setItem(COMPLETED_KEY, JSON.stringify({ date: currentDateRef.current, ids: [...next] })); } catch {}
       return next;
     });
+    syncCompletedUp(currentDateRef.current, id);   // mirror to the account (fire-and-forget)
   }, []);
 
-  // Load persisted "listened" marks for the current briefing (reset on a new day)
+  // Load persisted "listened" marks for the current briefing (reset on a new day).
+  // localStorage paints instantly; the account's rows merge in when they arrive.
   useEffect(() => {
     const d = briefing?.date;
     if (!d) return;
@@ -101,6 +133,14 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
       const obj = raw ? JSON.parse(raw) : null;
       setCompletedIds(obj?.date === d && Array.isArray(obj.ids) ? new Set(obj.ids) : new Set());
     } catch { setCompletedIds(new Set()); }
+    fetchCompleted(d).then((ids) => {
+      if (!ids.length) return;
+      setCompletedIds((prev) => {
+        const next = new Set(prev); ids.forEach((x) => next.add(x));
+        try { localStorage.setItem(COMPLETED_KEY, JSON.stringify({ date: d, ids: [...next] })); } catch {}
+        return next;
+      });
+    });
   }, [briefing?.date]);
 
   // Keep refs in sync

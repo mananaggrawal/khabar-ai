@@ -150,15 +150,11 @@ function HeroCard({
 
   return (
     <div
-      className="mx-4 mb-4 relative overflow-hidden rounded-3xl"
+      className="mx-4 mb-4 relative overflow-hidden rounded-3xl bg-cover bg-center"
       style={{
         height: 220,
-        background: [
-          "radial-gradient(ellipse 65% 80% at 72% 60%, rgba(148,55,255,0.92) 0%, rgba(100,35,210,0.70) 28%, rgba(55,15,140,0.35) 55%, transparent 75%)",
-          "radial-gradient(circle at 58% 38%, rgba(210,165,255,0.40) 0%, transparent 32%)",
-          "radial-gradient(ellipse at 20% 80%, rgba(18,10,70,0.75) 0%, transparent 55%)",
-          "linear-gradient(160deg, #03030d 0%, #060518 45%, #07051c 100%)",
-        ].join(", "),
+        backgroundImage: "url(/hero-orb.jpg)",
+        backgroundColor: "#07051c",
       }}
     >
       {/* Overlay */}
