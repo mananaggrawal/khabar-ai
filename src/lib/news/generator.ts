@@ -15,7 +15,7 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fetchRss, type RssItem } from "./rss";
-import { FEEDS, FEED_MAP, SECTION_ORDER, DEFAULT_CITY, type SectionId } from "./sources";
+import { FEEDS, FEED_MAP, SECTION_ORDER, DEFAULT_CITY, matchPublisher, type SectionId } from "./sources";
 import { edgeTTS } from "@/lib/tts/edge";
 import { elevenLabsTTS, isQuotaExhausted } from "@/lib/tts/elevenlabs";
 import { googleTTS, isDailyQuotaExhausted } from "@/lib/tts/google";
@@ -359,14 +359,22 @@ function storyId(url: string): string {
  * Stories from the headlines feed that match a topical story → inHeadlinesFeed flag set.
  * Stories unique to the headlines feed → section = "headlines".
  */
-function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]; headlineIds: Set<string>; staleDropped: number; blockedDropped: number } {
+function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]; headlineIds: Set<string>; staleDropped: number; blockedDropped: number; notAllowedDropped: number } {
   const seenIds    = new Set<string>();
   const seenTitles = new Set<string>();
   const idToIdx    = new Map<string, number>();
   const titleToIdx = new Map<string, number>();
   const stories: Story[] = [];
   const headlineIds = new Set<string>();
-  let staleDropped = 0, blockedDropped = 0;
+  let staleDropped = 0, blockedDropped = 0, notAllowedDropped = 0;
+
+  // Publisher allowlist (2026-07-02): generation only keeps ToI, NDTV, The Hindu,
+  // Hindustan Times, Indian Express, Economic Times, Mint — everything else is
+  // dropped here, before dedup/freshness checks. Escape hatch: ALLOW_ALL_SOURCES=true.
+  const allowAll = process.env.ALLOW_ALL_SOURCES === "true";
+  function isAllowed(item: RssItem): boolean {
+    return allowAll || matchPublisher(item.source) !== null;
+  }
 
   // Only today's news: drop items older than STORY_MAX_AGE_HOURS (default 24h),
   // and anything dated in the future (clock-skew tolerance 2h).
@@ -413,6 +421,7 @@ function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]
       const id  = storyId(item.link);
       const key = normalize(item.title).slice(0, 60);
       if (seenIds.has(id) || seenTitles.has(key)) continue;
+      if (!isAllowed(item)) { notAllowedDropped++; continue; }
       if (isBlocked(item)) { blockedDropped++; continue; }
       if (!isFresh(item))  { staleDropped++;   continue; }
       addStory(item, feedId);
@@ -427,6 +436,7 @@ function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]
       const idx = idToIdx.get(id) ?? titleToIdx.get(key);
       if (idx != null) headlineIds.add(stories[idx].id);
     } else {
+      if (!isAllowed(item)) { notAllowedDropped++; continue; }
       if (isBlocked(item)) { blockedDropped++; continue; }
       if (!isFresh(item))  { staleDropped++;   continue; }
       const idx = addStory(item, "headlines");
@@ -434,7 +444,7 @@ function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]
     }
   }
 
-  return { stories, headlineIds, staleDropped, blockedDropped };
+  return { stories, headlineIds, staleDropped, blockedDropped, notAllowedDropped };
 }
 
 // ─── Step 2b: OG image fetching ───────────────────────────────────────────────
@@ -720,7 +730,28 @@ function capProportional(
   return out;
 }
 
-// ─── Step 4: Cluster same-event articles (single AI call) ────────────────────
+// ─── Step 4: No clustering (2026-07-02) ──────────────────────────────────────
+// Per editorial decision: clustering (the LLM grouping call) was producing
+// mis-tagged/mis-grouped events, so it's disabled by default (re-enable via
+// ENABLE_CLUSTERING=true). Each raw article becomes its own event, 1:1 —
+// no AI grouping, no fuzzy/semantic dedup. The only dedup applied is the
+// exact-title-match dedup already done upstream in buildRawStories.
+function buildSoloEvents(stories: Story[], headlineIds: Set<string>): SelectedEvent[] {
+  return stories.map(s => ({
+    eventId:          s.id,
+    title:            s.title,
+    section:          s.section,
+    sourceStories:    [s],
+    publisherCount:   1,
+    publishers:       [s.source],
+    imageUrl:         s.imageUrl,
+    firstPublishedAt: s.publishedAt,
+    inHeadlinesFeed:  headlineIds.has(s.id),
+    whyImportant:     "",
+  }));
+}
+
+// ─── Step 4b: Cluster same-event articles (single AI call, opt-in) ───────────
 
 async function clusterAndSelect(
   stories: Story[],
@@ -1283,44 +1314,11 @@ export async function generateDailyBriefing(
   const rawTotal = [...feedMap.values()].reduce((n, v) => n + v.length, 0);
   log(`Fetched ${rawTotal} raw items from ${feedMap.size} feeds (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
 
-  // TEMP DEBUG (2026-07-02): publisher breakdown of the PURE RSS response —
-  // every item as returned by Google News, before dedup/freshness/blocklist filtering.
-  // Broken out PER FEED (not collapsed into one merged list) so overlap/duplication
-  // across feeds is visible too.
-  {
-    log(`[debug] PURE RSS — per-feed publisher breakdown (${rawTotal} raw items across ${feedMap.size} feeds, before any filtering):`);
-    for (const [feedId, items] of feedMap.entries()) {
-      const bySource = new Map<string, number>();
-      for (const item of items) {
-        const src = item.source || "UNKNOWN";
-        bySource.set(src, (bySource.get(src) ?? 0) + 1);
-      }
-      const sorted = [...bySource.entries()].sort((a, b) => b[1] - a[1]);
-      log(`[debug]  ── feed "${feedId}" (${items.length} items, ${sorted.length} unique sources) ──`);
-      for (const [src, n] of sorted) {
-        log(`[debug]   ${n.toString().padStart(3)}  (${((100 * n) / items.length).toFixed(1)}%)  ${src}`);
-      }
-    }
-
-    const bySourceAll = new Map<string, number>();
-    for (const items of feedMap.values()) {
-      for (const item of items) {
-        const src = item.source || "UNKNOWN";
-        bySourceAll.set(src, (bySourceAll.get(src) ?? 0) + 1);
-      }
-    }
-    const sortedAll = [...bySourceAll.entries()].sort((a, b) => b[1] - a[1]);
-    log(`[debug]  ── ALL FEEDS COMBINED (${rawTotal} raw items incl. cross-feed dupes, ${sortedAll.length} unique sources) ──`);
-    for (const [src, n] of sortedAll) {
-      log(`[debug]   ${n.toString().padStart(3)}  (${((100 * n) / rawTotal).toFixed(1)}%)  ${src}`);
-    }
-  }
-
   if (isAbortRequested()) throw new Error("Aborted by user");
 
   // Step 2: Dedup
-  const { stories: rawStories, headlineIds, staleDropped, blockedDropped } = buildRawStories(feedMap);
-  log(`After dedup: ${rawStories.length} unique articles (${headlineIds.size} on Google homepage) — dropped ${staleDropped} stale, ${blockedDropped} blocked-source`);
+  const { stories: rawStories, headlineIds, staleDropped, blockedDropped, notAllowedDropped } = buildRawStories(feedMap);
+  log(`After dedup: ${rawStories.length} unique articles (${headlineIds.size} on Google homepage) — dropped ${staleDropped} stale, ${blockedDropped} blocked-source, ${notAllowedDropped} non-allowlisted publisher`);
   for (const [sectionId, config] of FEED_MAP) {
     const n = rawStories.filter(s => s.section === sectionId).length;
     if (n > 0) log(`  ${config.emoji} ${config.label}: ${n}`);
@@ -1335,33 +1333,54 @@ export async function generateDailyBriefing(
   const targets = proportionalTargets(supplyBySection, MAX_STORIES);
   log(`Per-section targets (proportional to fetch): ${SECTION_ORDER.map(x => targets.get(x) ? `${x} ${targets.get(x)}` : null).filter(Boolean).join(", ")}`);
 
-  // Feed the clustering call a bounded set: ~2× each section's target (headroom
-  // for de-duping), min 6 so small sections still have candidates. Keeps the one
-  // LLM call fast (≈200 titles, not 399) while supporting the targets.
-  const rawSeen = new Map<SectionId, number>();
-  const clusterInput = rawStories.filter(s => {
-    const cap = Math.max(6, (targets.get(s.section) ?? 1) * 2);
-    const c = rawSeen.get(s.section) ?? 0;
-    if (c >= cap) return false;
-    rawSeen.set(s.section, c + 1);
-    return true;
-  });
-  log(`Clustering input: ${clusterInput.length} articles (from ${rawStories.length})`);
+  const ENABLE_CLUSTERING = process.env.ENABLE_CLUSTERING === "true"; // default OFF — see Step 4 comment
 
-  // Steps 2b + 4 in parallel: OG images + cluster
   const t1 = Date.now();
-  const liveImageById = new Map<string, string>();
-  const [withImages, selectedEvents] = await Promise.all([
-    fetchAllOgImages(clusterInput, log, liveImageById),
-    clusterAndSelect(clusterInput, headlineIds, MAX_STORIES, log, targets),
-  ]);
-  const clusterSec = (Date.now() - t1) / 1000;
+  let selectedEvents: SelectedEvent[];
 
-  // Merge OG images into events
-  const imageById = new Map(withImages.map(s => [s.id, s.imageUrl]));
-  for (const ev of selectedEvents) {
-    if (!ev.imageUrl) ev.imageUrl = ev.sourceStories.map(s => imageById.get(s.id)).find(Boolean);
+  if (ENABLE_CLUSTERING) {
+    // Feed the clustering call a bounded set: ~2× each section's target (headroom
+    // for de-duping), min 6 so small sections still have candidates. Keeps the one
+    // LLM call fast (≈200 titles, not 399) while supporting the targets.
+    const rawSeen = new Map<SectionId, number>();
+    const clusterInput = rawStories.filter(s => {
+      const cap = Math.max(6, (targets.get(s.section) ?? 1) * 2);
+      const c = rawSeen.get(s.section) ?? 0;
+      if (c >= cap) return false;
+      rawSeen.set(s.section, c + 1);
+      return true;
+    });
+    log(`Clustering input: ${clusterInput.length} articles (from ${rawStories.length})`);
+
+    // Steps 2b + 4 in parallel: OG images + cluster
+    const liveImageById = new Map<string, string>();
+    const [withImages, clustered] = await Promise.all([
+      fetchAllOgImages(clusterInput, log, liveImageById),
+      clusterAndSelect(clusterInput, headlineIds, MAX_STORIES, log, targets),
+    ]);
+    selectedEvents = clustered;
+
+    // Merge OG images into events
+    const imageById = new Map(withImages.map(s => [s.id, s.imageUrl]));
+    for (const ev of selectedEvents) {
+      if (!ev.imageUrl) ev.imageUrl = ev.sourceStories.map(s => imageById.get(s.id)).find(Boolean);
+    }
+  } else {
+    // No clustering: every raw (already exact-title-deduped) article is its own
+    // event; cap proportionally to section targets, then fetch OG images only
+    // for the articles that actually made the cut.
+    const soloEvents = buildSoloEvents(rawStories, headlineIds);
+    selectedEvents = capProportional(soloEvents, MAX_STORIES, targets);
+    log(`Clustering disabled — ${selectedEvents.length} solo events selected from ${rawStories.length} raw articles`);
+
+    const liveImageById = new Map<string, string>();
+    const withImages = await fetchAllOgImages(selectedEvents.map(ev => ev.sourceStories[0]), log, liveImageById);
+    const imageById = new Map(withImages.map(s => [s.id, s.imageUrl]));
+    for (const ev of selectedEvents) {
+      if (!ev.imageUrl) ev.imageUrl = imageById.get(ev.sourceStories[0].id);
+    }
   }
+  const clusterSec = (Date.now() - t1) / 1000;
 
   log(`${selectedEvents.length} events — est. ~${Math.round(selectedEvents.length * WORDS_PER_STORY / WORDS_PER_MINUTE)} min briefing`);
 

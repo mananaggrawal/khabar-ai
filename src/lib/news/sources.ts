@@ -171,3 +171,49 @@ export function readPreferredSections(): Set<SectionId> {
   } catch {}
   return new Set(SECTION_CONFIGS.map((c) => c.id)); // default: all 4 sections
 }
+
+// ── Publisher allowlist (2026-07-02) ──────────────────────────────────────────
+// Generation only keeps articles from these 7 mastheads — everything else is
+// dropped during fetch. `match` recognises the RSS <source> string variants
+// each publisher actually shows up as (e.g. "NDTV Profit", "NDTV Sports").
+// Shared between the server (generator.ts allowlist filter) and the client
+// (Settings "Sources" picker + the reader filter in context/player.tsx) so
+// both sides agree on what counts as "NDTV" etc.
+export type PublisherKey = "toi" | "ndtv" | "hindu" | "ht" | "ie" | "et" | "mint";
+
+export const ALLOWED_PUBLISHERS: { key: PublisherKey; label: string; match: (source: string) => boolean }[] = [
+  { key: "toi",   label: "Times of India",     match: (s) => s.toLowerCase().includes("times of india") },
+  { key: "ndtv",  label: "NDTV",               match: (s) => s.toLowerCase().includes("ndtv") },
+  { key: "hindu", label: "The Hindu",          match: (s) => s.toLowerCase().includes("the hindu") },
+  { key: "ht",    label: "Hindustan Times",    match: (s) => s.toLowerCase().includes("hindustan times") },
+  // "Indian Express" but NOT "The New Indian Express" — a different masthead.
+  { key: "ie",    label: "Indian Express",     match: (s) => { const l = s.toLowerCase(); return l.includes("indian express") && !l.includes("new indian express"); } },
+  { key: "et",    label: "Economic Times",     match: (s) => s.toLowerCase().includes("economic times") },
+  { key: "mint",  label: "Mint",               match: (s) => { const l = s.toLowerCase(); return l === "mint" || l.includes("livemint"); } },
+];
+
+/** Returns the PublisherKey a raw RSS source string belongs to, or null if it's not one of the 7 allowed mastheads. */
+export function matchPublisher(source: string | undefined): PublisherKey | null {
+  if (!source) return null;
+  for (const p of ALLOWED_PUBLISHERS) if (p.match(source)) return p.key;
+  return null;
+}
+
+// ── Publisher preference (localStorage, client-side only) ────────────────────
+// Which of the 7 allowed publishers the reader wants to hear. Default = all 7
+// (no filtering). Applied client-side over the shared generated briefing —
+// generation itself already restricts to these 7, this just narrows further
+// to the reader's personal pick(s).
+
+export const PUBLISHERS_KEY = "khabar-preferred-publishers";
+
+export function readPreferredPublishers(): Set<PublisherKey> {
+  try {
+    const stored = localStorage.getItem(PUBLISHERS_KEY);
+    if (stored) {
+      const arr = JSON.parse(stored) as PublisherKey[];
+      if (Array.isArray(arr) && arr.length > 0) return new Set(arr);
+    }
+  } catch {}
+  return new Set(ALLOWED_PUBLISHERS.map((p) => p.key)); // default: all 7
+}

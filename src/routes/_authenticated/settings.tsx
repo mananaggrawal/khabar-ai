@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { Check, MessageCircle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
-import { CITY_KEY, DEFAULT_CITY, MAJOR_CITIES } from "@/lib/news/sources";
+import { CITY_KEY, DEFAULT_CITY, MAJOR_CITIES, ALLOWED_PUBLISHERS, PUBLISHERS_KEY, readPreferredPublishers, type PublisherKey } from "@/lib/news/sources";
 import { BottomNav } from "@/components/BottomNav";
 import { usePlayer } from "@/context/player";
 
@@ -40,6 +40,7 @@ function SettingsPage() {
   const [selectedLang, setSelectedLang]       = useState<string>(readLanguage);
   const [availableLangs, setAvailableLangs]   = useState<string[]>(readAvailableLanguages);
   const [selectedCity, setSelectedCity]       = useState<string>(readCity);
+  const [selectedPublishers, setSelectedPublishers] = useState<Set<PublisherKey>>(readPreferredPublishers);
 
   // Re-read available languages on mount
   useEffect(() => {
@@ -64,6 +65,23 @@ function SettingsPage() {
   function selectCity(city: string) {
     setSelectedCity(city);
     try { localStorage.setItem(CITY_KEY, city); } catch {}
+  }
+
+  function togglePublisher(key: PublisherKey) {
+    setSelectedPublishers((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        if (next.size === 1) return prev; // keep at least one source selected
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      try {
+        localStorage.setItem(PUBLISHERS_KEY, JSON.stringify([...next]));
+        window.dispatchEvent(new StorageEvent("storage", { key: PUBLISHERS_KEY, newValue: JSON.stringify([...next]) }));
+      } catch {}
+      return next;
+    });
   }
 
   async function signOut() {
@@ -158,6 +176,34 @@ function SettingsPage() {
                 >
                   {active && <Check className="size-3.5 text-primary" />}
                   {city}
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* Sources */}
+        <section>
+          <h2 className="font-serif text-lg">Sources</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Which publishers your briefing pulls stories from. Pick one or several.
+          </p>
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            {ALLOWED_PUBLISHERS.map((pub) => {
+              const active = selectedPublishers.has(pub.key);
+              return (
+                <button
+                  key={pub.key}
+                  onClick={() => togglePublisher(pub.key)}
+                  className={cn(
+                    "flex items-center gap-2 rounded-2xl border px-4 py-2.5 text-left text-sm transition-colors",
+                    active
+                      ? "border-primary/40 bg-primary/10 text-foreground font-medium"
+                      : "border-border text-foreground/70 hover:border-border/80 hover:bg-black/[0.02]",
+                  )}
+                >
+                  {active && <Check className="size-3.5 text-primary" />}
+                  {pub.label}
                 </button>
               );
             })}
