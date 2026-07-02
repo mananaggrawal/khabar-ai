@@ -51,7 +51,7 @@ const TOPIC: Record<string, string> = {
 export const FEEDS: FeedConfig[] = [
   {
     feedId:  "headlines",
-    label:   "Top Stories",
+    label:   "Headlines",
     labelHi: "मुख्य खबरें",
     emoji:   "🔥",
     buildUrl: () => `${GN_BASE}?${LOCALE}`,
@@ -128,7 +128,7 @@ export const FEEDS: FeedConfig[] = [
 export const SECTION_ORDER: SectionId[] = ["headlines", "india", "world", "business", "technology", "sports", "science", "health", "local"];
 
 const SECTION_CONFIGS: SectionConfig[] = [
-  { id: "headlines",  label: "Top Stories", labelHi: "मुख्य खबरें", emoji: "🔥" },
+  { id: "headlines",  label: "Headlines",   labelHi: "मुख्य खबरें", emoji: "🔥" },
   { id: "india",      label: "India",       labelHi: "भारत",         emoji: "🇮🇳" },
   { id: "world",      label: "World",       labelHi: "विश्व",         emoji: "🌍" },
   { id: "business",   label: "Business",    labelHi: "व्यापार",       emoji: "💼" },

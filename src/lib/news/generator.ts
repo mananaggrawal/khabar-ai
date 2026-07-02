@@ -356,12 +356,12 @@ function storyId(url: string): string {
 /**
  * Dedup articles across all 9 feeds.
  * Processing order: india/world/business/technology/sports/science/health/local → headlines.
- * Stories from the headlines feed that match a topical story, or are unique to it,
- * get inHeadlinesFeed=true (Google's homepage also carried it — kept only as a
- * secondary signal). Section assignment no longer treats "headlines" as its own
- * feed-derived bucket: homepage-unique items default to "india", and the actual
- * Top Stories section is assigned afterwards, structurally, by cross-publisher
- * corroboration (see promoteCorroboratedToTopStories()).
+ * Stories from the headlines feed that match a topical story → inHeadlinesFeed flag set.
+ * Stories unique to the headlines feed → section = "headlines" (renamed "Headlines"
+ * in the UI, 2026-07-02) — i.e. every fresh, allowlisted item from Google's plain
+ * homepage feed, unfiltered. (Tried keyword-filtering and cross-publisher
+ * corroboration first; reverted per editorial decision — keep it simple: this
+ * section is just "the headlines Google's homepage surfaced from these 7 papers.")
  */
 function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]; headlineIds: Set<string>; staleDropped: number; blockedDropped: number; notAllowedDropped: number } {
   const seenIds    = new Set<string>();
@@ -432,13 +432,7 @@ function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]
     }
   }
 
-  // Headlines last — mark matches (Google's homepage saw this too — kept as a
-  // signal, see inHeadlinesFeed), and file homepage-unique items under "india"
-  // by default. NOTE (2026-07-02): Google's homepage feed no longer auto-defines
-  // the "headlines"/Top Stories section — that used to let one opaque feed (which
-  // mixes in entertainment/celebrity content) decide what counts as "top" with no
-  // importance check. Top Stories is now assigned structurally, after dedup, based
-  // on cross-publisher corroboration — see promoteCorroboratedToTopStories().
+  // Headlines last — mark matches, add unique ones as "headlines" section.
   for (const item of feedMap.get("headlines") ?? []) {
     const id  = storyId(item.link);
     const key = normalize(item.title).slice(0, 60);
@@ -449,7 +443,7 @@ function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]
       if (!isAllowed(item)) { notAllowedDropped++; continue; }
       if (isBlocked(item)) { blockedDropped++; continue; }
       if (!isFresh(item))  { staleDropped++;   continue; }
-      const idx = addStory(item, "india");
+      const idx = addStory(item, "headlines");
       headlineIds.add(stories[idx].id);
     }
   }
@@ -640,30 +634,6 @@ function foldEventInto(keep: SelectedEvent, dup: SelectedEvent): void {
   if (!keep.imageUrl) keep.imageUrl = dup.imageUrl;
   keep.inHeadlinesFeed = keep.inHeadlinesFeed || dup.inHeadlinesFeed;
   if (!keep.whyImportant && dup.whyImportant) keep.whyImportant = dup.whyImportant;
-}
-
-/**
- * Structural (non-AI, no-keyword) definition of Top Stories (2026-07-02):
- * an event counts as "top" ONLY if 2+ of the 7 allowed publishers independently
- * reported it — i.e. mergeDuplicateEvents folded 2+ distinct publishers' articles
- * into one event, real cross-newsroom corroboration. Deliberately does NOT use
- * Google's homepage feed (inHeadlinesFeed) as a shortcut here — that single,
- * opaque feed mixing in entertainment/celebrity content picked with no
- * importance check is exactly what caused Top Stories to include things like
- * Bollywood news in the first place. Everything else keeps whichever topic-feed
- * section it was originally fetched under. No keyword list, no AI judgment —
- * just a verifiable, mechanical "did independent newsrooms agree this mattered."
- */
-function promoteCorroboratedToTopStories(events: SelectedEvent[]): number {
-  let promoted = 0;
-  for (const ev of events) {
-    if (ev.section === "headlines") continue;
-    if (ev.publisherCount >= 2) {
-      ev.section = "headlines";
-      promoted++;
-    }
-  }
-  return promoted;
 }
 
 /**
@@ -973,7 +943,7 @@ async function scriptEvent(
   const topStories   = ev.sourceStories.slice(0, 3);
   const articleTexts = await Promise.all(topStories.map(s => fetchArticleText(s.link)));
 
-  const sectionLabel = ev.section === "headlines" ? "Top Stories"
+  const sectionLabel = ev.section === "headlines" ? "Headlines"
     : ev.section.charAt(0).toUpperCase() + ev.section.slice(1);
 
   const sourcesText = ev.sourceStories.slice(0, 5).map((s, i) => {
@@ -1414,11 +1384,6 @@ export async function generateDailyBriefing(
     // per publisher that covered it, since dedup upstream is exact-title-only.
     const { merged, removed } = mergeDuplicateEvents(soloEvents);
     if (removed > 0) log(`Merged ${removed} near-duplicate event(s) by title overlap`);
-
-    // Structural Top Stories: promote events independently corroborated by 2+
-    // of the 7 allowed publishers — see promoteCorroboratedToTopStories() comment.
-    const promoted = promoteCorroboratedToTopStories(merged);
-    log(`Top Stories: ${promoted} event(s) promoted by cross-publisher corroboration (2+ independent publishers)`);
 
     const capEnabled = process.env.CAP_SOLO_EVENTS === "true";
     selectedEvents = capEnabled ? capProportional(merged, MAX_STORIES, targets) : merged;
