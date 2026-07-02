@@ -1366,12 +1366,16 @@ export async function generateDailyBriefing(
       if (!ev.imageUrl) ev.imageUrl = ev.sourceStories.map(s => imageById.get(s.id)).find(Boolean);
     }
   } else {
-    // No clustering: every raw (already exact-title-deduped) article is its own
-    // event; cap proportionally to section targets, then fetch OG images only
-    // for the articles that actually made the cut.
+    // No clustering + no cap (2026-07-02): with generation restricted to the
+    // 7-publisher allowlist, the point is to include EVERY article those papers
+    // published (post exact-title-dedup, post freshness) — not trim down to
+    // MAX_STORIES/TARGET_MINUTES. Briefing length is however much these 7
+    // papers actually produced that day, not a fixed target. (Re-enable a cap
+    // via CAP_SOLO_EVENTS=true if this ever needs bounding again.)
     const soloEvents = buildSoloEvents(rawStories, headlineIds);
-    selectedEvents = capProportional(soloEvents, MAX_STORIES, targets);
-    log(`Clustering disabled — ${selectedEvents.length} solo events selected from ${rawStories.length} raw articles`);
+    const capEnabled = process.env.CAP_SOLO_EVENTS === "true";
+    selectedEvents = capEnabled ? capProportional(soloEvents, MAX_STORIES, targets) : soloEvents;
+    log(`Clustering disabled — ${selectedEvents.length} solo events${capEnabled ? ` (capped from ${rawStories.length})` : ` — ALL allowlisted raw articles included, no cap`}`);
 
     const liveImageById = new Map<string, string>();
     const withImages = await fetchAllOgImages(selectedEvents.map(ev => ev.sourceStories[0]), log, liveImageById);
