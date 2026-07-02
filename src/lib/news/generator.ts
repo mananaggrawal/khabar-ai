@@ -1373,9 +1373,17 @@ export async function generateDailyBriefing(
     // papers actually produced that day, not a fixed target. (Re-enable a cap
     // via CAP_SOLO_EVENTS=true if this ever needs bounding again.)
     const soloEvents = buildSoloEvents(rawStories, headlineIds);
+
+    // Non-AI near-duplicate merge only (title-token overlap / shared source article)
+    // — same safety net used in the clustering path, minus the LLM semantic pass.
+    // Without this, the same real-world event (e.g. one rainstorm) shows up once
+    // per publisher that covered it, since dedup upstream is exact-title-only.
+    const { merged, removed } = mergeDuplicateEvents(soloEvents);
+    if (removed > 0) log(`Merged ${removed} near-duplicate event(s) by title overlap`);
+
     const capEnabled = process.env.CAP_SOLO_EVENTS === "true";
-    selectedEvents = capEnabled ? capProportional(soloEvents, MAX_STORIES, targets) : soloEvents;
-    log(`Clustering disabled — ${selectedEvents.length} solo events${capEnabled ? ` (capped from ${rawStories.length})` : ` — ALL allowlisted raw articles included, no cap`}`);
+    selectedEvents = capEnabled ? capProportional(merged, MAX_STORIES, targets) : merged;
+    log(`Clustering disabled — ${selectedEvents.length} events${capEnabled ? ` (capped from ${merged.length})` : ` — all allowlisted, near-duplicate-merged articles included, no cap`}`);
 
     const liveImageById = new Map<string, string>();
     const withImages = await fetchAllOgImages(selectedEvents.map(ev => ev.sourceStories[0]), log, liveImageById);
