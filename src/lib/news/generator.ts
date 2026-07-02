@@ -398,6 +398,22 @@ function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]
     return BLOCKED.some(b => src.includes(b)) || link.includes("newsonair") || link.includes("akashvani");
   }
 
+  // Top Stories quality filter (2026-07-02): Google's plain homepage feed mixes
+  // in entertainment/celebrity fluff (e.g. Bollywood) alongside genuine major
+  // news. Without clustering, nothing else filters "headlines" for importance,
+  // so a homepage-unique entertainment item would land straight in Top Stories.
+  // Keep the story (still shows up under India, same as the client's existing
+  // legacy entertainment→india mapping) — just don't let it count as Top Stories.
+  const ENTERTAINMENT_KEYWORDS = [
+    "bollywood", "hollywood", "box office", "ott release", "web series",
+    "biopic", "filmfare", "movie trailer", "music video", "album release",
+    "reality show", "bigg boss",
+  ];
+  function isEntertainment(title: string): boolean {
+    const t = title.toLowerCase();
+    return ENTERTAINMENT_KEYWORDS.some(k => t.includes(k));
+  }
+
   function addStory(item: RssItem, section: SectionId): number {
     const id  = storyId(item.link);
     const key = normalize(item.title).slice(0, 60);
@@ -439,8 +455,9 @@ function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]
       if (!isAllowed(item)) { notAllowedDropped++; continue; }
       if (isBlocked(item)) { blockedDropped++; continue; }
       if (!isFresh(item))  { staleDropped++;   continue; }
-      const idx = addStory(item, "headlines");
-      headlineIds.add(stories[idx].id);
+      const section = isEntertainment(item.title) ? "india" : "headlines";
+      const idx = addStory(item, section);
+      if (section === "headlines") headlineIds.add(stories[idx].id);
     }
   }
 
