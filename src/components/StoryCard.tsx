@@ -134,8 +134,16 @@ function StoryCardBase({ story, isPlaying, hasAudio, isCompleted = false, langua
 
       {/* Text */}
       <div className="min-w-0 flex-1">
-        <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]" style={{ color: accent }}>
-          {sectionLabel}
+        <p className="mb-0.5 flex min-w-0 items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.08em]" style={{ color: accent }}>
+          <span className="shrink-0">{sectionLabel}</span>
+          {story.source && (
+            <>
+              <span className="shrink-0 opacity-50">·</span>
+              <span className="min-w-0 truncate font-medium normal-case tracking-normal text-muted-foreground/80">
+                {story.source}
+              </span>
+            </>
+          )}
         </p>
         <p className={cn(
           "text-sm font-medium leading-snug line-clamp-2",
