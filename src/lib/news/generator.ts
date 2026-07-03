@@ -378,21 +378,25 @@ function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]
   const headlineIds = new Set<string>();
   let staleDropped = 0, blockedDropped = 0, notAllowedDropped = 0;
 
-  // Publisher allowlist (2026-07-02): generation only keeps ToI, NDTV, The Hindu,
-  // Hindustan Times, Indian Express, Economic Times, Mint — everything else is
-  // dropped here, before dedup/freshness checks. Escape hatch: ALLOW_ALL_SOURCES=true.
-  const allowAll = process.env.ALLOW_ALL_SOURCES === "true";
+  // Publisher allowlist (2026-07-02, opened back up 2026-07-03): generation now
+  // allows ALL publishers by default — the 7-masthead restriction (ToI, NDTV,
+  // The Hindu, Hindustan Times, Indian Express, Economic Times, Mint) was
+  // cutting ~67% of raw fetch volume and was the likely cause of "important
+  // stories missing." The allowlist machinery (matchPublisher/ALLOWED_PUBLISHERS)
+  // stays in place for the Settings "Sources" picker, which still lets a reader
+  // narrow to just those 7 if they want — this only affects what generation
+  // includes for everyone. Escape hatch: ALLOW_ALL_SOURCES=false to restrict again.
+  const allowAll = process.env.ALLOW_ALL_SOURCES !== "false";
   function isAllowed(item: RssItem): boolean {
     return allowAll || matchPublisher(item.source) !== null;
   }
 
-  // TEMP (2026-07-02): title-based dedup disabled by default while diagnosing
-  // whether it's silently dropping distinct articles (a genuinely different
-  // story can share the first-60-normalized-chars of its title with an
-  // unrelated one). Exact-URL dedup (seenIds) always stays on regardless —
-  // that's just "don't add the same link twice," not a content judgment.
-  // Re-enable with ENABLE_TITLE_DEDUP=true once diagnosed.
-  const titleDedupEnabled = process.env.ENABLE_TITLE_DEDUP === "true";
+  // Title-based dedup (normalized first-60-chars match) — re-enabled 2026-07-03
+  // after diagnosis showed the near-duplicate merge (a smarter, full-title-
+  // overlap tool) is what actually needed to be off/on, not this. Exact-URL
+  // dedup (seenIds) always stays on regardless of this flag either way.
+  // Escape hatch: ENABLE_TITLE_DEDUP=false.
+  const titleDedupEnabled = process.env.ENABLE_TITLE_DEDUP !== "false";
 
   // Only today's news: drop items older than STORY_MAX_AGE_HOURS (default 24h),
   // and anything dated in the future (clock-skew tolerance 2h).
@@ -1483,7 +1487,7 @@ export async function generateDailyBriefing(
 
     const capEnabled = process.env.CAP_SOLO_EVENTS === "true";
     selectedEvents = capEnabled ? capProportional(topicGrouped, MAX_STORIES, targets) : topicGrouped;
-    log(`Clustering disabled (title-dedup ${process.env.ENABLE_TITLE_DEDUP === "true" ? "on" : "off"}, merge ${dupMergeEnabled ? "on" : "off"}, topic-grouping ${topicGroupingEnabled ? "on" : "off"}) — ${selectedEvents.length} events${capEnabled ? ` (capped from ${topicGrouped.length})` : ", no cap"}`);
+    log(`Clustering disabled (title-dedup ${process.env.ENABLE_TITLE_DEDUP !== "false" ? "on" : "off"}, merge ${dupMergeEnabled ? "on" : "off"}, topic-grouping ${topicGroupingEnabled ? "on" : "off"}) — ${selectedEvents.length} events${capEnabled ? ` (capped from ${topicGrouped.length})` : ", no cap"}`);
 
     const liveImageById = new Map<string, string>();
     const withImages = await fetchAllOgImages(selectedEvents.map(ev => ev.sourceStories[0]), log, liveImageById);
