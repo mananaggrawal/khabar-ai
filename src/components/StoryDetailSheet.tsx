@@ -20,6 +20,10 @@ interface StoryDetailSheetProps {
   onSave?: () => void;
   /** Render above the full-screen player (which sits at z-60) */
   elevated?: boolean;
+  /** True while the floating mini-player is visible — reserves extra bottom
+   *  space in the scrollable body so it doesn't cover the last item(s), e.g.
+   *  the "Search on ChatGPT" link. */
+  hasMiniPlayer?: boolean;
 }
 
 function timeAgo(iso: string): string {
@@ -88,6 +92,7 @@ export function StoryDetailSheet({
   isSaved,
   onSave,
   elevated = false,
+  hasMiniPlayer = false,
 }: StoryDetailSheetProps) {
   const dragControls = useDragControls();
   if (typeof document === "undefined") return null;
@@ -184,7 +189,10 @@ export function StoryDetailSheet({
             </div>{/* /drag-to-dismiss zone */}
 
             {/* Scrollable body */}
-            <div className="flex-1 overflow-y-auto px-5 pb-4">
+            <div
+              className="flex-1 overflow-y-auto px-5"
+              style={{ paddingBottom: hasMiniPlayer ? "calc(env(safe-area-inset-bottom, 0px) + 84px)" : "1rem" }}
+            >
               {/* Summary */}
               {script && (
                 <div className="mb-5">

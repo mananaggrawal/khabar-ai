@@ -197,6 +197,7 @@ function SavedPage() {
         isPlaying={!!detailStory && mono.currentStory?.id === detailStory.id && mono.state === "playing"}
         isSaved={detailStory ? isSaved(detailStory.id) : false}
         onSave={() => detailStory && toggle(detailStory)}
+        hasMiniPlayer={mono.state === "playing" || mono.state === "paused"}
       />
     </div>
   );
