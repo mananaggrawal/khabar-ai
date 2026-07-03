@@ -38,7 +38,9 @@ function SavedMiniPlayer({ mono, onOpen }: { mono: ReturnType<typeof useMonologu
           initial={{ y: 100, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 100, opacity: 0 }}
           transition={{ type: "spring", damping: 28, stiffness: 320 }}
           style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 62px)" }}
-          className="fixed inset-x-3 z-50"
+          // z-[58]: above the story-detail summary drawer (z-55/56) so play/pause
+          // stays reachable while it's open, but below the full-screen player (z-60).
+          className="fixed inset-x-3 z-[58]"
         >
           <div className="relative overflow-hidden rounded-2xl border border-border bg-background/95 backdrop-blur-md shadow-xl cursor-pointer" onClick={onOpen}>
             <div className="absolute top-0 left-0 h-[2px] bg-primary transition-all duration-300" style={{ width: `${progress * 100}%` }} />

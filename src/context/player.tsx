@@ -62,7 +62,10 @@ function MiniPlayer({
           exit={{ y: 100, opacity: 0 }}
           transition={{ type: "spring", damping: 28, stiffness: 320 }}
           style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 62px)" }}
-          className="fixed inset-x-3 z-50"
+          // z-[58]: above the story-detail summary drawer (z-55/56) so play/pause
+          // stays reachable while it's open, but below the full-screen player
+          // (z-60), which already has its own transport controls.
+          className="fixed inset-x-3 z-[58]"
         >
           <div
             className="relative overflow-hidden rounded-2xl border border-border bg-background/95 backdrop-blur-md shadow-xl cursor-pointer"
