@@ -15,7 +15,7 @@ import { fetchBriefing } from "@/lib/news/briefing.functions";
 import { useMonologue, getStoryTitle } from "@/hooks/useMonologue";
 import { useSavedStories } from "@/hooks/useSavedStories";
 import { PlayerScreen } from "@/components/PlayerScreen";
-import { type SectionId, matchPublisher, readPreferredPublishers, PUBLISHERS_KEY } from "@/lib/news/sources";
+import { type SectionId } from "@/lib/news/sources";
 import type { Story, DailyBriefing } from "@/lib/news/generator";
 
 const SECTION_DISPLAY_ORDER: SectionId[] = ["headlines", "india", "world", "business", "technology", "sports", "science", "health"];
@@ -122,17 +122,6 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     enabled: typeof window !== "undefined",
   });
 
-  // Reader's preferred publisher(s) — set in Settings → Sources. Default = all 7
-  // allowed mastheads (no narrowing). Re-read live when Settings updates it.
-  const [preferredPublishers, setPreferredPublishers] = useState(readPreferredPublishers);
-  useEffect(() => {
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === PUBLISHERS_KEY) setPreferredPublishers(readPreferredPublishers());
-    };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, []);
-
   const rawBriefing = briefingQuery.data ?? null;
   const briefing = useMemo(() => {
     if (!rawBriefing) return null;
@@ -142,17 +131,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     };
     const stories = rawBriefing.stories
       .map((s, i) => ({ s, i }))
-      .filter(({ s }) => {
-        const key = matchPublisher(s.source);
-        // Stories from outside the 7-publisher allowlist (shouldn't happen post-generation,
-        // but be defensive) are never filtered out by preference — only allowlisted
-        // publishers are narrowed by the reader's picks.
-        return key === null || preferredPublishers.has(key);
-      })
       .sort((a, b) => rank(a.s) - rank(b.s) || a.i - b.i)
       .map((x) => x.s);
     return { ...rawBriefing, stories };
-  }, [rawBriefing, preferredPublishers]);
+  }, [rawBriefing]);
 
   const mono = useMonologue({ briefing });
 

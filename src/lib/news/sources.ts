@@ -167,28 +167,14 @@ export const ALLOWED_PUBLISHERS: { key: PublisherKey; label: string; match: (sou
   { key: "mint",  label: "Mint",               match: (s) => { const l = s.toLowerCase(); return l === "mint" || l.includes("livemint"); } },
 ];
 
-/** Returns the PublisherKey a raw RSS source string belongs to, or null if it's not one of the 7 allowed mastheads. */
+/**
+ * Returns the PublisherKey a raw RSS source string belongs to, or null if it's
+ * not one of the 7 mastheads. Only used server-side now (generator.ts's
+ * ALLOW_ALL_SOURCES=false escape hatch) — the client-side "Sources" picker in
+ * Settings that used to narrow the reader's own feed was removed 2026-07-03.
+ */
 export function matchPublisher(source: string | undefined): PublisherKey | null {
   if (!source) return null;
   for (const p of ALLOWED_PUBLISHERS) if (p.match(source)) return p.key;
   return null;
-}
-
-// ── Publisher preference (localStorage, client-side only) ────────────────────
-// Which of the 7 allowed publishers the reader wants to hear. Default = all 7
-// (no filtering). Applied client-side over the shared generated briefing —
-// generation itself already restricts to these 7, this just narrows further
-// to the reader's personal pick(s).
-
-export const PUBLISHERS_KEY = "khabar-preferred-publishers";
-
-export function readPreferredPublishers(): Set<PublisherKey> {
-  try {
-    const stored = localStorage.getItem(PUBLISHERS_KEY);
-    if (stored) {
-      const arr = JSON.parse(stored) as PublisherKey[];
-      if (Array.isArray(arr) && arr.length > 0) return new Set(arr);
-    }
-  } catch {}
-  return new Set(ALLOWED_PUBLISHERS.map((p) => p.key)); // default: all 7
 }
