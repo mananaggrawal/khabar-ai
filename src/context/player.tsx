@@ -33,6 +33,11 @@ type PlayerContextValue = {
   isLoading: boolean;
   saved: ReturnType<typeof useSavedStories>;
   openPlayer: () => void;
+  // Whether a story-detail summary drawer is currently open somewhere (Home or
+  // Saved) — lets the mini-player hug the true bottom edge instead of leaving
+  // its usual bottom-nav clearance, since the drawer covers the nav anyway.
+  detailSheetOpen: boolean;
+  setDetailSheetOpen: (v: boolean) => void;
 };
 
 const PlayerCtx = createContext<PlayerContextValue | null>(null);
@@ -42,11 +47,15 @@ const PlayerCtx = createContext<PlayerContextValue | null>(null);
 // 15-minute Highlights briefing — so Highlights gets the same persistent
 // mini-player/controls as normal playback instead of only the home hero card.
 function MiniPlayer({
-  mono, isHighlights, onOpen,
+  mono, isHighlights, onOpen, flush = false,
 }: {
   mono: ReturnType<typeof useMonologue>;
   isHighlights: boolean;
   onOpen: () => void;
+  /** True while a summary drawer covers the bottom nav — sit near the literal
+   *  bottom edge (same floating-pill look as the home screen) instead of the
+   *  usual nav-clearance offset, which would otherwise float mid-drawer. */
+  flush?: boolean;
 }) {
   if (typeof document === "undefined") return null;
   const { state, progress, currentStory, currentFeed, pause, resume, language } = mono;
@@ -61,7 +70,7 @@ function MiniPlayer({
           animate={{ y: 0, opacity: 1 }}
           exit={{ y: 100, opacity: 0 }}
           transition={{ type: "spring", damping: 28, stiffness: 320 }}
-          style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 62px)" }}
+          style={{ bottom: flush ? "calc(env(safe-area-inset-bottom, 0px) + 12px)" : "calc(env(safe-area-inset-bottom, 0px) + 62px)" }}
           // z-[58]: above the story-detail summary drawer (z-55/56) so play/pause
           // stays reachable while it's open, but below the full-screen player
           // (z-60), which already has its own transport controls.
@@ -170,6 +179,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   const saved = useSavedStories();
   const [playerOpen, setPlayerOpen] = useState(false);
+  const [detailSheetOpen, setDetailSheetOpen] = useState(false);
 
   // Whichever queue is actually active drives the mini-player/full-player —
   // the main story list takes priority if both are somehow active at once
@@ -207,12 +217,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     isLoading: briefingQuery.isLoading,
     saved,
     openPlayer: () => setPlayerOpen(true),
+    detailSheetOpen,
+    setDetailSheetOpen,
   };
 
   return (
     <PlayerCtx.Provider value={value}>
       {children}
-      <MiniPlayer mono={activeMono} isHighlights={activeIsHighlights} onOpen={() => setPlayerOpen(true)} />
+      <MiniPlayer mono={activeMono} isHighlights={activeIsHighlights} onOpen={() => setPlayerOpen(true)} flush={detailSheetOpen} />
       <PlayerScreen
         mono={activeMono}
         visible={playerOpen}

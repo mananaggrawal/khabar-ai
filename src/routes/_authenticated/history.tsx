@@ -25,7 +25,7 @@ function formatGroup(iso: string): string {
 }
 
 // Mini player for the saved page
-function SavedMiniPlayer({ mono, onOpen }: { mono: ReturnType<typeof useMonologue>; onOpen: () => void }) {
+function SavedMiniPlayer({ mono, onOpen, flush = false }: { mono: ReturnType<typeof useMonologue>; onOpen: () => void; flush?: boolean }) {
   if (typeof document === "undefined") return null;
   const { state, progress, currentStory, currentFeed, pause, resume, language } = mono;
   const visible = state === "playing" || state === "paused";
@@ -37,7 +37,7 @@ function SavedMiniPlayer({ mono, onOpen }: { mono: ReturnType<typeof useMonologu
         <motion.div
           initial={{ y: 100, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 100, opacity: 0 }}
           transition={{ type: "spring", damping: 28, stiffness: 320 }}
-          style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 62px)" }}
+          style={{ bottom: flush ? "calc(env(safe-area-inset-bottom, 0px) + 12px)" : "calc(env(safe-area-inset-bottom, 0px) + 62px)" }}
           // z-[58]: above the story-detail summary drawer (z-55/56) so play/pause
           // stays reachable while it's open, but below the full-screen player (z-60).
           className="fixed inset-x-3 z-[58]"
@@ -173,7 +173,7 @@ function SavedPage() {
       </main>
 
       <BottomNav />
-      <SavedMiniPlayer mono={mono} onOpen={() => setPlayerOpen(true)} />
+      <SavedMiniPlayer mono={mono} onOpen={() => setPlayerOpen(true)} flush={!!detailStory} />
 
       <PlayerScreen
         mono={mono}
