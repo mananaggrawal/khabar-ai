@@ -356,12 +356,18 @@ function storyId(url: string): string {
 /**
  * Dedup articles across all 9 feeds.
  * Processing order: india/world/business/technology/sports/science/health/local → headlines.
- * Stories from the headlines feed that match a topical story → inHeadlinesFeed flag set.
- * Stories unique to the headlines feed → section = "headlines" (renamed "Headlines"
- * in the UI, 2026-07-02) — i.e. every fresh, allowlisted item from Google's plain
- * homepage feed, unfiltered. (Tried keyword-filtering and cross-publisher
- * corroboration first; reverted per editorial decision — keep it simple: this
- * section is just "the headlines Google's homepage surfaced from these 7 papers.")
+ *
+ * Headlines section definition (2026-07-02, Option B): a story is "Headlines"
+ * only if it appears on BOTH Google's plain homepage feed AND one of the 8
+ * topical feeds — i.e. it's promoted OUT of its original topical section into
+ * Headlines. Previous definition ("unique to homepage feed, not in any topical
+ * feed") inverted this: truly major stories usually DO get picked up by a
+ * topical feed too, so they were being excluded from Headlines and left with
+ * just a passive flag, while only leftover/marginal homepage-only items became
+ * "Headlines" — which is exactly why headlines looked thin and inconsequential.
+ * Stories that appear ONLY on the homepage feed (no topical-feed match) don't
+ * get the "both" corroboration, so they're filed under "india" as a fallback,
+ * same as any other unclassifiable item — still included, just not labelled Headlines.
  */
 function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]; headlineIds: Set<string>; staleDropped: number; blockedDropped: number; notAllowedDropped: number } {
   const seenIds    = new Set<string>();
@@ -432,20 +438,28 @@ function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]
     }
   }
 
-  // Headlines last — mark matches, add unique ones as "headlines" section.
+  // Headlines last — matches get promoted (their section becomes "headlines");
+  // homepage-only items (no topical match) default to "india", not "headlines".
+  const promoteIds = new Set<string>();
   for (const item of feedMap.get("headlines") ?? []) {
     const id  = storyId(item.link);
     const key = normalize(item.title).slice(0, 60);
     if (seenIds.has(id) || seenTitles.has(key)) {
       const idx = idToIdx.get(id) ?? titleToIdx.get(key);
-      if (idx != null) headlineIds.add(stories[idx].id);
+      if (idx != null) { headlineIds.add(stories[idx].id); promoteIds.add(stories[idx].id); }
     } else {
       if (!isAllowed(item)) { notAllowedDropped++; continue; }
       if (isBlocked(item)) { blockedDropped++; continue; }
       if (!isFresh(item))  { staleDropped++;   continue; }
-      const idx = addStory(item, "headlines");
+      const idx = addStory(item, "india");
       headlineIds.add(stories[idx].id);
     }
+  }
+
+  // Promote homepage+topical matches into Headlines.
+  for (const id of promoteIds) {
+    const idx = idToIdx.get(id);
+    if (idx != null) stories[idx].section = "headlines";
   }
 
   return { stories, headlineIds, staleDropped, blockedDropped, notAllowedDropped };
