@@ -1459,14 +1459,15 @@ export async function generateDailyBriefing(
     // via CAP_SOLO_EVENTS=true if this ever needs bounding again.)
     const soloEvents = buildSoloEvents(rawStories, headlineIds);
 
-    // TEMP (2026-07-02): near-duplicate merge + topic grouping both disabled by
-    // default while diagnosing reports of allowed-publisher articles going
-    // missing — these fold multiple raw stories into one, so if either is
-    // over-matching it could look like "articles aren't showing up." Headlines
-    // section promotion (cross-feed match, above in buildRawStories) is
-    // untouched — that relabels a section, it doesn't drop or combine content.
-    // Re-enable with ENABLE_DUPLICATE_MERGE=true / ENABLE_TOPIC_GROUPING=true.
-    const dupMergeEnabled = process.env.ENABLE_DUPLICATE_MERGE === "true";
+    // Re-enabled (2026-07-03): only the BLUNT title-prefix dedup in
+    // buildRawStories stays off for now (still the suspect for silently
+    // dropping distinct articles that share a generic title prefix). This
+    // merge is a different, smarter tool — full-title overlap / shared source
+    // article, e.g. it correctly folds "Hyderabad Woman Dies By Suicide During
+    // Video Call" and "...On Video Call" into ONE story with two sources,
+    // rather than leaving both as separate duplicate stories (which is what
+    // happened while this was off). Escape hatch: ENABLE_DUPLICATE_MERGE=false.
+    const dupMergeEnabled = process.env.ENABLE_DUPLICATE_MERGE !== "false";
     let merged = soloEvents;
     if (dupMergeEnabled) {
       const r = mergeDuplicateEvents(soloEvents);
@@ -1474,12 +1475,15 @@ export async function generateDailyBriefing(
       if (r.removed > 0) log(`Merged ${r.removed} near-duplicate event(s) by title overlap`);
     }
 
-    const topicGroupingEnabled = process.env.ENABLE_TOPIC_GROUPING === "true";
+    // Topic grouping re-enabled too — combines DISTINCT stories sharing the
+    // same specific named subject (see topicGroupEvents() comment). Escape
+    // hatch: ENABLE_TOPIC_GROUPING=false.
+    const topicGroupingEnabled = process.env.ENABLE_TOPIC_GROUPING !== "false";
     const topicGrouped = topicGroupingEnabled ? await topicGroupEvents(merged, log) : merged;
 
     const capEnabled = process.env.CAP_SOLO_EVENTS === "true";
     selectedEvents = capEnabled ? capProportional(topicGrouped, MAX_STORIES, targets) : topicGrouped;
-    log(`Clustering disabled, dedup/merge/topic-grouping off — ${selectedEvents.length} events${capEnabled ? ` (capped from ${topicGrouped.length})` : ` — every allowlisted, fresh, exact-URL-unique article included, no cap`}`);
+    log(`Clustering disabled (title-dedup ${process.env.ENABLE_TITLE_DEDUP === "true" ? "on" : "off"}, merge ${dupMergeEnabled ? "on" : "off"}, topic-grouping ${topicGroupingEnabled ? "on" : "off"}) — ${selectedEvents.length} events${capEnabled ? ` (capped from ${topicGrouped.length})` : ", no cap"}`);
 
     const liveImageById = new Map<string, string>();
     const withImages = await fetchAllOgImages(selectedEvents.map(ev => ev.sourceStories[0]), log, liveImageById);
