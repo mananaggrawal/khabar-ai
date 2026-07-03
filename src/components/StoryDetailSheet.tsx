@@ -135,12 +135,16 @@ export function StoryDetailSheet({
       {story && (
         <>
           {/* Backdrop */}
+          {/* TEMP DEBUG (2026-07-03): solid magenta instead of the usual
+              translucent black, so it's unmistakable in a screenshot whether
+              the gray gap IS this backdrop peeking through, or something else
+              entirely. Revert to bg-black/30 backdrop-blur-sm once diagnosed. */}
           <motion.div
             key="backdrop"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className={`fixed inset-0 ${backdropZ} bg-black/30 backdrop-blur-sm`}
+            className={`fixed inset-0 ${backdropZ} bg-fuchsia-500`}
             onClick={onClose}
           />
 
@@ -164,7 +168,10 @@ export function StoryDetailSheet({
               dragConstraints={{ top: 0, bottom: 0 }}
               dragElastic={{ top: 0, bottom: 0.6 }}
               onDragEnd={(_e, info) => { if (info.offset.y > 110 || info.velocity.y > 600) onClose(); }}
-              className="pointer-events-auto flex max-h-[85vh] w-full flex-col rounded-t-3xl bg-white shadow-2xl"
+              // TEMP DEBUG (2026-07-03): bright border to see exactly where the
+              // sheet's own box actually ends, vs. whatever's behind/below it.
+              // Remove once the gray-gap bug is diagnosed.
+              className="pointer-events-auto flex max-h-[85vh] w-full flex-col rounded-t-3xl bg-white shadow-2xl border-4 border-lime-400"
               style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
             >
             {/* Drag-to-dismiss zone: handle + header (content below stays scrollable) */}
