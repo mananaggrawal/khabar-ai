@@ -125,13 +125,9 @@ function HeroCard({
 function HomePage() {
   // Player + briefing now live in the app-wide PlayerProvider so audio keeps
   // playing across tab changes.
-  const { mono, briefing, isLoading, saved: savedStories, setDetailSheetOpen } = usePlayer();
+  const { mono, briefing, isLoading, saved: savedStories } = usePlayer();
 
   const [detailStory, setDetailStory] = useState<Story | null>(null);
-  // Tell the app-wide mini-player when this drawer is open so it can hug the
-  // true bottom edge instead of its usual bottom-nav clearance.
-  useEffect(() => { setDetailSheetOpen(!!detailStory); }, [detailStory, setDetailSheetOpen]);
-  useEffect(() => () => setDetailSheetOpen(false), [setDetailSheetOpen]);
   const [activeSection, setActiveSection] = useState<SectionId | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const pillsRef = useRef<HTMLDivElement>(null);
@@ -357,7 +353,6 @@ function HomePage() {
         isPlaying={!!detailStory && mono.currentStory?.id === detailStory.id && mono.state === "playing"}
         isSaved={detailStory ? savedStories.isSaved(detailStory.id) : false}
         onSave={() => detailStory && savedStories.toggle(detailStory)}
-        hasMiniPlayer={mono.state === "playing" || mono.state === "paused"}
       />
     </div>
   );

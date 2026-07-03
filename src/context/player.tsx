@@ -32,26 +32,12 @@ type PlayerContextValue = {
   isLoading: boolean;
   saved: ReturnType<typeof useSavedStories>;
   openPlayer: () => void;
-  // Whether a story-detail summary drawer is currently open somewhere (Home or
-  // Saved) — lets the mini-player hug the true bottom edge instead of leaving
-  // its usual bottom-nav clearance, since the drawer covers the nav anyway.
-  detailSheetOpen: boolean;
-  setDetailSheetOpen: (v: boolean) => void;
 };
 
 const PlayerCtx = createContext<PlayerContextValue | null>(null);
 
 // ── Mini Player (portal) — persists across routes ───────────────────────────
-function MiniPlayer({
-  mono, onOpen, flush = false,
-}: {
-  mono: ReturnType<typeof useMonologue>;
-  onOpen: () => void;
-  /** True while a summary drawer covers the bottom nav — sit near the literal
-   *  bottom edge (same floating-pill look as the home screen) instead of the
-   *  usual nav-clearance offset, which would otherwise float mid-drawer. */
-  flush?: boolean;
-}) {
+function MiniPlayer({ mono, onOpen }: { mono: ReturnType<typeof useMonologue>; onOpen: () => void }) {
   if (typeof document === "undefined") return null;
   const { state, progress, currentStory, currentFeed, pause, resume, language } = mono;
   const visible = state === "playing" || state === "paused";
@@ -65,22 +51,11 @@ function MiniPlayer({
           animate={{ y: 0, opacity: 1 }}
           exit={{ y: 100, opacity: 0 }}
           transition={{ type: "spring", damping: 28, stiffness: 320 }}
-          style={{ bottom: flush ? "calc(env(safe-area-inset-bottom, 0px) + 12px)" : "calc(env(safe-area-inset-bottom, 0px) + 62px)" }}
-          // z-[58]: above the story-detail summary drawer (z-55/56) so play/pause
-          // stays reachable while it's open, but below the full-screen player
-          // (z-60), which already has its own transport controls.
-          className="fixed inset-x-3 z-[58]"
+          style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 62px)" }}
+          className="fixed inset-x-3 z-50"
         >
           <div
-            className={
-              // Over the drawer (flush), a translucent/blurred card just reads as a
-              // mismatched gray patch against its solid white — use a plain white
-              // card with a lighter shadow there instead of the blur meant for
-              // floating over the story list/images.
-              flush
-                ? "relative overflow-hidden rounded-2xl border border-border bg-white shadow-md cursor-pointer"
-                : "relative overflow-hidden rounded-2xl border border-border bg-background/95 backdrop-blur-md shadow-xl cursor-pointer"
-            }
+            className="relative overflow-hidden rounded-2xl border border-border bg-background/95 backdrop-blur-md shadow-xl cursor-pointer"
             onClick={onOpen}
           >
             <div className="absolute top-0 left-0 h-[2px] bg-primary transition-all duration-300" style={{ width: `${progress * 100}%` }} />
@@ -142,7 +117,6 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const mono = useMonologue({ briefing });
   const saved = useSavedStories();
   const [playerOpen, setPlayerOpen] = useState(false);
-  const [detailSheetOpen, setDetailSheetOpen] = useState(false);
 
   // Close the full player when playback stops
   useEffect(() => { if (mono.state === "idle") setPlayerOpen(false); }, [mono.state]);
@@ -168,14 +142,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     isLoading: briefingQuery.isLoading,
     saved,
     openPlayer: () => setPlayerOpen(true),
-    detailSheetOpen,
-    setDetailSheetOpen,
   };
 
   return (
     <PlayerCtx.Provider value={value}>
       {children}
-      <MiniPlayer mono={mono} onOpen={() => setPlayerOpen(true)} flush={detailSheetOpen} />
+      <MiniPlayer mono={mono} onOpen={() => setPlayerOpen(true)} />
       <PlayerScreen
         mono={mono}
         visible={playerOpen}

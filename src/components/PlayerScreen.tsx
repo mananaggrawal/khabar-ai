@@ -231,55 +231,7 @@ export function PlayerScreen({ mono, visible, onClose, isSaved, onSave }: Player
       isSaved={isSaved}
       onSave={onSave}
       elevated
-      hasMiniPlayer={showDetails}
     />
-
-    {/* The full player's own transport controls sit at z-60, underneath the
-        elevated summary drawer (z-66) — without this, opening the summary
-        from inside the full player leaves no visible play/pause control.
-        Mirrors the home-screen mini-player, just scoped to this screen. */}
-    <AnimatePresence>
-      {showDetails && (
-        <motion.div
-          initial={{ y: 100, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          exit={{ y: 100, opacity: 0 }}
-          transition={{ type: "spring", damping: 28, stiffness: 320 }}
-          style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 12px)" }}
-          className="fixed inset-x-3 z-[68]"
-        >
-          {/* Always floats over the white summary drawer here — solid white + a
-              lighter shadow reads as a clean card, not a translucent gray patch. */}
-          <div className="relative overflow-hidden rounded-2xl border border-border bg-white shadow-md">
-            <div className="absolute top-0 left-0 h-[2px] bg-primary transition-all duration-300" style={{ width: `${progress * 100}%` }} />
-            <div className="flex items-center gap-3 px-4 py-3">
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-[11px] text-muted-foreground">
-                  {currentFeed ? (language === "hi" ? currentFeed.labelHi : currentFeed.label) : "Playing"}
-                </p>
-                <p className="truncate text-sm font-medium text-foreground leading-tight">
-                  {currentStory ? getStoryTitle(currentStory, language) : "—"}
-                </p>
-              </div>
-              <div className="flex shrink-0 items-center gap-1">
-                <button onClick={prev} aria-label="Previous"
-                  className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:text-foreground transition-colors">
-                  <SkipBack className="size-4 fill-current" />
-                </button>
-                <button onClick={isPlaying ? pause : resume} aria-label={isPlaying ? "Pause" : "Play"}
-                  className="flex size-8 items-center justify-center rounded-full bg-primary text-white transition-transform active:scale-95">
-                  {isPlaying ? <Pause className="size-4 fill-current" /> : <Play className="size-4 fill-current ml-0.5" />}
-                </button>
-                <button onClick={next} aria-label="Next"
-                  className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:text-foreground transition-colors">
-                  <SkipForward className="size-4 fill-current" />
-                </button>
-              </div>
-            </div>
-          </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
     </>,
     document.body,
   );

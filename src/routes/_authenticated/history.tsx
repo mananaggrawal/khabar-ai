@@ -25,7 +25,7 @@ function formatGroup(iso: string): string {
 }
 
 // Mini player for the saved page
-function SavedMiniPlayer({ mono, onOpen, flush = false }: { mono: ReturnType<typeof useMonologue>; onOpen: () => void; flush?: boolean }) {
+function SavedMiniPlayer({ mono, onOpen }: { mono: ReturnType<typeof useMonologue>; onOpen: () => void }) {
   if (typeof document === "undefined") return null;
   const { state, progress, currentStory, currentFeed, pause, resume, language } = mono;
   const visible = state === "playing" || state === "paused";
@@ -37,17 +37,10 @@ function SavedMiniPlayer({ mono, onOpen, flush = false }: { mono: ReturnType<typ
         <motion.div
           initial={{ y: 100, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 100, opacity: 0 }}
           transition={{ type: "spring", damping: 28, stiffness: 320 }}
-          style={{ bottom: flush ? "calc(env(safe-area-inset-bottom, 0px) + 12px)" : "calc(env(safe-area-inset-bottom, 0px) + 62px)" }}
-          // z-[58]: above the story-detail summary drawer (z-55/56) so play/pause
-          // stays reachable while it's open, but below the full-screen player (z-60).
-          className="fixed inset-x-3 z-[58]"
+          style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 62px)" }}
+          className="fixed inset-x-3 z-50"
         >
-          <div
-            className={flush
-              ? "relative overflow-hidden rounded-2xl border border-border bg-white shadow-md cursor-pointer"
-              : "relative overflow-hidden rounded-2xl border border-border bg-background/95 backdrop-blur-md shadow-xl cursor-pointer"}
-            onClick={onOpen}
-          >
+          <div className="relative overflow-hidden rounded-2xl border border-border bg-background/95 backdrop-blur-md shadow-xl cursor-pointer" onClick={onOpen}>
             <div className="absolute top-0 left-0 h-[2px] bg-primary transition-all duration-300" style={{ width: `${progress * 100}%` }} />
             <div className="flex items-center gap-3 px-4 py-3">
               <div className="min-w-0 flex-1">
@@ -178,7 +171,7 @@ function SavedPage() {
       </main>
 
       <BottomNav />
-      <SavedMiniPlayer mono={mono} onOpen={() => setPlayerOpen(true)} flush={!!detailStory} />
+      <SavedMiniPlayer mono={mono} onOpen={() => setPlayerOpen(true)} />
 
       <PlayerScreen
         mono={mono}
@@ -202,7 +195,6 @@ function SavedPage() {
         isPlaying={!!detailStory && mono.currentStory?.id === detailStory.id && mono.state === "playing"}
         isSaved={detailStory ? isSaved(detailStory.id) : false}
         onSave={() => detailStory && toggle(detailStory)}
-        hasMiniPlayer={mono.state === "playing" || mono.state === "paused"}
       />
     </div>
   );
