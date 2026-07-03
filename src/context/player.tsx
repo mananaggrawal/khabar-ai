@@ -28,7 +28,6 @@ function resolveSection(s: string): SectionId {
 
 type PlayerContextValue = {
   mono: ReturnType<typeof useMonologue>;
-  highlightsMono: ReturnType<typeof useMonologue>;
   briefing: DailyBriefing | null;
   isLoading: boolean;
   saved: ReturnType<typeof useSavedStories>;
@@ -43,14 +42,10 @@ type PlayerContextValue = {
 const PlayerCtx = createContext<PlayerContextValue | null>(null);
 
 // ── Mini Player (portal) — persists across routes ───────────────────────────
-// Shows whichever queue is currently active — the main story list, or the
-// 15-minute Highlights briefing — so Highlights gets the same persistent
-// mini-player/controls as normal playback instead of only the home hero card.
 function MiniPlayer({
-  mono, isHighlights, onOpen, flush = false,
+  mono, onOpen, flush = false,
 }: {
   mono: ReturnType<typeof useMonologue>;
-  isHighlights: boolean;
   onOpen: () => void;
   /** True while a summary drawer covers the bottom nav — sit near the literal
    *  bottom edge (same floating-pill look as the home screen) instead of the
@@ -84,7 +79,7 @@ function MiniPlayer({
             <div className="flex items-center gap-3 px-4 py-3">
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[11px] text-muted-foreground">
-                  {isHighlights ? "15-Minute Highlights" : currentFeed ? (language === "hi" ? currentFeed.labelHi : currentFeed.label) : "Playing"}
+                  {currentFeed ? (language === "hi" ? currentFeed.labelHi : currentFeed.label) : "Playing"}
                 </p>
                 <p className="truncate text-sm font-medium text-foreground leading-tight">
                   {currentStory ? getStoryTitle(currentStory, language) : "—"}
@@ -137,45 +132,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, [rawBriefing]);
 
   const mono = useMonologue({ briefing });
-
-  // 15-minute Highlights briefing — a handful of pre-scripted multi-story
-  // segments (see generator.ts buildHighlightSegments), played from the home
-  // screen's hero card as a separate, shorter alternative to the full story
-  // list. Reuses the same "synthetic briefing" trick as history.tsx's saved-
-  // stories player: useMonologue just needs an array of Story-shaped objects,
-  // so each HighlightSegment is wrapped as one.
-  const highlightsBriefing: DailyBriefing | null = useMemo(() => {
-    const segs = rawBriefing?.highlights?.filter(h => h.audioUrlEn);
-    if (!segs || segs.length === 0) return null;
-    const stories: Story[] = [...segs]
-      .sort((a, b) => a.order - b.order)
-      .map(h => ({
-        id: h.id, title: h.label, source: "Khabar AI", link: "",
-        publishedAt: rawBriefing!.generatedAt, section: "headlines",
-        scriptEn: h.scriptEn, scriptHi: "", audioUrlEn: h.audioUrlEn,
-        wordCount: h.wordCount,
-      }));
-    return { date: rawBriefing!.date, generatedAt: rawBriefing!.generatedAt, stories };
-  }, [rawBriefing]);
-  const highlightsMono = useMonologue({ briefing: highlightsBriefing });
-
   const saved = useSavedStories();
   const [playerOpen, setPlayerOpen] = useState(false);
   const [detailSheetOpen, setDetailSheetOpen] = useState(false);
 
-  // Whichever queue is actually active drives the mini-player/full-player —
-  // the main story list takes priority if both are somehow active at once
-  // (shouldn't normally happen since starting one doesn't stop the other,
-  // but the main list is the primary experience).
-  const monoActive = mono.state === "playing" || mono.state === "paused";
-  const highlightsActive = highlightsMono.state === "playing" || highlightsMono.state === "paused";
-  const activeIsHighlights = !monoActive && highlightsActive;
-  const activeMono = activeIsHighlights ? highlightsMono : mono;
-
   // Close the full player when playback stops
-  useEffect(() => {
-    if (mono.state === "idle" && highlightsMono.state === "idle") setPlayerOpen(false);
-  }, [mono.state, highlightsMono.state]);
+  useEffect(() => { if (mono.state === "idle") setPlayerOpen(false); }, [mono.state]);
 
   // Persist which languages are available in this briefing
   useEffect(() => {
@@ -194,7 +156,6 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   const value: PlayerContextValue = {
     mono,
-    highlightsMono,
     briefing,
     isLoading: briefingQuery.isLoading,
     saved,
@@ -206,14 +167,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   return (
     <PlayerCtx.Provider value={value}>
       {children}
-      <MiniPlayer mono={activeMono} isHighlights={activeIsHighlights} onOpen={() => setPlayerOpen(true)} flush={detailSheetOpen} />
+      <MiniPlayer mono={mono} onOpen={() => setPlayerOpen(true)} flush={detailSheetOpen} />
       <PlayerScreen
-        mono={activeMono}
+        mono={mono}
         visible={playerOpen}
         onClose={() => setPlayerOpen(false)}
-        // Saving doesn't apply to Highlights segments (no real article behind them)
-        isSaved={!activeIsHighlights && activeMono.currentStory ? saved.isSaved(activeMono.currentStory.id) : false}
-        onSave={() => !activeIsHighlights && activeMono.currentStory && saved.toggle(activeMono.currentStory)}
+        isSaved={mono.currentStory ? saved.isSaved(mono.currentStory.id) : false}
+        onSave={() => mono.currentStory && saved.toggle(mono.currentStory)}
       />
     </PlayerCtx.Provider>
   );

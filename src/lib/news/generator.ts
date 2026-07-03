@@ -91,26 +91,11 @@ export type BriefingMeta = {
   sections: SectionId[];
 };
 
-// 15-minute condensed briefing (2026-07-03) — a handful of flowing, multi-story
-// segments covering the most important things across the FULL story pool,
-// played from the home screen's hero card. The full per-story list below is
-// unaffected/unfiltered — this is an additional, separate quick-listen option.
-export type HighlightSegment = {
-  id: string;
-  order: number;
-  label: string;
-  scriptEn: string;
-  audioUrlEn?: string;
-  durationSec?: number;
-  wordCount?: number;
-};
-
 export type DailyBriefing = {
   date: string;
   generatedAt: string;
   stories: Story[];
   segments?: BriefingSegment[];
-  highlights?: HighlightSegment[];
   meta?: BriefingMeta;
   generatedLanguages?: string[];
   runSummary?: RunSummary;
@@ -1160,105 +1145,6 @@ async function scriptAllEvents(
   return results;
 }
 
-// ─── Highlights: 15-minute condensed briefing (2026-07-03) ───────────────────
-// A separate, additional quick-listen: a handful of flowing multi-story
-// segments covering the most important things across the FULL story pool
-// (whatever that pool is — all publishers, no cap). The full per-story list
-// stays completely unfiltered; this doesn't remove or replace anything, it's
-// played from the home screen's hero card as an alternate, shorter listen.
-// Ranking is mechanical (section editorial weight + cross-publisher
-// corroboration + Google-homepage signal) — no separate AI judgment call for
-// "what's important," just reusing signals already computed elsewhere.
-
-const HIGHLIGHT_TARGET_MINUTES = 15;
-const HIGHLIGHT_TARGET_WORDS   = HIGHLIGHT_TARGET_MINUTES * WORDS_PER_MINUTE; // 2250
-
-function scoreForHighlights(ev: SelectedEvent): number {
-  const bias          = SECTION_BIAS[ev.section] ?? 1;
-  const corroboration = 1 + Math.log2(Math.max(1, ev.publisherCount));
-  const headlineBonus = ev.inHeadlinesFeed ? 1.5 : 0;
-  return bias * corroboration + headlineBonus;
-}
-
-// Broad theme buckets so the briefing reads as a few coherent segments, not
-// one per Google topic feed.
-const HIGHLIGHT_BUCKETS: { label: string; sections: SectionId[] }[] = [
-  { label: "Top News & India",             sections: ["headlines", "india"] },
-  { label: "World & Business",             sections: ["world", "business"] },
-  { label: "Technology, Science & Health", sections: ["technology", "science", "health"] },
-  { label: "Sports",                       sections: ["sports"] },
-];
-
-async function writeHighlightSegment(
-  label: string,
-  events: SelectedEvent[],
-  wordBudget: number,
-  logger: Logger,
-): Promise<string> {
-  const items = events.slice(0, 12);
-  const list = items.map((ev, i) =>
-    `${i + 1}. ${ev.title}${ev.whyImportant ? ` — ${ev.whyImportant}` : ""}`,
-  ).join("\n");
-
-  const prompt = `You are the anchor for Khabar AI's 15-minute daily audio highlights briefing — the condensed, most-important-things-only companion to the full briefing. Listeners choose this over the full list because it should feel genuinely gripping to listen to, not a dry recitation.
-
-Write ONE flowing spoken segment covering the stories below, titled "${label}" (do not say the title aloud — just write the spoken content). Target: about ${wordBudget} words. Read aloud continuously — natural spoken transitions between stories ("Meanwhile...", "But the bigger story is...", "Halfway around the world...", "Closer to home..."), never a flat list.
-
-MAKE IT CATCHY AND CAPTIVATING:
-- Open with your strongest, most attention-grabbing story first — hook the listener in the first sentence, don't ease in
-- Vary sentence length and rhythm — short punchy lines for impact, longer ones to build a moment
-- Use vivid, concrete, active language over generic phrasing — real numbers, real names, real stakes, not vague summary
-- Let the energy and stakes of each story come through in how it's told, not through added commentary — the facts themselves should feel urgent and alive
-- Sound like a confident, energetic broadcast anchor who loves this story, not someone reading a wire feed
-
-Cover the most important ${Math.min(items.length, 8)} or so of these — skip minor or repetitive ones if it helps the segment flow naturally and hit the word target.
-
-Stories (roughly ordered by importance already):
-${list}
-
-HARD RULES (these still apply even with a catchier voice):
-- State only facts implied by the headlines given — never invent details, quotes, or numbers not present
-- No analysis, no opinion, no speculation about causes or consequences beyond what's given — energy comes from delivery and word choice, not from added interpretation
-- No dates/years, no demographic mentions ("Indians", "citizens"), no bullet points
-- FORBIDDEN: "reportedly", "sources say", "experts say", "stay tuned", any tease or CTA
-
-Return ONLY valid JSON: {"scriptEn": "..."}`;
-
-  try {
-    const raw = await aiJson(prompt, getScriptModel(), 4096);
-    const script = String(raw?.scriptEn ?? "").trim();
-    if (!isValidScript(script)) throw new Error("invalid/too-short script");
-    logger(`  Highlights segment "${label}": ${script.split(/\s+/).length}w from ${items.length} stories`);
-    return script;
-  } catch (err: any) {
-    logger(`  ✗ Highlights segment "${label}" failed: ${err.message?.slice(0, 80)}`);
-    return "";
-  }
-}
-
-async function buildHighlightSegments(
-  allEvents: SelectedEvent[],
-  logger: Logger,
-): Promise<{ label: string; scriptEn: string }[]> {
-  const ranked = [...allEvents].sort((a, b) => scoreForHighlights(b) - scoreForHighlights(a));
-  const pool = ranked.slice(0, 60); // generous candidate pool; per-bucket word budget trims further
-
-  const buckets = HIGHLIGHT_BUCKETS
-    .map(b => ({ ...b, events: pool.filter(ev => b.sections.includes(ev.section)) }))
-    .filter(b => b.events.length > 0);
-  if (buckets.length === 0) return [];
-
-  const totalCount = buckets.reduce((n, b) => n + b.events.length, 0);
-
-  const results = await Promise.all(buckets.map(async (bucket) => {
-    const wordBudget = Math.max(120, Math.round(HIGHLIGHT_TARGET_WORDS * (bucket.events.length / totalCount)));
-    const scriptEn = await writeHighlightSegment(bucket.label, bucket.events, wordBudget, logger);
-    return { label: bucket.label, scriptEn };
-  }));
-
-  return results.filter(r => r.scriptEn);
-}
-
 // ─── Step 6: TTS (English only) ───────────────────────────────────────────────
 
 async function synthesizeOne(text: string, filename: string, provider: TtsProvider, index?: number): Promise<string> {
@@ -1633,33 +1519,11 @@ export async function generateDailyBriefing(
     })),
   });
 
-  // Step 5: Scripts (+ Highlights segment scripts, in parallel — independent work)
+  // Step 5: Scripts
   const t2 = Date.now();
-  const [stories, highlightDrafts] = await Promise.all([
-    scriptAllEvents(selectedEvents, log),
-    buildHighlightSegments(selectedEvents, log),
-  ]);
+  const stories = await scriptAllEvents(selectedEvents, log);
   const scriptSec = (Date.now() - t2) / 1000;
   log(`Scripts done in ${scriptSec.toFixed(1)}s`);
-
-  // Highlights TTS — same provider as the main briefing, one clip per segment.
-  let highlights: HighlightSegment[] = [];
-  if (highlightDrafts.length > 0 && !isAbortRequested()) {
-    highlights = await Promise.all(highlightDrafts.map(async (seg, i) => {
-      const id = `highlight-${i}`;
-      const wordCount = seg.scriptEn.split(/\s+/).length;
-      try {
-        const audioUrlEn = await synthesizeOne(seg.scriptEn, `${date}-${id}-en`, ttsProvider, i);
-        return { id, order: i, label: seg.label, scriptEn: seg.scriptEn, audioUrlEn, wordCount,
-                 durationSec: Math.round((wordCount / WORDS_PER_MINUTE) * 60) } satisfies HighlightSegment;
-      } catch (err: any) {
-        log(`  ✗ Highlights TTS failed for "${seg.label}": ${err.message?.slice(0, 60)}`);
-        return { id, order: i, label: seg.label, scriptEn: seg.scriptEn, wordCount } satisfies HighlightSegment;
-      }
-    }));
-    const totalMin = (highlights.reduce((n, h) => n + (h.durationSec ?? 0), 0) / 60).toFixed(1);
-    log(`Highlights: ${highlights.filter(h => h.audioUrlEn).length}/${highlights.length} segments with audio, ~${totalMin} min total`);
-  }
 
   if (isAbortRequested()) throw new Error("Aborted by user");
 
@@ -1684,16 +1548,15 @@ export async function generateDailyBriefing(
     sections: [...SECTION_ORDER].filter(s => sectionSet.has(s)),
   };
 
-  // Save with scripts (highlights already have audio by this point — built in
-  // parallel with per-story scripting above)
-  await saveBriefing({ date, generatedAt: new Date().toISOString(), stories, highlights, meta, generatedLanguages });
+  // Save with scripts
+  await saveBriefing({ date, generatedAt: new Date().toISOString(), stories, meta, generatedLanguages });
   log(`Pre-TTS checkpoint: ${stories.length} stories saved`);
 
   // Step 6: TTS
   const t3 = Date.now();
   const { stories: withAudio, costInfo } = await generateAllTTS(
     stories, date, ttsProvider, targetLangs, log,
-    async (s) => saveBriefing({ date, generatedAt: new Date().toISOString(), stories: s, highlights, meta, generatedLanguages }),
+    async (s) => saveBriefing({ date, generatedAt: new Date().toISOString(), stories: s, meta, generatedLanguages }),
   );
   const ttsSec     = (Date.now() - t3) / 1000;
   const elapsedSec = (Date.now() - runStart) / 1000;
@@ -1711,7 +1574,7 @@ export async function generateDailyBriefing(
 
   const briefing: DailyBriefing & { runSummary?: RunSummary } = {
     date, generatedAt: new Date().toISOString(),
-    stories: withAudio, highlights, meta, generatedLanguages, runSummary,
+    stories: withAudio, meta, generatedLanguages, runSummary,
   };
 
   await saveBriefing(briefing);
