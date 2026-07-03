@@ -144,22 +144,29 @@ export function StoryDetailSheet({
             onClick={onClose}
           />
 
-          {/* Sheet */}
-          <motion.div
-            key="sheet"
-            initial={{ y: "100%" }}
-            animate={{ y: 0 }}
-            exit={{ y: "100%" }}
-            transition={{ type: "spring", damping: 32, stiffness: 300 }}
-            drag="y"
-            dragControls={dragControls}
-            dragListener={false}
-            dragConstraints={{ top: 0, bottom: 0 }}
-            dragElastic={{ top: 0, bottom: 0.6 }}
-            onDragEnd={(_e, info) => { if (info.offset.y > 110 || info.velocity.y > 600) onClose(); }}
-            className={`fixed inset-x-0 bottom-0 ${sheetZ} flex max-h-[85vh] flex-col rounded-t-3xl bg-white shadow-2xl`}
-            style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
-          >
+          {/* Sheet — bottom-anchored via flexbox (justify-end) rather than
+              `fixed; bottom: 0` directly. On iOS Safari/PWAs, a fixed element
+              pinned with `bottom: 0` can settle above the true visible bottom
+              edge depending on browser-chrome/viewport state, leaving a gap
+              where the backdrop shows through as a mismatched gray band.
+              Flex alignment inside a full-screen fixed wrapper is the more
+              reliable way to guarantee it actually touches the bottom edge. */}
+          <div className={`fixed inset-0 ${sheetZ} flex flex-col justify-end pointer-events-none`}>
+            <motion.div
+              key="sheet"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 32, stiffness: 300 }}
+              drag="y"
+              dragControls={dragControls}
+              dragListener={false}
+              dragConstraints={{ top: 0, bottom: 0 }}
+              dragElastic={{ top: 0, bottom: 0.6 }}
+              onDragEnd={(_e, info) => { if (info.offset.y > 110 || info.velocity.y > 600) onClose(); }}
+              className="pointer-events-auto flex max-h-[85vh] w-full flex-col rounded-t-3xl bg-white shadow-2xl"
+              style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
+            >
             {/* Drag-to-dismiss zone: handle + header (content below stays scrollable) */}
             <div onPointerDown={(e) => dragControls.start(e)} style={{ touchAction: "none", cursor: "grab" }}>
             {/* Drag handle */}
@@ -283,7 +290,8 @@ export function StoryDetailSheet({
                 </div>
               </div>
             </div>
-          </motion.div>
+            </motion.div>
+          </div>
         </>
       )}
     </AnimatePresence>,
