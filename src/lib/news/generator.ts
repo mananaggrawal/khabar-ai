@@ -1200,17 +1200,25 @@ async function writeHighlightSegment(
     `${i + 1}. ${ev.title}${ev.whyImportant ? ` — ${ev.whyImportant}` : ""}`,
   ).join("\n");
 
-  const prompt = `You are the anchor for Khabar AI's 15-minute daily audio highlights briefing — a condensed, most-important-things-only companion to the full briefing.
+  const prompt = `You are the anchor for Khabar AI's 15-minute daily audio highlights briefing — the condensed, most-important-things-only companion to the full briefing. Listeners choose this over the full list because it should feel genuinely gripping to listen to, not a dry recitation.
 
-Write ONE flowing spoken segment covering the stories below, titled "${label}" (do not say the title aloud — just write the spoken content). Target: about ${wordBudget} words. This is read aloud continuously — use natural spoken transitions between stories ("Meanwhile...", "In other news...", "Elsewhere...", "Turning to..."), not a list read one by one.
+Write ONE flowing spoken segment covering the stories below, titled "${label}" (do not say the title aloud — just write the spoken content). Target: about ${wordBudget} words. Read aloud continuously — natural spoken transitions between stories ("Meanwhile...", "But the bigger story is...", "Halfway around the world...", "Closer to home..."), never a flat list.
 
-Cover the most important ${Math.min(items.length, 8)} or so of these — skip minor or repetitive ones if it helps the segment flow naturally and hit the word target. State facts only: what happened, who, when, where, key numbers. No analysis, no opinion, no "why it matters," no speculation. Wire-service tone: warm but fast, like a newsreader.
+MAKE IT CATCHY AND CAPTIVATING:
+- Open with your strongest, most attention-grabbing story first — hook the listener in the first sentence, don't ease in
+- Vary sentence length and rhythm — short punchy lines for impact, longer ones to build a moment
+- Use vivid, concrete, active language over generic phrasing — real numbers, real names, real stakes, not vague summary
+- Let the energy and stakes of each story come through in how it's told, not through added commentary — the facts themselves should feel urgent and alive
+- Sound like a confident, energetic broadcast anchor who loves this story, not someone reading a wire feed
+
+Cover the most important ${Math.min(items.length, 8)} or so of these — skip minor or repetitive ones if it helps the segment flow naturally and hit the word target.
 
 Stories (roughly ordered by importance already):
 ${list}
 
-HARD RULES:
-- Never invent facts beyond what's implied by the headlines given
+HARD RULES (these still apply even with a catchier voice):
+- State only facts implied by the headlines given — never invent details, quotes, or numbers not present
+- No analysis, no opinion, no speculation about causes or consequences beyond what's given — energy comes from delivery and word choice, not from added interpretation
 - No dates/years, no demographic mentions ("Indians", "citizens"), no bullet points
 - FORBIDDEN: "reportedly", "sources say", "experts say", "stay tuned", any tease or CTA
 
