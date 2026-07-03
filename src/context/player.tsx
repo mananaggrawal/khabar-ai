@@ -72,7 +72,15 @@ function MiniPlayer({
           className="fixed inset-x-3 z-[58]"
         >
           <div
-            className="relative overflow-hidden rounded-2xl border border-border bg-background/95 backdrop-blur-md shadow-xl cursor-pointer"
+            className={
+              // Over the drawer (flush), a translucent/blurred card just reads as a
+              // mismatched gray patch against its solid white — use a plain white
+              // card with a lighter shadow there instead of the blur meant for
+              // floating over the story list/images.
+              flush
+                ? "relative overflow-hidden rounded-2xl border border-border bg-white shadow-md cursor-pointer"
+                : "relative overflow-hidden rounded-2xl border border-border bg-background/95 backdrop-blur-md shadow-xl cursor-pointer"
+            }
             onClick={onOpen}
           >
             <div className="absolute top-0 left-0 h-[2px] bg-primary transition-all duration-300" style={{ width: `${progress * 100}%` }} />

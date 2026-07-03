@@ -248,7 +248,9 @@ export function PlayerScreen({ mono, visible, onClose, isSaved, onSave }: Player
           style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 12px)" }}
           className="fixed inset-x-3 z-[68]"
         >
-          <div className="relative overflow-hidden rounded-2xl border border-border bg-background/95 backdrop-blur-md shadow-xl">
+          {/* Always floats over the white summary drawer here — solid white + a
+              lighter shadow reads as a clean card, not a translucent gray patch. */}
+          <div className="relative overflow-hidden rounded-2xl border border-border bg-white shadow-md">
             <div className="absolute top-0 left-0 h-[2px] bg-primary transition-all duration-300" style={{ width: `${progress * 100}%` }} />
             <div className="flex items-center gap-3 px-4 py-3">
               <div className="min-w-0 flex-1">

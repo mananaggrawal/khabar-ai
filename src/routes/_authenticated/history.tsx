@@ -42,7 +42,12 @@ function SavedMiniPlayer({ mono, onOpen, flush = false }: { mono: ReturnType<typ
           // stays reachable while it's open, but below the full-screen player (z-60).
           className="fixed inset-x-3 z-[58]"
         >
-          <div className="relative overflow-hidden rounded-2xl border border-border bg-background/95 backdrop-blur-md shadow-xl cursor-pointer" onClick={onOpen}>
+          <div
+            className={flush
+              ? "relative overflow-hidden rounded-2xl border border-border bg-white shadow-md cursor-pointer"
+              : "relative overflow-hidden rounded-2xl border border-border bg-background/95 backdrop-blur-md shadow-xl cursor-pointer"}
+            onClick={onOpen}
+          >
             <div className="absolute top-0 left-0 h-[2px] bg-primary transition-all duration-300" style={{ width: `${progress * 100}%` }} />
             <div className="flex items-center gap-3 px-4 py-3">
               <div className="min-w-0 flex-1">
