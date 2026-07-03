@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { Check, MessageCircle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
-import { CITY_KEY, DEFAULT_CITY, MAJOR_CITIES, ALLOWED_PUBLISHERS, PUBLISHERS_KEY, readPreferredPublishers, type PublisherKey } from "@/lib/news/sources";
+import { ALLOWED_PUBLISHERS, PUBLISHERS_KEY, readPreferredPublishers, type PublisherKey } from "@/lib/news/sources";
 import { BottomNav } from "@/components/BottomNav";
 import { usePlayer } from "@/context/player";
 
@@ -29,17 +29,12 @@ export const Route = createFileRoute("/_authenticated/settings")({
   component: SettingsPage,
 });
 
-function readCity(): string {
-  try { return localStorage.getItem(CITY_KEY) || DEFAULT_CITY; } catch { return DEFAULT_CITY; }
-}
-
 function SettingsPage() {
   const router = useRouter();
   const { mono } = usePlayer();
   const hasMiniPlayer = mono.state === "playing" || mono.state === "paused";
   const [selectedLang, setSelectedLang]       = useState<string>(readLanguage);
   const [availableLangs, setAvailableLangs]   = useState<string[]>(readAvailableLanguages);
-  const [selectedCity, setSelectedCity]       = useState<string>(readCity);
   const [selectedPublishers, setSelectedPublishers] = useState<Set<PublisherKey>>(readPreferredPublishers);
 
   // Re-read available languages on mount
@@ -60,11 +55,6 @@ function SettingsPage() {
       localStorage.setItem(LANGUAGE_KEY, code);
       window.dispatchEvent(new StorageEvent("storage", { key: LANGUAGE_KEY, newValue: code }));
     } catch {}
-  }
-
-  function selectCity(city: string) {
-    setSelectedCity(city);
-    try { localStorage.setItem(CITY_KEY, city); } catch {}
   }
 
   function togglePublisher(key: PublisherKey) {
@@ -148,34 +138,6 @@ function SettingsPage() {
                   ) : !available ? (
                     <span className="text-[10px] uppercase tracking-widest text-muted-foreground/40">Not generated</span>
                   ) : null}
-                </button>
-              );
-            })}
-          </div>
-        </section>
-
-        {/* Local news city */}
-        <section>
-          <h2 className="font-serif text-lg">Local News City</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Used for the Local section in your briefing.
-          </p>
-          <div className="mt-4 grid grid-cols-2 gap-2">
-            {MAJOR_CITIES.map((city) => {
-              const active = selectedCity === city;
-              return (
-                <button
-                  key={city}
-                  onClick={() => selectCity(city)}
-                  className={cn(
-                    "flex items-center gap-2 rounded-2xl border px-4 py-2.5 text-left text-sm transition-colors",
-                    active
-                      ? "border-primary/40 bg-primary/10 text-foreground font-medium"
-                      : "border-border text-foreground/70 hover:border-border/80 hover:bg-black/[0.02]",
-                  )}
-                >
-                  {active && <Check className="size-3.5 text-primary" />}
-                  {city}
                 </button>
               );
             })}

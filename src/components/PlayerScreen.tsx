@@ -7,7 +7,7 @@ import { motion, AnimatePresence } from "motion/react";
 import {
   ChevronDown, SkipBack, SkipForward, Play, Pause,
   RotateCcw, RotateCw, Bookmark, FileText,
-  Flame, LandmarkIcon, Globe, TrendingUp, MapPin, Cpu, Trophy, FlaskConical, HeartPulse,
+  Flame, LandmarkIcon, Globe, TrendingUp, Cpu, Trophy, FlaskConical, HeartPulse,
 } from "lucide-react";
 import { VoiceOrb } from "./VoiceOrb";
 import { StoryDetailSheet } from "./StoryDetailSheet";
@@ -26,11 +26,11 @@ interface PlayerScreenProps {
 }
 
 const LEGACY_SECTION: Record<string, SectionId> = {
-  politics: "india", techlife: "technology", entertainment: "india",
+  politics: "india", techlife: "technology", entertainment: "india", local: "india",
 };
 function resolveSection(s: string): SectionId {
   if (s in LEGACY_SECTION) return LEGACY_SECTION[s];
-  if (["headlines", "india", "world", "business", "technology", "sports", "science", "health", "local"].includes(s)) return s as SectionId;
+  if (["headlines", "india", "world", "business", "technology", "sports", "science", "health"].includes(s)) return s as SectionId;
   return "india";
 }
 
@@ -43,7 +43,6 @@ const SECTION_COLOR: Record<SectionId, string> = {
   sports:     "#DB2777",
   science:    "#0EA5E9",
   health:     "#65A30D",
-  local:      "#2563EB",
 };
 
 const SECTION_ICON: Record<SectionId, React.ReactNode> = {
@@ -55,7 +54,6 @@ const SECTION_ICON: Record<SectionId, React.ReactNode> = {
   sports:     <Trophy       className="size-8" />,
   science:    <FlaskConical className="size-8" />,
   health:     <HeartPulse   className="size-8" />,
-  local:      <MapPin       className="size-8" />,
 };
 
 function formatTime(sec: number): string {

@@ -1,13 +1,15 @@
 /**
- * Google News RSS feed configuration — 5 focused feeds.
- * headlines | india | world | business | local
+ * Google News RSS feed configuration.
+ * headlines | india | world | business | technology | sports | science | health
+ * (Local/city-scoped feed removed 2026-07-02 — was hardcoded to a single
+ * default city with no real per-user wiring; see project notes.)
  */
 
 // ── Section IDs — straight from Google News feed names ───────────────────────
 
 export type SectionId =
   | "headlines" | "india" | "world" | "business"
-  | "technology" | "sports" | "science" | "health" | "local";
+  | "technology" | "sports" | "science" | "health";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -16,7 +18,7 @@ export type FeedConfig = {
   label: string;
   labelHi: string;
   emoji: string;
-  buildUrl: (opts?: { city?: string }) => string;
+  buildUrl: () => string;
   fallbackUrl?: string;
 };
 
@@ -31,10 +33,6 @@ export type SectionConfig = {
 
 const LOCALE  = "hl=en-IN&gl=IN&ceid=IN:en";
 const GN_BASE = "https://news.google.com/rss";
-
-// Default city for the Local feed (also the Settings default). Declared here so
-// the Local feed's buildUrl can reference it.
-export const DEFAULT_CITY = "Mumbai";
 
 const TOPIC: Record<string, string> = {
   india:      "CAAqIQgKIhtDQkFTRGdvSUwyMHZNRHBxY0dNU0FtVnVLQUFQAQ",
@@ -112,20 +110,11 @@ export const FEEDS: FeedConfig[] = [
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.health}?${LOCALE}`,
     fallbackUrl: `${GN_BASE}/search?q=health&${LOCALE}`,
   },
-  {
-    feedId:  "local",
-    label:   "Local",
-    labelHi: "स्थानीय",
-    emoji:   "📍",
-    // City-scoped headlines via Google News search (city comes from request/default)
-    buildUrl: (opts) => `${GN_BASE}/search?q=${encodeURIComponent((opts?.city ?? DEFAULT_CITY) + " news")}&${LOCALE}`,
-    fallbackUrl: `${GN_BASE}/search?q=${encodeURIComponent(DEFAULT_CITY + " news")}&${LOCALE}`,
-  },
 ];
 
 // ── Display section configs ───────────────────────────────────────────────────
 
-export const SECTION_ORDER: SectionId[] = ["headlines", "india", "world", "business", "technology", "sports", "science", "health", "local"];
+export const SECTION_ORDER: SectionId[] = ["headlines", "india", "world", "business", "technology", "sports", "science", "health"];
 
 const SECTION_CONFIGS: SectionConfig[] = [
   { id: "headlines",  label: "Headlines",   labelHi: "मुख्य खबरें", emoji: "🔥" },
@@ -136,26 +125,12 @@ const SECTION_CONFIGS: SectionConfig[] = [
   { id: "sports",     label: "Sports",      labelHi: "खेल",          emoji: "🏆" },
   { id: "science",    label: "Science",     labelHi: "विज्ञान",       emoji: "🔬" },
   { id: "health",     label: "Health",      labelHi: "स्वास्थ्य",     emoji: "🩺" },
-  { id: "local",      label: "Local",       labelHi: "स्थानीय",      emoji: "📍" },
 ];
 
 /** FEED_MAP: SectionId → SectionConfig. Used in UI for labels and emojis. */
 export const FEED_MAP = new Map<SectionId, SectionConfig>(
   SECTION_CONFIGS.map((c) => [c.id, c]),
 );
-
-// ── City setting (localStorage, client-side only) ─────────────────────────────
-
-export const CITY_KEY    = "khabar-city";
-
-export const MAJOR_CITIES = [
-  "Mumbai", "Delhi", "Bengaluru", "Hyderabad", "Chennai",
-  "Kolkata", "Pune", "Ahmedabad", "Jaipur", "Surat",
-];
-
-export function readCity(): string {
-  try { return localStorage.getItem(CITY_KEY) || DEFAULT_CITY; } catch { return DEFAULT_CITY; }
-}
 
 // ── Section preferences (localStorage, client-side only) ─────────────────────
 

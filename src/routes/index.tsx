@@ -18,9 +18,9 @@ import type { Story } from "@/lib/news/generator";
 const LOCAL_MODE = import.meta.env.VITE_LOCAL_MODE === "true";
 
 // Section display order + legacy mapping — shared by playback ordering and grouping
-const SECTION_DISPLAY_ORDER: SectionId[] = ["headlines", "india", "world", "business", "technology", "sports", "science", "health", "local"];
+const SECTION_DISPLAY_ORDER: SectionId[] = ["headlines", "india", "world", "business", "technology", "sports", "science", "health"];
 const LEGACY_SECTION: Record<string, SectionId> = {
-  politics: "india", techlife: "technology", entertainment: "india",
+  politics: "india", techlife: "technology", entertainment: "india", local: "india",
 };
 function resolveSection(s: string): SectionId {
   if (s in LEGACY_SECTION) return LEGACY_SECTION[s];

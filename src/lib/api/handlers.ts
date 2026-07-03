@@ -89,7 +89,6 @@ export async function handleGenerate(request: Request): Promise<Response> {
   const reqUrl       = new URL(request.url, "http://localhost");
   const provider     = (reqUrl.searchParams.get("provider") ?? "edge") as TtsProvider;
   const languages    = (reqUrl.searchParams.get("languages") ?? "en,hi,ta,mr").split(",").map(l => l.trim()).filter(Boolean);
-  const city         = reqUrl.searchParams.get("city")?.trim() || undefined;
   const scriptProvider = reqUrl.searchParams.get("scriptProvider");
   const scriptModel    = reqUrl.searchParams.get("scriptModel");
   const ttsModel       = reqUrl.searchParams.get("ttsModel");
@@ -108,7 +107,7 @@ export async function handleGenerate(request: Request): Promise<Response> {
   (async () => {
     try {
       console.log(`[admin] generation triggered (provider: ${provider}, langs: ${languages.join(",")})`);
-      const briefing = await generateDailyBriefing((msg) => send({ type: "log", msg }), city, provider, languages);
+      const briefing = await generateDailyBriefing((msg) => send({ type: "log", msg }), provider, languages);
       const rs = briefing.runSummary;
       void logServerEvent("generation_run", {
         date:        briefing.date,

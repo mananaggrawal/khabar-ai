@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { Play, Check, Flame, LandmarkIcon, Globe, TrendingUp, MapPin, Cpu, Trophy, FlaskConical, HeartPulse } from "lucide-react";
+import { Play, Check, Flame, LandmarkIcon, Globe, TrendingUp, Cpu, Trophy, FlaskConical, HeartPulse } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Story } from "@/lib/news/generator";
 import { FEED_MAP, type SectionId } from "@/lib/news/sources";
@@ -15,19 +15,20 @@ export const SECTION_COLOR: Record<SectionId, string> = {
   sports:     "#DB2777",
   science:    "#0EA5E9",
   health:     "#65A30D",
-  local:      "#2563EB",
 };
 
-// Legacy section names → new section (backward compat for old briefings)
+// Legacy section names → new section (backward compat for old briefings).
+// "local" removed 2026-07-02 (was hardcoded to one default city).
 const LEGACY_SECTION: Record<string, SectionId> = {
   politics:      "india",
   techlife:      "technology",
   entertainment: "india",
+  local:         "india",
 };
 
 function resolveSection(s: string): SectionId {
   if (s in LEGACY_SECTION) return LEGACY_SECTION[s];
-  if (["headlines", "india", "world", "business", "technology", "sports", "science", "health", "local"].includes(s)) return s as SectionId;
+  if (["headlines", "india", "world", "business", "technology", "sports", "science", "health"].includes(s)) return s as SectionId;
   return "india";
 }
 
@@ -41,7 +42,6 @@ const SECTION_ICON: Record<SectionId, React.ReactNode> = {
   sports:     <Trophy       className="size-5" />,
   science:    <FlaskConical className="size-5" />,
   health:     <HeartPulse   className="size-5" />,
-  local:      <MapPin       className="size-5" />,
 };
 
 function WaveformIcon() {

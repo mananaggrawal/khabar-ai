@@ -15,7 +15,7 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fetchRss, type RssItem } from "./rss";
-import { FEEDS, FEED_MAP, SECTION_ORDER, DEFAULT_CITY, matchPublisher, type SectionId } from "./sources";
+import { FEEDS, FEED_MAP, SECTION_ORDER, matchPublisher, type SectionId } from "./sources";
 import { edgeTTS } from "@/lib/tts/edge";
 import { elevenLabsTTS, isQuotaExhausted } from "@/lib/tts/elevenlabs";
 import { googleTTS, isDailyQuotaExhausted } from "@/lib/tts/google";
@@ -321,10 +321,10 @@ function aiJson(prompt: string, model: string, maxTokens = 8192): Promise<any> {
 
 // ─── Step 1: Fetch all feeds ──────────────────────────────────────────────────
 
-async function fetchAllFeeds(city: string): Promise<Map<SectionId, RssItem[]>> {
+async function fetchAllFeeds(): Promise<Map<SectionId, RssItem[]>> {
   const results = await Promise.allSettled(
     FEEDS.map(async (feed) => {
-      const url = feed.buildUrl({ city });
+      const url = feed.buildUrl();
       let items = await fetchRss(url, feed.label, feed.feedId);
       if (items.length === 0 && feed.fallbackUrl) {
         console.warn(`[feeds] ${feed.label}: primary returned 0 — trying fallback`);
@@ -426,7 +426,7 @@ function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]
   }
 
   // Process topical feeds first
-  for (const feedId of ["india", "world", "business", "technology", "sports", "science", "health", "local"] as SectionId[]) {
+  for (const feedId of ["india", "world", "business", "technology", "sports", "science", "health"] as SectionId[]) {
     for (const item of feedMap.get(feedId) ?? []) {
       const id  = storyId(item.link);
       const key = normalize(item.title).slice(0, 60);
@@ -704,7 +704,7 @@ ${list}`;
  */
 const SECTION_BIAS: Record<string, number> = {
   headlines: 2.4, india: 1.3, world: 1.4, business: 1.4,
-  technology: 1.0, sports: 1.0, science: 0.5, health: 0.6, local: 0.6,
+  technology: 1.0, sports: 1.0, science: 0.5, health: 0.6,
 };
 
 /**
@@ -818,7 +818,7 @@ Return a JSON object with a single key "events":
 RULES:
 - Return exactly ${maxStories} events (or fewer if total distinct events is less)
 - Every index used in sourceIndices must be in range 0–${stories.length - 1}
-- section: assign based on content — "headlines" for major cross-cutting stories, "local" for city/regional news, else the best-fitting topic: india, world, business, technology, sports, science, or health
+- section: assign based on content — "headlines" for major cross-cutting stories, else the best-fitting topic: india, world, business, technology, sports, science, or health
 - imageIndex: which sourceIndex is most likely to have a good image (Reuters, AP, PTI, AFP > others)
 - Keep clusters tight — only group articles covering the SAME specific event
 
@@ -876,7 +876,7 @@ ${articleList}`;
     const title    = (g.title ?? "").trim();
     if (!title) continue;
 
-    const section  = (["headlines", "india", "world", "business", "technology", "sports", "science", "health", "local"].includes(g.section)
+    const section  = (["headlines", "india", "world", "business", "technology", "sports", "science", "health"].includes(g.section)
       ? g.section : stories[indices[0]].section) as SectionId;
 
     const imageIdx      = (g.imageIndex != null && indices.includes(g.imageIndex)) ? g.imageIndex : indices[0];
@@ -1252,10 +1252,11 @@ export async function saveBriefing(briefing: DailyBriefing): Promise<void> {
 
 function mapOldSection(cat: string): SectionId {
   const m: Record<string, SectionId> = {
-    headlines: "headlines", india: "india", world: "world", business: "business", local: "local",
+    headlines: "headlines", india: "india", world: "world", business: "business",
     technology: "technology", sports: "sports", science: "science", health: "health",
-    // old taxonomy → nearest new section
-    politics: "india", techlife: "technology", entertainment: "india",
+    // old taxonomy → nearest new section (local section removed 2026-07-02 — was
+    // hardcoded to one default city with no real per-user wiring)
+    politics: "india", techlife: "technology", entertainment: "india", local: "india",
     // legacy v2/v3
     "india-national": "india", "india-business": "business", "india-sports": "india",
     "india-tech": "india", "global-world": "world", "global-business": "business",
@@ -1309,7 +1310,6 @@ export const getTodayBriefing = getLatestBriefing;
 
 export async function generateDailyBriefing(
   logger: Logger = () => {},
-  city: string = DEFAULT_CITY,
   ttsProvider: TtsProvider = "edge",
   languages: string[] = ["en"],
 ): Promise<DailyBriefing & { runSummary?: RunSummary }> {
@@ -1317,7 +1317,7 @@ export async function generateDailyBriefing(
   const date     = new Date().toISOString().slice(0, 10);
   const log      = (msg: string) => { console.log(`[generator] ${msg}`); logger(msg); };
 
-  log(`Starting briefing v5 — ${date} | city: ${city} | TTS: ${ttsProvider}`);
+  log(`Starting briefing v5 — ${date} | TTS: ${ttsProvider}`);
 
   // English is always scripted; every other supported language is TRANSLATED from it.
   const SUPPORTED_LANGS = ["en", "hi", "ta", "mr"];
@@ -1328,7 +1328,7 @@ export async function generateDailyBriefing(
   // Step 1: Fetch
   const t0 = Date.now();
   log(`Fetching ${FEEDS.length} Google News feeds…`);
-  const feedMap  = await fetchAllFeeds(city);
+  const feedMap  = await fetchAllFeeds();
   const rawTotal = [...feedMap.values()].reduce((n, v) => n + v.length, 0);
   log(`Fetched ${rawTotal} raw items from ${feedMap.size} feeds (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
 
@@ -1492,17 +1492,16 @@ export async function generateDailyBriefing(
 
 export async function generateMissingSections(
   logger: Logger = () => {},
-  city = DEFAULT_CITY,
 ): Promise<{ added: string[]; briefing: DailyBriefing }> {
   const log = (msg: string) => { console.log(`[generator] ${msg}`); logger(msg); };
   const existing = await getLatestBriefing();
   if (!existing) {
     log("No existing briefing — running full generation…");
-    const full = await generateDailyBriefing(logger, city);
+    const full = await generateDailyBriefing(logger);
     return { added: ["(full generation)"], briefing: full };
   }
   log(`Refreshing: ${existing.stories.length} stories exist — running full regeneration…`);
-  const fresh = await generateDailyBriefing(logger, city, "edge", existing.generatedLanguages ?? ["en"]);
+  const fresh = await generateDailyBriefing(logger, "edge", existing.generatedLanguages ?? ["en"]);
   return { added: ["(full regeneration)"], briefing: fresh };
 }
 
