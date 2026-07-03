@@ -386,6 +386,14 @@ function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]
     return allowAll || matchPublisher(item.source) !== null;
   }
 
+  // TEMP (2026-07-02): title-based dedup disabled by default while diagnosing
+  // whether it's silently dropping distinct articles (a genuinely different
+  // story can share the first-60-normalized-chars of its title with an
+  // unrelated one). Exact-URL dedup (seenIds) always stays on regardless —
+  // that's just "don't add the same link twice," not a content judgment.
+  // Re-enable with ENABLE_TITLE_DEDUP=true once diagnosed.
+  const titleDedupEnabled = process.env.ENABLE_TITLE_DEDUP === "true";
+
   // Only today's news: drop items older than STORY_MAX_AGE_HOURS (default 24h),
   // and anything dated in the future (clock-skew tolerance 2h).
   const maxAgeMs     = (Number(process.env.STORY_MAX_AGE_HOURS) || 24) * 3_600_000;
@@ -430,7 +438,7 @@ function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]
     for (const item of feedMap.get(feedId) ?? []) {
       const id  = storyId(item.link);
       const key = normalize(item.title).slice(0, 60);
-      if (seenIds.has(id) || seenTitles.has(key)) continue;
+      if (seenIds.has(id) || (titleDedupEnabled && seenTitles.has(key))) continue;
       if (!isAllowed(item)) { notAllowedDropped++; continue; }
       if (isBlocked(item)) { blockedDropped++; continue; }
       if (!isFresh(item))  { staleDropped++;   continue; }
@@ -1451,25 +1459,27 @@ export async function generateDailyBriefing(
     // via CAP_SOLO_EVENTS=true if this ever needs bounding again.)
     const soloEvents = buildSoloEvents(rawStories, headlineIds);
 
-    // Non-AI near-duplicate merge only (title-token overlap / shared source article)
-    // — same safety net used in the clustering path, minus the LLM semantic pass.
-    // Without this, the same real-world event (e.g. one rainstorm) shows up once
-    // per publisher that covered it, since dedup upstream is exact-title-only.
-    const { merged, removed } = mergeDuplicateEvents(soloEvents);
-    if (removed > 0) log(`Merged ${removed} near-duplicate event(s) by title overlap`);
+    // TEMP (2026-07-02): near-duplicate merge + topic grouping both disabled by
+    // default while diagnosing reports of allowed-publisher articles going
+    // missing — these fold multiple raw stories into one, so if either is
+    // over-matching it could look like "articles aren't showing up." Headlines
+    // section promotion (cross-feed match, above in buildRawStories) is
+    // untouched — that relabels a section, it doesn't drop or combine content.
+    // Re-enable with ENABLE_DUPLICATE_MERGE=true / ENABLE_TOPIC_GROUPING=true.
+    const dupMergeEnabled = process.env.ENABLE_DUPLICATE_MERGE === "true";
+    let merged = soloEvents;
+    if (dupMergeEnabled) {
+      const r = mergeDuplicateEvents(soloEvents);
+      merged = r.merged;
+      if (r.removed > 0) log(`Merged ${r.removed} near-duplicate event(s) by title overlap`);
+    }
 
-    // Topic grouping (2026-07-02): combine DISTINCT stories that share the same
-    // specific named subject (a person, an ongoing case, a named bilateral
-    // relationship) into one story — e.g. multiple separate Siya Goyal
-    // mentions, or multiple India-Japan relations stories. Narrowly-scoped LLM
-    // call, grouping only — no section/importance judgment. Escape hatch:
-    // ENABLE_TOPIC_GROUPING=false to disable.
-    const topicGroupingEnabled = process.env.ENABLE_TOPIC_GROUPING !== "false";
+    const topicGroupingEnabled = process.env.ENABLE_TOPIC_GROUPING === "true";
     const topicGrouped = topicGroupingEnabled ? await topicGroupEvents(merged, log) : merged;
 
     const capEnabled = process.env.CAP_SOLO_EVENTS === "true";
     selectedEvents = capEnabled ? capProportional(topicGrouped, MAX_STORIES, targets) : topicGrouped;
-    log(`Clustering disabled — ${selectedEvents.length} events${capEnabled ? ` (capped from ${topicGrouped.length})` : ` — all allowlisted, near-duplicate-merged + topic-grouped articles included, no cap`}`);
+    log(`Clustering disabled, dedup/merge/topic-grouping off — ${selectedEvents.length} events${capEnabled ? ` (capped from ${topicGrouped.length})` : ` — every allowlisted, fresh, exact-URL-unique article included, no cap`}`);
 
     const liveImageById = new Map<string, string>();
     const withImages = await fetchAllOgImages(selectedEvents.map(ev => ev.sourceStories[0]), log, liveImageById);
