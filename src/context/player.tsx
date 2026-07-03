@@ -38,7 +38,16 @@ type PlayerContextValue = {
 const PlayerCtx = createContext<PlayerContextValue | null>(null);
 
 // ── Mini Player (portal) — persists across routes ───────────────────────────
-function MiniPlayer({ mono, onOpen }: { mono: ReturnType<typeof useMonologue>; onOpen: () => void }) {
+// Shows whichever queue is currently active — the main story list, or the
+// 15-minute Highlights briefing — so Highlights gets the same persistent
+// mini-player/controls as normal playback instead of only the home hero card.
+function MiniPlayer({
+  mono, isHighlights, onOpen,
+}: {
+  mono: ReturnType<typeof useMonologue>;
+  isHighlights: boolean;
+  onOpen: () => void;
+}) {
   if (typeof document === "undefined") return null;
   const { state, progress, currentStory, currentFeed, pause, resume, language } = mono;
   const visible = state === "playing" || state === "paused";
@@ -63,7 +72,7 @@ function MiniPlayer({ mono, onOpen }: { mono: ReturnType<typeof useMonologue>; o
             <div className="flex items-center gap-3 px-4 py-3">
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[11px] text-muted-foreground">
-                  {currentFeed ? (language === "hi" ? currentFeed.labelHi : currentFeed.label) : "Playing"}
+                  {isHighlights ? "15-Minute Highlights" : currentFeed ? (language === "hi" ? currentFeed.labelHi : currentFeed.label) : "Playing"}
                 </p>
                 <p className="truncate text-sm font-medium text-foreground leading-tight">
                   {currentStory ? getStoryTitle(currentStory, language) : "—"}
@@ -159,8 +168,19 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const saved = useSavedStories();
   const [playerOpen, setPlayerOpen] = useState(false);
 
+  // Whichever queue is actually active drives the mini-player/full-player —
+  // the main story list takes priority if both are somehow active at once
+  // (shouldn't normally happen since starting one doesn't stop the other,
+  // but the main list is the primary experience).
+  const monoActive = mono.state === "playing" || mono.state === "paused";
+  const highlightsActive = highlightsMono.state === "playing" || highlightsMono.state === "paused";
+  const activeIsHighlights = !monoActive && highlightsActive;
+  const activeMono = activeIsHighlights ? highlightsMono : mono;
+
   // Close the full player when playback stops
-  useEffect(() => { if (mono.state === "idle") setPlayerOpen(false); }, [mono.state]);
+  useEffect(() => {
+    if (mono.state === "idle" && highlightsMono.state === "idle") setPlayerOpen(false);
+  }, [mono.state, highlightsMono.state]);
 
   // Persist which languages are available in this briefing
   useEffect(() => {
@@ -189,13 +209,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   return (
     <PlayerCtx.Provider value={value}>
       {children}
-      <MiniPlayer mono={mono} onOpen={() => setPlayerOpen(true)} />
+      <MiniPlayer mono={activeMono} isHighlights={activeIsHighlights} onOpen={() => setPlayerOpen(true)} />
       <PlayerScreen
-        mono={mono}
+        mono={activeMono}
         visible={playerOpen}
         onClose={() => setPlayerOpen(false)}
-        isSaved={mono.currentStory ? saved.isSaved(mono.currentStory.id) : false}
-        onSave={() => mono.currentStory && saved.toggle(mono.currentStory)}
+        // Saving doesn't apply to Highlights segments (no real article behind them)
+        isSaved={!activeIsHighlights && activeMono.currentStory ? saved.isSaved(activeMono.currentStory.id) : false}
+        onSave={() => !activeIsHighlights && activeMono.currentStory && saved.toggle(activeMono.currentStory)}
       />
     </PlayerCtx.Provider>
   );
