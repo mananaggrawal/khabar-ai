@@ -698,6 +698,63 @@ ${list}`;
 }
 
 /**
+ * Topic grouping (2026-07-02): a narrowly-scoped LLM call, separate from the
+ * old broad clustering call this replaces. Its ONLY job is to group stories
+ * that are about the same SPECIFIC named subject (a person, an ongoing case,
+ * a specific bilateral relationship) — not "same event" (that's
+ * mergeDuplicateEvents/llmDedupeEvents) and not "same broad theme." It does
+ * NOT reassign sections and does NOT rank/order — those stay exactly as
+ * already determined. This is deliberately the smallest possible AI task:
+ * just "do these already-distinct stories belong to the same running thread,"
+ * to avoid the mis-grouping/mis-tagging failures of the old all-purpose call.
+ */
+async function topicGroupEvents(events: SelectedEvent[], logger: Logger): Promise<SelectedEvent[]> {
+  if (events.length < 3) return events;
+  const list = events.map((e, i) => `${i}. [${e.section}] ${e.title}`).join("\n");
+  const prompt = `Below are ${events.length} DISTINCT news stories already selected for one briefing (these are NOT duplicates of each other — each is a different specific happening).
+
+TASK: find stories that share the exact same SPECIFIC named subject — the same named person, the same ongoing case/investigation, or the same specific bilateral relationship/deal explicitly named in more than one headline — where combining them into one story covering multiple developments would genuinely help the listener follow one thread, instead of hearing that name/subject scattered across several separate stories.
+
+STRICT RULES — do NOT group:
+- Stories that merely mention the same country, city, or organisation in passing (e.g. two unrelated stories that both happen to mention India, or both happen to mention Mumbai) — that is a coincidence, not a shared subject.
+- Stories that share a broad theme or category (e.g. "two different court cases," "two different accidents," "two different diplomatic visits") without naming the exact same person/case/relationship.
+- Stories where you are not confident the specific named subject is identical, not just similar.
+
+When in doubt, leave stories separate. Under-grouping is fine; over-grouping is not — a group that wrongly combines two different subjects will produce a garbled, confusing summary.
+
+Return JSON only: {"groups": [[2,7],[4,9,12]]} — only groups of 2+ indices sharing the same specific named subject. If none qualify, return {"groups": []}.
+
+Stories:
+${list}`;
+
+  let raw: any;
+  try {
+    raw = await aiJson(prompt, CLUSTER_MODEL, 4096);
+  } catch (err: any) {
+    logger(`  topic-grouping pass skipped: ${err.message?.slice(0, 60)}`);
+    return events;
+  }
+  const groups: any[] = Array.isArray(raw?.groups) ? raw.groups : [];
+  if (groups.length === 0) return events;
+
+  const removed = new Set<number>();
+  for (const g of groups) {
+    if (!Array.isArray(g)) continue;
+    const idxs = [...new Set(g.filter((i: any) => Number.isInteger(i) && i >= 0 && i < events.length && !removed.has(i)))]
+      .sort((a: number, b: number) => a - b);
+    if (idxs.length < 2) continue;
+    const keep = events[idxs[0]];
+    for (let j = 1; j < idxs.length; j++) {
+      foldEventInto(keep, events[idxs[j]]);
+      removed.add(idxs[j]);
+    }
+  }
+  if (removed.size === 0) return events;
+  logger(`Topic grouping combined ${removed.size} stories into shared-subject events`);
+  return events.filter((_, i) => !removed.has(i));
+}
+
+/**
  * Editorial bias applied on top of raw fetch volume: >1 boosts a section's share,
  * <1 shrinks it. Keeps the split proportional to supply, but weights Top Stories /
  * India / Business / World up and Science / Local / Health down.
@@ -975,6 +1032,8 @@ async function scriptEvent(
 Write a spoken script for this ${sectionLabel} story. Target: 45-65 words — very quick, headline + key facts only. This will be read aloud.
 
 Think a wire-service brief read aloud: state only the facts the sources report — what happened, who, when, where, and the key numbers. Report; do not interpret. No analysis, no speculation, no opinion, no "why it matters," no significance or framing. Warm and clear, but fast and neutral.
+
+If the sources below describe more than one distinct development about the same subject (not just the same fact worded differently), briefly cover the most important 2-3 in order, as one coherent update — do not just repeat one source's framing and ignore the others.
 
 STORY: ${ev.title}
 SECTION: ${sectionLabel}
@@ -1399,9 +1458,18 @@ export async function generateDailyBriefing(
     const { merged, removed } = mergeDuplicateEvents(soloEvents);
     if (removed > 0) log(`Merged ${removed} near-duplicate event(s) by title overlap`);
 
+    // Topic grouping (2026-07-02): combine DISTINCT stories that share the same
+    // specific named subject (a person, an ongoing case, a named bilateral
+    // relationship) into one story — e.g. multiple separate Siya Goyal
+    // mentions, or multiple India-Japan relations stories. Narrowly-scoped LLM
+    // call, grouping only — no section/importance judgment. Escape hatch:
+    // ENABLE_TOPIC_GROUPING=false to disable.
+    const topicGroupingEnabled = process.env.ENABLE_TOPIC_GROUPING !== "false";
+    const topicGrouped = topicGroupingEnabled ? await topicGroupEvents(merged, log) : merged;
+
     const capEnabled = process.env.CAP_SOLO_EVENTS === "true";
-    selectedEvents = capEnabled ? capProportional(merged, MAX_STORIES, targets) : merged;
-    log(`Clustering disabled — ${selectedEvents.length} events${capEnabled ? ` (capped from ${merged.length})` : ` — all allowlisted, near-duplicate-merged articles included, no cap`}`);
+    selectedEvents = capEnabled ? capProportional(topicGrouped, MAX_STORIES, targets) : topicGrouped;
+    log(`Clustering disabled — ${selectedEvents.length} events${capEnabled ? ` (capped from ${topicGrouped.length})` : ` — all allowlisted, near-duplicate-merged + topic-grouped articles included, no cap`}`);
 
     const liveImageById = new Map<string, string>();
     const withImages = await fetchAllOgImages(selectedEvents.map(ev => ev.sourceStories[0]), log, liveImageById);
