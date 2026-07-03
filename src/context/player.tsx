@@ -28,6 +28,7 @@ function resolveSection(s: string): SectionId {
 
 type PlayerContextValue = {
   mono: ReturnType<typeof useMonologue>;
+  highlightsMono: ReturnType<typeof useMonologue>;
   briefing: DailyBriefing | null;
   isLoading: boolean;
   saved: ReturnType<typeof useSavedStories>;
@@ -133,6 +134,28 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, [rawBriefing, preferredPublishers]);
 
   const mono = useMonologue({ briefing });
+
+  // 15-minute Highlights briefing — a handful of pre-scripted multi-story
+  // segments (see generator.ts buildHighlightSegments), played from the home
+  // screen's hero card as a separate, shorter alternative to the full story
+  // list. Reuses the same "synthetic briefing" trick as history.tsx's saved-
+  // stories player: useMonologue just needs an array of Story-shaped objects,
+  // so each HighlightSegment is wrapped as one.
+  const highlightsBriefing: DailyBriefing | null = useMemo(() => {
+    const segs = rawBriefing?.highlights?.filter(h => h.audioUrlEn);
+    if (!segs || segs.length === 0) return null;
+    const stories: Story[] = [...segs]
+      .sort((a, b) => a.order - b.order)
+      .map(h => ({
+        id: h.id, title: h.label, source: "Khabar AI", link: "",
+        publishedAt: rawBriefing!.generatedAt, section: "headlines",
+        scriptEn: h.scriptEn, scriptHi: "", audioUrlEn: h.audioUrlEn,
+        wordCount: h.wordCount,
+      }));
+    return { date: rawBriefing!.date, generatedAt: rawBriefing!.generatedAt, stories };
+  }, [rawBriefing]);
+  const highlightsMono = useMonologue({ briefing: highlightsBriefing });
+
   const saved = useSavedStories();
   const [playerOpen, setPlayerOpen] = useState(false);
 
@@ -156,6 +179,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   const value: PlayerContextValue = {
     mono,
+    highlightsMono,
     briefing,
     isLoading: briefingQuery.isLoading,
     saved,

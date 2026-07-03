@@ -1,6 +1,6 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Share2 } from "lucide-react";
+import { Share2, Play, Pause } from "lucide-react";
 import { VoiceOrb } from "@/components/VoiceOrb";
 
 import { StoryCard } from "@/components/StoryCard";
@@ -56,12 +56,12 @@ export const Route = createFileRoute("/")({
 function HeroCard({
   briefing,
   mono,
+  highlightsMono,
 }: {
   briefing: NonNullable<ReturnType<typeof usePlayer>["briefing"]>;
   mono: ReturnType<typeof usePlayer>["mono"];
+  highlightsMono: ReturnType<typeof usePlayer>["highlightsMono"];
 }) {
-  const displayStory = mono.currentStory ?? briefing.stories[0];
-
   const withAudio = briefing.stories.filter((s) => !!getAudioUrl(s, mono.language));
   // Use meta duration if available, else estimate from word counts (~150 WPM)
   const listenMins = briefing.meta?.estimatedDurationSec
@@ -71,9 +71,30 @@ function HeroCard({
     weekday: "short", day: "numeric", month: "long",
   });
 
+  const hasHighlights = highlightsMono.storiesWithAudio.length > 0;
+  const highlightsActive = highlightsMono.state === "playing" || highlightsMono.state === "paused";
+  const highlightsMins = Math.max(1, Math.round(
+    highlightsMono.storiesWithAudio.reduce((n, s) => n + (s.wordCount ?? 400), 0) / 150,
+  ));
+
+  // While the main story queue is actively playing something, the card follows
+  // that (existing behaviour). Otherwise, if the 15-min Highlights briefing has
+  // started, show that. Idle default: an invitation to play Highlights.
+  const displayStory = mono.currentStory;
+  const mode: "story" | "highlights" | "idle" = displayStory ? "story" : highlightsActive ? "highlights" : "idle";
+
+  function handleTap() {
+    if (mode === "story") return; // main story already playing — card just reflects it
+    highlightsMono.orbTap();
+  }
+
   return (
     <div
-      className="mx-4 mb-4 relative overflow-hidden rounded-3xl bg-cover bg-center"
+      role="button"
+      tabIndex={0}
+      onClick={handleTap}
+      onKeyDown={(e) => e.key === "Enter" && handleTap()}
+      className="mx-4 mb-4 relative overflow-hidden rounded-3xl bg-cover bg-center cursor-pointer"
       style={{
         height: 220,
         backgroundImage: "url(/hero-orb.jpg)",
@@ -97,25 +118,66 @@ function HeroCard({
             {today}
           </span>
           <span className="text-[10px] font-medium text-white/40">
-            {listenMins} min listen
+            {mode === "highlights" ? `${highlightsMins} min highlights` : `${listenMins} min listen`}
           </span>
         </div>
 
         {/* Bottom section */}
         <div className="flex flex-col gap-2.5">
-          {/* Story title */}
-          <p className="font-serif text-[17px] leading-snug text-white line-clamp-2">
-            {displayStory ? getStoryTitle(displayStory, mono.language) : "Today's Briefing"}
-          </p>
+          {mode === "story" && (
+            <>
+              <p className="font-serif text-[17px] leading-snug text-white line-clamp-2">
+                {getStoryTitle(displayStory!, mono.language)}
+              </p>
+              <span className="text-[11px] text-white/45 font-medium">
+                {briefing.stories.length} stories
+              </span>
+            </>
+          )}
 
-          {/* Story count */}
-          <div className="flex items-center gap-2.5">
-            <span className="text-[11px] text-white/45 font-medium">
-              {briefing.stories.length} stories
-            </span>
-          </div>
+          {mode === "highlights" && (
+            <>
+              <p className="font-serif text-[17px] leading-snug text-white line-clamp-2">
+                {highlightsMono.currentStory?.title ?? "15-Minute Highlights"}
+              </p>
+              <span className="text-[11px] text-white/45 font-medium">
+                {highlightsMono.state === "playing" ? "Playing" : "Paused"} — the day's most important stories
+              </span>
+            </>
+          )}
+
+          {mode === "idle" && (
+            <>
+              <p className="font-serif text-[17px] leading-snug text-white line-clamp-2">
+                {hasHighlights ? "15-Minute Highlights" : "Today's Briefing"}
+              </p>
+              <div className="flex items-center gap-2.5">
+                {hasHighlights && (
+                  <span className="flex size-6 items-center justify-center rounded-full bg-white/15">
+                    <Play className="size-3 fill-white text-white ml-0.5" />
+                  </span>
+                )}
+                <span className="text-[11px] text-white/45 font-medium">
+                  {hasHighlights ? `Tap to play the most important ${highlightsMins} min` : `${briefing.stories.length} stories`}
+                </span>
+              </div>
+            </>
+          )}
         </div>
       </div>
+
+      {/* Inline play/pause control while highlights are active */}
+      {mode === "highlights" && (
+        <button
+          onClick={(e) => { e.stopPropagation(); highlightsMono.orbTap(); }}
+          aria-label={highlightsMono.state === "playing" ? "Pause" : "Resume"}
+          className="absolute bottom-4 right-4 flex size-10 items-center justify-center rounded-full bg-white/15 text-white backdrop-blur-sm"
+        >
+          {highlightsMono.state === "playing"
+            ? <Pause className="size-4 fill-current" />
+            : <Play className="size-4 fill-current ml-0.5" />}
+        </button>
+      )}
     </div>
   );
 }
@@ -125,7 +187,7 @@ function HeroCard({
 function HomePage() {
   // Player + briefing now live in the app-wide PlayerProvider so audio keeps
   // playing across tab changes.
-  const { mono, briefing, isLoading, saved: savedStories } = usePlayer();
+  const { mono, highlightsMono, briefing, isLoading, saved: savedStories } = usePlayer();
 
   const [detailStory, setDetailStory] = useState<Story | null>(null);
   const [activeSection, setActiveSection] = useState<SectionId | null>(null);
@@ -267,7 +329,7 @@ function HomePage() {
       {briefing && (
         <>
           {/* Hero card */}
-          <HeroCard briefing={briefing} mono={mono} />
+          <HeroCard briefing={briefing} mono={mono} highlightsMono={highlightsMono} />
 
           {/* Section pills */}
           <div
