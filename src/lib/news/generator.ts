@@ -663,6 +663,21 @@ function foldEventInto(keep: SelectedEvent, dup: SelectedEvent): void {
 }
 
 /**
+ * Recompute each event's public id (Story.id, used for "listened" tracking)
+ * from the exact composition of its source articles, not whichever single
+ * article happened to be kept first during merge/topic-grouping. See call
+ * site comment for why: without this, a merge group that changes composition
+ * between regenerations silently keeps its old anchor's id, wrongly
+ * inheriting "heard" status for what's actually different content.
+ */
+function finalizeEventIds(events: SelectedEvent[]): void {
+  for (const ev of events) {
+    const ids = ev.sourceStories.map(s => s.id).sort();
+    ev.eventId = storyId(ids.join("|"));
+  }
+}
+
+/**
  * Second-pass semantic dedupe: a focused LLM call over the selected titles.
  * Title-token overlap misses same-event stories worded very differently (e.g.
  * the same flooding reported five ways). This asks the model to group ONLY
@@ -1503,6 +1518,18 @@ export async function generateDailyBriefing(
       if (!ev.imageUrl) ev.imageUrl = imageById.get(ev.sourceStories[0].id);
     }
   }
+
+  // "Listened" status fix (2026-07-03): mergeDuplicateEvents/topicGroupEvents
+  // fold multiple raw articles into one survivor WITHOUT updating its eventId
+  // (foldEventInto never touches it) — so on a same-day regeneration, a story
+  // whose merge group grows or changes composition would otherwise silently
+  // keep the old anchor article's id, wrongly inheriting its "heard" mark even
+  // though the actual script gets rewritten fresh from a different set of
+  // sources. Recomputing each id from the full (sorted) set of source-article
+  // ids means: same exact composition -> same id (correctly stays "heard");
+  // different composition -> different id (no false carryover, genuinely new).
+  finalizeEventIds(selectedEvents);
+
   const clusterSec = (Date.now() - t1) / 1000;
 
   log(`${selectedEvents.length} events — est. ~${Math.round(selectedEvents.length * WORDS_PER_STORY / WORDS_PER_MINUTE)} min briefing`);
