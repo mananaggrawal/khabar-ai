@@ -216,7 +216,11 @@ export function StoryDetailSheet({
             {/* Scrollable body */}
             <div
               className="flex-1 overflow-y-auto px-5"
-              style={{ paddingBottom: hasMiniPlayer ? "calc(env(safe-area-inset-bottom, 0px) + 84px)" : "1rem" }}
+              // The sheet's own wrapper already adds env(safe-area-inset-bottom, 0px)
+              // once (see the outer motion.div below) — the mini-player pill's offset
+              // from the sheet's bottom edge is a flat 12px + its own ~64px height,
+              // so this only needs that flat amount, not a second safe-area addition.
+              style={{ paddingBottom: hasMiniPlayer ? "76px" : "1rem" }}
             >
               {/* Summary */}
               {script && (
