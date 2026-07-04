@@ -31,6 +31,27 @@ async function authHeader(): Promise<Record<string, string>> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+function isIOS(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) && !("MSStream" in window);
+}
+
+function isStandalone(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.matchMedia?.("(display-mode: standalone)").matches || (navigator as any).standalone === true;
+}
+
+// iOS Safari silently never completes a push subscription unless the page is
+// running as an installed home-screen app — in a regular tab, subscribe()
+// just hangs forever instead of rejecting. Without a timeout, the UI would
+// sit on "Working…" indefinitely (exactly what happened before this existed).
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+  ]);
+}
+
 export function usePushNotifications() {
   const supported =
     typeof window !== "undefined" &&
@@ -71,17 +92,31 @@ export function usePushNotifications() {
         setError(perm === "denied" ? "Notifications blocked — enable them in your browser settings." : "Permission not granted.");
         return;
       }
-      const reg = await navigator.serviceWorker.ready;
-      const subscription = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY) as BufferSource,
-      });
+      const reg = await withTimeout(
+        navigator.serviceWorker.ready,
+        10_000,
+        "Timed out waiting for the notification service to start. Try closing and reopening the app.",
+      );
+      const subscription = await withTimeout(
+        reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY) as BufferSource,
+        }),
+        15_000,
+        isIOS() && !isStandalone()
+          ? "Timed out. On iPhone, notifications only work when opened from the home-screen icon, not a Safari tab — add this to your home screen first, then open it from there."
+          : "Timed out subscribing to notifications. Please try again.",
+      );
       const headers = await authHeader();
-      const res = await fetch("/api/push/subscribe", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...headers },
-        body: JSON.stringify(subscription.toJSON()),
-      });
+      const res = await withTimeout(
+        fetch("/api/push/subscribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...headers },
+          body: JSON.stringify(subscription.toJSON()),
+        }),
+        10_000,
+        "Timed out saving your subscription — check your connection and try again.",
+      );
       if (!res.ok) throw new Error("Failed to save subscription");
       setSubscribed(true);
     } catch (e: any) {
