@@ -252,9 +252,14 @@ function getOpenAIKey(): string {
   return k;
 }
 
-// GPT-4o for scripting — narrative quality. Override via OPENAI_SCRIPT_MODEL.
+// gpt-4o-mini for scripting (2026-07-04) — was defaulting to full gpt-4o,
+// which has much lower rate limits. With no cap on story count (can be 200+
+// stories/day now), that caused a cascade of 429s during scripting, and the
+// no-proper-script fallback (raw unedited RSS snippet text) kicked in for
+// dozens of stories per run — that's what showed up as "gibberish" content.
+// Override via OPENAI_SCRIPT_MODEL if ever needed.
 function getScriptModel(): string {
-  return process.env.OPENAI_SCRIPT_MODEL ?? "gpt-4o";
+  return process.env.OPENAI_SCRIPT_MODEL ?? "gpt-4o-mini";
 }
 
 // GPT-4o-mini for cluster/select — classification only, cost-effective.
@@ -1030,7 +1035,13 @@ ${articleList}`;
 
 function isValidScript(text: string | undefined): boolean {
   if (!text || text.trim().length < 10) return false;
-  if (text.trim().split(/\s+/).length < 25) return false;
+  // Floor lowered 25 -> 15 (2026-07-04): this should only catch genuinely
+  // broken output (empty, one-liner refusal, truncated JSON), not merely-
+  // terse-but-fine scripts. The prompt's "45-65 words" is what pushes toward
+  // the target length — rejecting a coherent 21-24 word script here just
+  // forces a wasteful retry (another OpenAI call) for no real quality gain,
+  // which piles on exactly when the API is already rate-limited.
+  if (text.trim().split(/\s+/).length < 15) return false;
   if (/[ऀ-ॿ஀-௿]/.test(text)) return false; // no foreign script in English field
   return true;
 }
