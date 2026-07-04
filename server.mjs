@@ -454,6 +454,16 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
 
   function txt(id, v){ document.getElementById(id).textContent = v; }
 
+  // All timestamps from the server are UTC ISO strings — this dashboard should
+  // always read in IST regardless of the viewing browser's own timezone, so
+  // convert explicitly rather than relying on toLocaleString()'s local default.
+  function toIST(iso, opts){
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleString('en-IN', Object.assign({ timeZone: 'Asia/Kolkata' }, opts || {}));
+  }
+
   function drawChart(id, type, labels, datasets){
     var ctx = document.getElementById(id).getContext('2d');
     if (charts[id]) charts[id].destroy();
@@ -550,7 +560,7 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
     var ub = document.querySelector('#usersTbl tbody'); ub.innerHTML = '';
     (d.users || []).forEach(function(u){
       var tr = document.createElement('tr');
-      var la = (u.lastActive || '').replace('T', ' ').slice(0, 16);
+      var la = toIST(u.lastActive, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
       tr.innerHTML = '<td>' + (u.email || '–') + '</td><td>' + u.daysActive + '</td><td>' + u.appMin + '</td><td>' + u.listenMin + '</td><td>' + u.stories + '</td><td class="muted">' + la + '</td>';
       ub.appendChild(tr);
     });
