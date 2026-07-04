@@ -94,24 +94,28 @@ export function StoryDetailSheet({
 
   // Lock background scroll while the drawer is open — otherwise a drag/scroll
   // gesture inside the sheet bleeds through to the story list behind it.
-  // Plain `overflow: hidden` on body isn't reliable on iOS Safari (this is an
-  // iPhone-first PWA) — pinning body to `position: fixed` at its current
-  // scroll offset is the standard fix, restoring the exact scroll position on close.
+  // NOTE (2026-07-03): previously used `position: fixed` on body for this,
+  // which is the "textbook" iOS scroll-lock technique — but it has a bad side
+  // effect here: this drawer (and its backdrop) render via a React portal
+  // directly into document.body, so per the CSS spec, the moment body becomes
+  // `position: fixed`, it becomes the new containing block for THIS drawer's
+  // own `position: fixed` elements too. Instead of anchoring to the real
+  // viewport, the sheet started anchoring to body's box (sized to the whole
+  // scrollable page, not just the screen) — which is exactly what caused the
+  // "gray gap at the bottom" bug: the sheet was correctly hugging the bottom
+  // of body, just not the bottom of the visible screen. Plain overflow:hidden
+  // (on both html and body) doesn't have this side effect, at the minor cost
+  // of not perfectly blocking iOS's rubber-band bounce in every edge case.
   useEffect(() => {
     if (!story || typeof document === "undefined") return;
-    const scrollY = window.scrollY;
+    const html = document.documentElement;
     const body = document.body;
-    const prev = { position: body.style.position, top: body.style.top, width: body.style.width, overflow: body.style.overflow };
-    body.style.position = "fixed";
-    body.style.top = `-${scrollY}px`;
-    body.style.width = "100%";
+    const prev = { htmlOverflow: html.style.overflow, bodyOverflow: body.style.overflow };
+    html.style.overflow = "hidden";
     body.style.overflow = "hidden";
     return () => {
-      body.style.position = prev.position;
-      body.style.top = prev.top;
-      body.style.width = prev.width;
-      body.style.overflow = prev.overflow;
-      window.scrollTo(0, scrollY);
+      html.style.overflow = prev.htmlOverflow;
+      body.style.overflow = prev.bodyOverflow;
     };
   }, [story]);
 
@@ -135,45 +139,31 @@ export function StoryDetailSheet({
       {story && (
         <>
           {/* Backdrop */}
-          {/* TEMP DEBUG (2026-07-03): solid magenta instead of the usual
-              translucent black, so it's unmistakable in a screenshot whether
-              the gray gap IS this backdrop peeking through, or something else
-              entirely. Revert to bg-black/30 backdrop-blur-sm once diagnosed. */}
           <motion.div
             key="backdrop"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className={`fixed inset-0 ${backdropZ} bg-fuchsia-500`}
+            className={`fixed inset-0 ${backdropZ} bg-black/30 backdrop-blur-sm`}
             onClick={onClose}
           />
 
-          {/* Sheet — bottom-anchored via flexbox (justify-end) rather than
-              `fixed; bottom: 0` directly. On iOS Safari/PWAs, a fixed element
-              pinned with `bottom: 0` can settle above the true visible bottom
-              edge depending on browser-chrome/viewport state, leaving a gap
-              where the backdrop shows through as a mismatched gray band.
-              Flex alignment inside a full-screen fixed wrapper is the more
-              reliable way to guarantee it actually touches the bottom edge. */}
-          <div className={`fixed inset-0 ${sheetZ} flex flex-col justify-end pointer-events-none`}>
-            <motion.div
-              key="sheet"
-              initial={{ y: "100%" }}
-              animate={{ y: 0 }}
-              exit={{ y: "100%" }}
-              transition={{ type: "spring", damping: 32, stiffness: 300 }}
-              drag="y"
-              dragControls={dragControls}
-              dragListener={false}
-              dragConstraints={{ top: 0, bottom: 0 }}
-              dragElastic={{ top: 0, bottom: 0.6 }}
-              onDragEnd={(_e, info) => { if (info.offset.y > 110 || info.velocity.y > 600) onClose(); }}
-              // TEMP DEBUG (2026-07-03): bright border to see exactly where the
-              // sheet's own box actually ends, vs. whatever's behind/below it.
-              // Remove once the gray-gap bug is diagnosed.
-              className="pointer-events-auto flex max-h-[85vh] w-full flex-col rounded-t-3xl bg-white shadow-2xl border-4 border-lime-400"
-              style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
-            >
+          {/* Sheet */}
+          <motion.div
+            key="sheet"
+            initial={{ y: "100%" }}
+            animate={{ y: 0 }}
+            exit={{ y: "100%" }}
+            transition={{ type: "spring", damping: 32, stiffness: 300 }}
+            drag="y"
+            dragControls={dragControls}
+            dragListener={false}
+            dragConstraints={{ top: 0, bottom: 0 }}
+            dragElastic={{ top: 0, bottom: 0.6 }}
+            onDragEnd={(_e, info) => { if (info.offset.y > 110 || info.velocity.y > 600) onClose(); }}
+            className={`fixed inset-x-0 bottom-0 ${sheetZ} flex max-h-[85vh] flex-col rounded-t-3xl bg-white shadow-2xl`}
+            style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
+          >
             {/* Drag-to-dismiss zone: handle + header (content below stays scrollable) */}
             <div onPointerDown={(e) => dragControls.start(e)} style={{ touchAction: "none", cursor: "grab" }}>
             {/* Drag handle */}
@@ -297,8 +287,7 @@ export function StoryDetailSheet({
                 </div>
               </div>
             </div>
-            </motion.div>
-          </div>
+          </motion.div>
         </>
       )}
     </AnimatePresence>,
