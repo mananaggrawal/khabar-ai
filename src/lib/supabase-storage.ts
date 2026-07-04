@@ -28,10 +28,19 @@ export async function uploadAudio(
     const { error } = await client().storage.from(BUCKET).upload(path, data, {
       contentType,
       upsert: true,
+      // Regenerating same-day (e.g. after fixing a bad script) re-uploads to
+      // this SAME path, since the filename is derived from a stable per-story
+      // id — upsert overwrites the underlying object fine, but without this,
+      // browsers/CDNs cache the response by URL and can keep serving the OLD
+      // audio bytes for up to an hour after the new file is already live.
+      cacheControl: "0",
     });
     if (!error) {
       const { data: urlData } = client().storage.from(BUCKET).getPublicUrl(path);
-      return urlData.publicUrl;
+      // Cache-busting query param: guarantees a regenerated file (same path,
+      // new content) gets a genuinely new URL, so no cache layer anywhere —
+      // browser, Supabase's CDN, anything in between — can serve stale audio.
+      return `${urlData.publicUrl}?v=${Date.now()}`;
     }
     lastErr = error.message;
   }
