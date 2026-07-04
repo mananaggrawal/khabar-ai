@@ -105,16 +105,20 @@ const server = createServer(async (req, res) => {
 
   // Any static image/font file that exists in the client build (e.g. /hero-orb.jpg)
   const staticExt = /\.(png|jpe?g|webp|gif|svg|ico|woff2?|ttf|otf)$/i.test(pathname);
-  const isStatic = !pathname.includes("..") && (pathname.startsWith("/assets/") || isIcon || staticExt);
+  // Real service worker file — must be served from disk verbatim (not SSR'd as
+  // HTML) and never cached, so updates to it are picked up on next launch.
+  const isServiceWorker = pathname === "/sw.js";
+  const isStatic =
+    !pathname.includes("..") && (pathname.startsWith("/assets/") || isIcon || staticExt || isServiceWorker);
 
   if (isStatic) {
     const filePath = join(CLIENT_DIR, pathname);
     if (existsSync(filePath) && statSync(filePath).isFile()) {
       const mime = MIME[extname(filePath)] || "application/octet-stream";
       res.setHeader("Content-Type", mime);
-      // Icons/manifests: no-cache so PWA and browser always get latest
+      // Icons/manifests/service worker: no-cache so PWA and browser always get latest
       // Hashed assets (JS/CSS in /assets/): immutable 1-year cache
-      const cacheControl = isIcon
+      const cacheControl = isIcon || isServiceWorker
         ? "no-cache, no-store, must-revalidate"
         : "public, max-age=31536000, immutable";
       res.setHeader("Cache-Control", cacheControl);
