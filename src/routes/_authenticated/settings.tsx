@@ -1,10 +1,11 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
-import { MessageCircle } from "lucide-react";
+import { MessageCircle, Bell, BellOff } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import { BottomNav } from "@/components/BottomNav";
 import { usePlayer } from "@/context/player";
+import { usePushNotifications } from "@/hooks/usePushNotifications";
 
 // WhatsApp number for feedback (country code, digits only, no +).
 const FEEDBACK_WHATSAPP = "917447434554";
@@ -34,6 +35,7 @@ function SettingsPage() {
   const hasMiniPlayer = mono.state === "playing" || mono.state === "paused";
   const [selectedLang, setSelectedLang]       = useState<string>(readLanguage);
   const [availableLangs, setAvailableLangs]   = useState<string[]>(readAvailableLanguages);
+  const push = usePushNotifications();
 
   // Re-read available languages on mount
   useEffect(() => {
@@ -122,6 +124,43 @@ function SettingsPage() {
                 </button>
               );
             })}
+          </div>
+        </section>
+
+        {/* Notifications */}
+        <section>
+          <h2 className="font-serif text-lg">Notifications</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Get a nudge when your morning and evening briefing are ready. On iPhone, this only works after adding Khabar AI to your home screen (Share → Add to Home Screen).
+          </p>
+          <div className="mt-4">
+            {!push.supported ? (
+              <div className="rounded-2xl border border-border/40 px-4 py-3 text-sm text-muted-foreground">
+                Notifications aren't supported in this browser.
+              </div>
+            ) : (
+              <button
+                onClick={() => (push.subscribed ? push.unsubscribe() : push.subscribe())}
+                disabled={push.loading}
+                className={cn(
+                  "flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-colors disabled:opacity-60",
+                  push.subscribed
+                    ? "border-primary/40 bg-primary/10 text-foreground"
+                    : "border-border text-foreground/70 hover:border-border/80 hover:bg-black/[0.02]",
+                )}
+              >
+                {push.subscribed ? <Bell className="size-4 text-primary" /> : <BellOff className="size-4 text-muted-foreground" />}
+                <span className="flex-1 text-sm font-medium">
+                  {push.loading ? "Working…" : push.subscribed ? "Notifications on" : "Turn on notifications"}
+                </span>
+                {push.subscribed && (
+                  <span className="text-[10px] uppercase tracking-widest text-primary/70">Tap to turn off</span>
+                )}
+              </button>
+            )}
+            {push.error && (
+              <p className="mt-2 text-xs text-destructive/80">{push.error}</p>
+            )}
           </div>
         </section>
 

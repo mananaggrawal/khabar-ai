@@ -8,6 +8,7 @@ import { elevenLabsTTS, isQuotaExhausted, resetQuota } from "@/lib/tts/elevenlab
 import { resetDailyQuota } from "@/lib/tts/google";
 import { loadBriefingFromStorage, saveLogToStorage, loadLogFromStorage } from "@/lib/supabase-storage";
 import { requestAbort, resetAbort } from "@/lib/abort";
+import { sendBriefingPushNotifications, sendPushToAll } from "@/lib/push-notifications";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -106,6 +107,108 @@ async function requireSupabaseUser(request: Request): Promise<Response | null> {
   } catch {
     return json({ error: "Auth check failed" }, 401);
   }
+}
+
+// Like requireSupabaseUser, but also hands back the user id (needed to scope
+// a push subscription to its owner).
+async function getSupabaseUserId(request: Request): Promise<{ userId: string } | { error: Response }> {
+  const authz = request.headers.get("authorization") || "";
+  const token = authz.startsWith("Bearer ") ? authz.slice(7) : "";
+  if (!token) return { error: json({ error: "Sign in required" }, 401) };
+  try {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data, error } = await (supabaseAdmin as any).auth.getUser(token);
+    if (error || !data?.user) return { error: json({ error: "Invalid session" }, 401) };
+    return { userId: data.user.id as string };
+  } catch {
+    return { error: json({ error: "Auth check failed" }, 401) };
+  }
+}
+
+// POST /api/push/subscribe — save a device's Web Push subscription for the
+// signed-in user. Body: { endpoint, keys: { p256dh, auth } }
+export async function handlePushSubscribe(request: Request): Promise<Response> {
+  const result = await getSupabaseUserId(request);
+  if ("error" in result) return result.error;
+
+  let body: any;
+  try { body = await request.json(); } catch { return json({ error: "Invalid body" }, 400); }
+  const endpoint = body?.endpoint;
+  const p256dh   = body?.keys?.p256dh;
+  const authKey  = body?.keys?.auth;
+  if (!endpoint || !p256dh || !authKey) return json({ error: "Missing subscription fields" }, 400);
+
+  try {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { error } = await (supabaseAdmin as any).from("push_subscriptions").upsert(
+      {
+        user_id: result.userId,
+        endpoint,
+        p256dh,
+        auth_key: authKey,
+        user_agent: request.headers.get("user-agent") || null,
+      },
+      { onConflict: "endpoint" },
+    );
+    if (error) return json({ error: error.message }, 500);
+    return json({ ok: true });
+  } catch (e: any) {
+    return json({ error: e?.message ?? "Failed to save subscription" }, 500);
+  }
+}
+
+// POST /api/push/unsubscribe — remove a device's subscription (e.g. user
+// toggles notifications off). Body: { endpoint }
+export async function handlePushUnsubscribe(request: Request): Promise<Response> {
+  const result = await getSupabaseUserId(request);
+  if ("error" in result) return result.error;
+
+  let body: any;
+  try { body = await request.json(); } catch { return json({ error: "Invalid body" }, 400); }
+  const endpoint = body?.endpoint;
+  if (!endpoint) return json({ error: "Missing endpoint" }, 400);
+
+  try {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { error } = await (supabaseAdmin as any).from("push_subscriptions")
+      .delete().eq("user_id", result.userId).eq("endpoint", endpoint);
+    if (error) return json({ error: error.message }, 500);
+    return json({ ok: true });
+  } catch (e: any) {
+    return json({ error: e?.message ?? "Failed to remove subscription" }, 500);
+  }
+}
+
+// POST /api/admin/push-send — manually trigger a push to every subscribed
+// device from the admin panel. Body (all optional): { title, body }. With no
+// body, sends the same auto-picked "briefing ready" copy the cron uses,
+// using the current IST hour to pick morning/evening phrasing.
+export async function handlePushSend(request: Request): Promise<Response> {
+  const err = authCheck(request);
+  if (err) return err;
+
+  let body: any = {};
+  try { body = await request.json(); } catch { /* no body is fine — use defaults */ }
+
+  const customTitle = typeof body?.title === "string" ? body.title.trim() : "";
+  const customBody   = typeof body?.body  === "string" ? body.body.trim()  : "";
+
+  const logs: string[] = [];
+  const logger = (msg: string) => logs.push(msg);
+
+  if (customTitle || customBody) {
+    const result = await sendPushToAll(
+      customTitle || "Khabar AI",
+      customBody || "Your briefing is ready.",
+      logger,
+    );
+    return json({ ok: true, ...result, logs });
+  }
+
+  const istHour = new Date(Date.now() + 5.5 * 3_600_000).getUTCHours();
+  const period = istHour < 12 ? "morning" : "evening";
+  await sendBriefingPushNotifications(period, logger);
+  return json({ ok: true, period, logs });
 }
 
 // GET /api/briefing — returns today's DailyBriefing for authenticated users (Flutter + PWA).
@@ -222,15 +325,25 @@ export async function handleCron(request: Request): Promise<Response> {
   const dateKey = todayDateKey();
   (async () => {
     const logWriter = await createLiveLogWriter(dateKey, "cron");
+    let succeeded = false;
     try {
       await generateDailyBriefing(logWriter.log);
+      succeeded = true;
     } catch (e: any) {
       console.error("[cron] generation failed:", e?.message ?? e);
       logWriter.log(`✗ FAILED: ${e?.message ?? e}`);
     } finally {
       generating = false; runningJob = null;
-      await logWriter.finish();
     }
+    if (succeeded) {
+      // IST hour decides morning vs evening copy — the two daily cron
+      // schedules (7am / 5pm IST) don't need to pass anything extra for this.
+      const istHour = new Date(Date.now() + 5.5 * 3_600_000).getUTCHours();
+      const period = istHour < 12 ? "morning" : "evening";
+      await sendBriefingPushNotifications(period, logWriter.log).catch((e: any) =>
+        console.error("[push] send failed:", e?.message ?? e));
+    }
+    await logWriter.finish(); // one final forced flush, after push-send logging too
   })();
 
   return json({ ok: true, message: "Generation started" });

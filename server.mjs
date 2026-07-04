@@ -41,7 +41,7 @@ if (!existsSync(SERVER_BUNDLE)) {
 }
 
 const { default: ssrHandler } = await import(SERVER_BUNDLE);
-const { handleGenerate, handleAsk, handleStatus, handleDownload, handleCron, handlePatchMissing, handlePatchTTS, handlePatchScripts, handleStop, handleTrack, handleAnalytics, handleLogs } = await import(API_BUNDLE);
+const { handleGenerate, handleAsk, handleStatus, handleDownload, handleCron, handlePatchMissing, handlePatchTTS, handlePatchScripts, handleStop, handleTrack, handleAnalytics, handleLogs, handlePushSubscribe, handlePushUnsubscribe, handlePushSend } = await import(API_BUNDLE);
 
 // Convert Node.js IncomingMessage to a Web Fetch Request
 async function toRequest(req) {
@@ -340,6 +340,45 @@ self.addEventListener('fetch', e => {
       await sendResponse(response, res);
     } catch (err) {
       console.error("[khabar] /api/admin/logs error:", err);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: String(err?.message ?? err) }));
+    }
+    return;
+  }
+
+  if (pathname === "/api/push/subscribe" && req.method === "POST") {
+    try {
+      const request = await toRequest(req);
+      const response = await handlePushSubscribe(request);
+      await sendResponse(response, res);
+    } catch (err) {
+      console.error("[khabar] /api/push/subscribe error:", err);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: String(err?.message ?? err) }));
+    }
+    return;
+  }
+
+  if (pathname === "/api/push/unsubscribe" && req.method === "POST") {
+    try {
+      const request = await toRequest(req);
+      const response = await handlePushUnsubscribe(request);
+      await sendResponse(response, res);
+    } catch (err) {
+      console.error("[khabar] /api/push/unsubscribe error:", err);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: String(err?.message ?? err) }));
+    }
+    return;
+  }
+
+  if (pathname === "/api/admin/push-send" && req.method === "POST") {
+    try {
+      const request = await toRequest(req);
+      const response = await handlePushSend(request);
+      await sendResponse(response, res);
+    } catch (err) {
+      console.error("[khabar] /api/admin/push-send error:", err);
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: String(err?.message ?? err) }));
     }
@@ -965,18 +1004,21 @@ function adminPage(supabaseUrl, supabaseKey) {
         <div id="gen-log" class="log-terminal"></div>
       </div>
       <div style="height:12px;"></div>
+
+      <!-- Manual push notification trigger -->
       <div class="group">
-        <div class="gen-sub">Regenerate today's briefing, preserving existing language selection.</div>
-        <button class="btn-primary" id="patch-btn" onclick="runPatch()">Refresh briefing</button>
-        <div id="patch-log" class="log-terminal"></div>
+        <div class="gen-sub">Send a push notification to every subscribed device right now. Leave both fields blank to send the same auto-picked "briefing ready" message the cron uses.</div>
+        <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:12px;">
+          <input type="text" id="push-title" placeholder="Title (optional)" maxlength="60"
+            style="background:#1a1330; border:1px solid #3a2d5c; color:#e8e0fb; border-radius:8px; padding:8px 12px; font-size:13px;">
+          <input type="text" id="push-body" placeholder="Message (optional)" maxlength="150"
+            style="background:#1a1330; border:1px solid #3a2d5c; color:#e8e0fb; border-radius:8px; padding:8px 12px; font-size:13px;">
+        </div>
+        <button class="btn-primary" id="push-btn" onclick="runPushSend()">Send notification now</button>
+        <div id="push-log" class="log-terminal"></div>
       </div>
       <div style="height:12px;"></div>
-      <div class="group">
-        <div class="gen-sub">Re-generate scripts for stories with garbled text (e.g. &amp;nbsp; entities from older RSS fetches).</div>
-        <button class="btn-primary" id="patch-scripts-btn" onclick="runPatchScripts()">Patch garbled scripts</button>
-        <div id="patch-scripts-log" class="log-terminal"></div>
-      </div>
-      <div style="height:12px;"></div>
+
       <div class="group">
         <div class="gen-sub">Generate audio for stories that have scripts but no audio (e.g. after quota reset).</div>
         <div class="config-row" style="margin-bottom:14px;">
@@ -1355,74 +1397,6 @@ function adminPage(supabaseUrl, supabaseKey) {
     btn.textContent = 'Regenerate';
   }
 
-  async function runPatch() {
-    const btn = document.getElementById('patch-btn');
-    const logEl = document.getElementById('patch-log');
-
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spin">&#9696;</span> Patching…';
-    logEl.innerHTML = '';
-    logEl.classList.add('visible');
-    startPolling();
-
-    try {
-      const r = await fetch('/api/admin/patch-missing', { method: 'POST', headers: { 'x-admin-key': AKEY } });
-      if (r.status === 409) {
-        appendPatchLog('log', 'Generation already in progress — check back in a few minutes.');
-        btn.disabled = false; btn.textContent = 'Patch missing sections';
-        return;
-      }
-      if (!r.ok || !r.body) {
-        appendPatchLog('error', 'Request failed: HTTP ' + r.status);
-        btn.disabled = false; btn.textContent = 'Retry';
-        return;
-      }
-
-      const reader = r.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const parts = buffer.split('\\n\\n');
-        buffer = parts.pop() || '';
-        for (const part of parts) {
-          const line = part.trim();
-          if (!line.startsWith('data: ')) continue;
-          try {
-            const ev = JSON.parse(line.slice(6));
-            if (ev.type === 'log') {
-              appendPatchLog('log', ev.msg);
-            } else if (ev.type === 'done') {
-              const added = ev.added?.length ? ev.added.join(', ') : 'none';
-              appendPatchLog('done', 'Done — added: ' + added + ' · ' + ev.stories + ' stories total');
-              loadStatus();
-            } else if (ev.type === 'error') {
-              appendPatchLog('error', ev.msg);
-            }
-          } catch {}
-        }
-      }
-    } catch (err) {
-      appendPatchLog('error', 'Network error: ' + (err.message || err));
-    }
-
-    btn.disabled = false;
-    btn.textContent = 'Patch missing sections';
-  }
-
-  function appendPatchLog(type, msg) {
-    const el = document.getElementById('patch-log');
-    const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    const line = document.createElement('div');
-    line.className = 'log-line' + (type !== 'log' ? ' log-' + type : '');
-    line.textContent = ts + '  ' + msg;
-    el.appendChild(line);
-    el.scrollTop = el.scrollHeight;
-  }
-
   function appendTTSLog(type, msg) {
     const el = document.getElementById('tts-log');
     const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -1433,71 +1407,46 @@ function adminPage(supabaseUrl, supabaseKey) {
     el.scrollTop = el.scrollHeight;
   }
 
-  async function runPatchScripts() {
-    const btn = document.getElementById('patch-scripts-btn');
-    const logEl = document.getElementById('patch-scripts-log');
-
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spin">&#9696;</span> Patching scripts…';
-    logEl.innerHTML = '';
-    logEl.classList.add('visible');
-    startPolling();
-
-    try {
-      const r = await fetch('/api/admin/patch-scripts', { method: 'POST', headers: { 'x-admin-key': AKEY } });
-      if (r.status === 409) {
-        appendScriptsLog('log', 'Generation already in progress — check back shortly.');
-        btn.disabled = false; btn.textContent = 'Patch garbled scripts';
-        return;
-      }
-      if (!r.ok || !r.body) {
-        appendScriptsLog('error', 'Request failed: HTTP ' + r.status);
-        btn.disabled = false; btn.textContent = 'Retry';
-        return;
-      }
-
-      const reader = r.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const parts = buffer.split('\\n\\n');
-        buffer = parts.pop() || '';
-        for (const part of parts) {
-          const line = part.trim();
-          if (!line.startsWith('data: ')) continue;
-          try {
-            const ev = JSON.parse(line.slice(6));
-            if (ev.type === 'log') {
-              appendScriptsLog('log', ev.msg);
-            } else if (ev.type === 'done') {
-              appendScriptsLog('done', 'Done — patched ' + ev.patched + ' scripts · ' + ev.stories + ' stories total');
-              loadStatus();
-            } else if (ev.type === 'error') {
-              appendScriptsLog('error', ev.msg);
-            }
-          } catch {}
-        }
-      }
-    } catch (err) {
-      appendScriptsLog('error', 'Network error: ' + (err.message || err));
-    }
-
-    btn.disabled = false;
-    btn.textContent = 'Patch garbled scripts';
-  }
-
-  function appendScriptsLog(type, msg) {
-    const el = document.getElementById('patch-scripts-log');
+  function appendPushLog(type, msg) {
+    const el = document.getElementById('push-log');
     const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     const line = document.createElement('div');
     line.className = 'log-line' + (type !== 'log' ? ' log-' + type : '');
     line.textContent = ts + '  ' + msg;
     el.appendChild(line);
     el.scrollTop = el.scrollHeight;
+  }
+
+  async function runPushSend() {
+    const btn = document.getElementById('push-btn');
+    const logEl = document.getElementById('push-log');
+    const title = document.getElementById('push-title').value.trim();
+    const bodyText = document.getElementById('push-body').value.trim();
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin">&#9696;</span> Sending…';
+    logEl.innerHTML = '';
+    logEl.classList.add('visible');
+
+    try {
+      const r = await fetch('/api/admin/push-send', {
+        method: 'POST',
+        headers: { 'x-admin-key': AKEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify(title || bodyText ? { title, body: bodyText } : {}),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        appendPushLog('error', 'Request failed: HTTP ' + r.status + (d.error ? ' — ' + d.error : ''));
+      } else {
+        (d.logs || []).forEach((line) => appendPushLog('log', line));
+        appendPushLog('done', 'Done' + (d.period ? ' (' + d.period + ' message)' : '') + (d.total != null ? ' — ' + d.sent + '/' + d.total + ' delivered' : ''));
+      }
+    } catch (err) {
+      appendPushLog('error', 'Network error: ' + (err.message || err));
+    }
+
+    btn.disabled = false;
+    btn.textContent = 'Send notification now';
   }
 
   async function runPatchTTS() {
