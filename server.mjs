@@ -41,7 +41,7 @@ if (!existsSync(SERVER_BUNDLE)) {
 }
 
 const { default: ssrHandler } = await import(SERVER_BUNDLE);
-const { handleGenerate, handleAsk, handleStatus, handleDownload, handleCron, handlePatchMissing, handlePatchTTS, handlePatchScripts, handleStop, handleTrack, handleAnalytics } = await import(API_BUNDLE);
+const { handleGenerate, handleAsk, handleStatus, handleDownload, handleCron, handlePatchMissing, handlePatchTTS, handlePatchScripts, handleStop, handleTrack, handleAnalytics, handleLogs } = await import(API_BUNDLE);
 
 // Convert Node.js IncomingMessage to a Web Fetch Request
 async function toRequest(req) {
@@ -327,6 +327,19 @@ self.addEventListener('fetch', e => {
       await sendResponse(response, res);
     } catch (err) {
       console.error("[khabar] /api/admin/analytics error:", err);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: String(err?.message ?? err) }));
+    }
+    return;
+  }
+
+  if (pathname === "/api/admin/logs" && req.method === "GET") {
+    try {
+      const request = await toRequest(req);
+      const response = await handleLogs(request);
+      await sendResponse(response, res);
+    } catch (err) {
+      console.error("[khabar] /api/admin/logs error:", err);
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: String(err?.message ?? err) }));
     }
@@ -903,6 +916,20 @@ function adminPage(supabaseUrl, supabaseKey) {
         <div id="days-list" style="padding:20px 0;"></div>
       </div>
       <div style="height:16px;"></div>
+
+      <!-- Run logs — persisted per day, so cron-triggered runs (nobody watching
+           live) are still visible after the fact -->
+      <div class="group" style="padding:16px 20px;">
+        <div class="gen-sub" style="margin-bottom:10px;">Generation logs (cron + manual runs, persisted per day)</div>
+        <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px;">
+          <input type="date" id="logs-date" style="background:#1a1330; border:1px solid #3a2d5c; color:#e8e0fb; border-radius:8px; padding:6px 10px; font-size:13px;">
+          <button class="btn-dl" onclick="loadLogs()">Load</button>
+          <span id="logs-status" style="color:var(--muted); font-size:12px;"></span>
+        </div>
+        <pre id="logs-output" style="max-height:420px; overflow:auto; background:#0d0820; border:1px solid #241941; border-radius:10px; padding:12px; font-size:11px; line-height:1.5; color:#cbb8f0; white-space:pre-wrap; word-break:break-word; margin:0;">Pick a date and hit Load.</pre>
+      </div>
+      <div style="height:16px;"></div>
+
       <div class="group">
         <div class="gen-sub">Regenerate today's briefing from scratch.</div>
 
@@ -1009,6 +1036,8 @@ function adminPage(supabaseUrl, supabaseKey) {
     }
     show('s-dash');
     loadStatus();
+    document.getElementById('logs-date').value = new Date().toISOString().slice(0, 10);
+    loadLogs();
   }
 
   function show(id) {
@@ -1180,6 +1209,29 @@ function adminPage(supabaseUrl, supabaseKey) {
       updateStats(d.todayStats);
     } catch {
       list.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 0;">Could not load status</div>';
+    }
+  }
+
+  async function loadLogs() {
+    const dateInput = document.getElementById('logs-date');
+    const date = dateInput.value || new Date().toISOString().slice(0, 10);
+    dateInput.value = date;
+    const out = document.getElementById('logs-output');
+    const status = document.getElementById('logs-status');
+    status.textContent = 'Loading…';
+    try {
+      const r = await fetch('/api/admin/logs?date=' + date, { headers: { 'x-admin-key': AKEY } });
+      const d = await r.json();
+      if (!d.log) {
+        out.textContent = 'No logs found for ' + date + (d.running ? ' — a run (' + d.runningJob + ') is currently in progress; refresh to see it partway or after it finishes.' : '.');
+      } else {
+        out.textContent = d.log;
+        out.scrollTop = out.scrollHeight;
+      }
+      status.textContent = d.running ? 'Run in progress: ' + d.runningJob : '';
+    } catch {
+      out.textContent = 'Could not load logs.';
+      status.textContent = '';
     }
   }
 

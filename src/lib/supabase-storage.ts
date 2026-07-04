@@ -63,3 +63,28 @@ export async function loadBriefingFromStorage(date: string): Promise<unknown | n
   if (error || !data) return null;
   try { return JSON.parse(await data.text()); } catch { return null; }
 }
+
+// Generation run logs — plain text, one file per day, appended across
+// multiple runs same day (cron + manual triggers) so the admin panel can show
+// "what happened today" even for runs nobody was watching live via SSE.
+export async function saveLogToStorage(date: string, text: string): Promise<void> {
+  const buf = Buffer.from(text);
+  let lastErr: string | undefined;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, 800 * attempt));
+    const { error } = await client().storage
+      .from(BUCKET)
+      .upload(`logs/${date}.log`, buf, { contentType: "text/plain", upsert: true });
+    if (!error) return;
+    lastErr = error.message;
+  }
+  throw new Error(`Storage log save failed: ${lastErr}`);
+}
+
+export async function loadLogFromStorage(date: string): Promise<string | null> {
+  const { data, error } = await client().storage
+    .from(BUCKET)
+    .download(`logs/${date}.log`);
+  if (error || !data) return null;
+  try { return await data.text(); } catch { return null; }
+}

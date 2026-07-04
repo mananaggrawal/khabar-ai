@@ -6,7 +6,7 @@
 import { generateDailyBriefing, generateMissingSections, generateMissingTTS, patchScripts, getLatestBriefing as getTodayBriefing, type TtsProvider } from "@/lib/news/generator";
 import { elevenLabsTTS, isQuotaExhausted, resetQuota } from "@/lib/tts/elevenlabs";
 import { resetDailyQuota } from "@/lib/tts/google";
-import { loadBriefingFromStorage } from "@/lib/supabase-storage";
+import { loadBriefingFromStorage, saveLogToStorage, loadLogFromStorage } from "@/lib/supabase-storage";
 import { requestAbort, resetAbort } from "@/lib/abort";
 
 function json(data: unknown, status = 200): Response {
@@ -25,6 +25,26 @@ function authCheck(request: Request): Response | null {
   if (request.headers.get("x-admin-key") !== adminKey)
     return json({ error: "Unauthorized" }, 401);
   return null;
+}
+
+// Generation run logs (2026-07-03) — persisted so "what happened" is visible
+// in the admin panel afterward, not just live via SSE to whoever had it open
+// at the exact moment (which nobody does for cron-triggered runs). Keyed by
+// the same UTC date generator.ts uses for the briefing itself. Multiple runs
+// same day (cron + manual) are appended, not overwritten, separated by a
+// run header with a timestamp.
+function todayDateKey(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+async function persistRunLog(dateKey: string, source: string, lines: string[]): Promise<void> {
+  try {
+    const existing = (await loadLogFromStorage(dateKey)) ?? "";
+    const header = `\n===== ${new Date().toISOString()} — ${source} =====\n`;
+    await saveLogToStorage(dateKey, existing + header + lines.join("\n") + "\n");
+  } catch (e: any) {
+    console.error("[logs] failed to persist run log:", e?.message ?? e);
+  }
 }
 
 // Analytics is restricted to specific email(s) via Supabase login (not the admin key).
@@ -103,11 +123,16 @@ export async function handleGenerate(request: Request): Promise<Response> {
   resetAbort();
   resetQuota();
   resetDailyQuota();
+  const dateKey = todayDateKey();
+  const lines: string[] = [];
   // Fire-and-forget — don't await so we return the stream immediately
   (async () => {
     try {
       console.log(`[admin] generation triggered (provider: ${provider}, langs: ${languages.join(",")})`);
-      const briefing = await generateDailyBriefing((msg) => send({ type: "log", msg }), provider, languages);
+      const briefing = await generateDailyBriefing((msg) => {
+        lines.push(`${new Date().toISOString()}  ${msg}`);
+        send({ type: "log", msg });
+      }, provider, languages);
       const rs = briefing.runSummary;
       void logServerEvent("generation_run", {
         date:        briefing.date,
@@ -137,10 +162,12 @@ export async function handleGenerate(request: Request): Promise<Response> {
       });
     } catch (err: any) {
       console.error("[admin] generation failed", err);
+      lines.push(`✗ FAILED: ${err?.message ?? err}`);
       send({ type: "error", msg: err?.message ?? "Generation failed" });
     } finally {
       generating = false;
       runningJob = null;
+      await persistRunLog(dateKey, `manual:${provider}`, lines);
       try { writer.close(); } catch {}
     }
   })();
@@ -166,11 +193,31 @@ export async function handleCron(request: Request): Promise<Response> {
   resetAbort();
   resetQuota();
   resetDailyQuota();
-  generateDailyBriefing()
-    .catch((err) => console.error("[cron] generation failed:", err?.message ?? err))
-    .finally(() => { generating = false; runningJob = null; });
+  const dateKey = todayDateKey();
+  const lines: string[] = [];
+  const logger = (msg: string) => { lines.push(`${new Date().toISOString()}  ${msg}`); };
+  generateDailyBriefing(logger)
+    .catch((err) => { console.error("[cron] generation failed:", err?.message ?? err); lines.push(`✗ FAILED: ${err?.message ?? err}`); })
+    .finally(async () => {
+      generating = false; runningJob = null;
+      await persistRunLog(dateKey, "cron", lines);
+    });
 
   return json({ ok: true, message: "Generation started" });
+}
+
+// GET /api/admin/logs?date=YYYY-MM-DD — persisted logs for a day's run(s)
+// (cron-triggered runs have no live viewer, so this is the only way to see
+// what happened after the fact). Defaults to today (UTC, matching the date
+// key generator.ts/briefings use).
+export async function handleLogs(request: Request): Promise<Response> {
+  const err = authCheck(request);
+  if (err) return err;
+
+  const reqUrl = new URL(request.url, "http://localhost");
+  const date = reqUrl.searchParams.get("date") || todayDateKey();
+  const log = await loadLogFromStorage(date);
+  return json({ date, log: log ?? null, running: generating, runningJob });
 }
 
 // GET /api/admin/status  — last 3 days' generation status + running job info
