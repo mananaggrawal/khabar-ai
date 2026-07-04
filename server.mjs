@@ -1207,6 +1207,13 @@ function adminPage(supabaseUrl, supabaseKey) {
       renderDays(days);
       updateRunningBanner(d.running, d.runningJob);
       updateStats(d.todayStats);
+      // While a run is active, auto-refresh the logs panel too (server flushes
+      // every ~5s during a run) — if the viewer is on today's date, so a cron
+      // run shows live progress without manually clicking Load repeatedly.
+      if (d.running) {
+        const dateInput = document.getElementById('logs-date');
+        if (dateInput && dateInput.value === new Date().toISOString().slice(0, 10)) loadLogs();
+      }
     } catch {
       list.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 0;">Could not load status</div>';
     }

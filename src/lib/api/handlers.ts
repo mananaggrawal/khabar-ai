@@ -37,14 +37,40 @@ function todayDateKey(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-async function persistRunLog(dateKey: string, source: string, lines: string[]): Promise<void> {
-  try {
-    const existing = (await loadLogFromStorage(dateKey)) ?? "";
-    const header = `\n===== ${new Date().toISOString()} — ${source} =====\n`;
-    await saveLogToStorage(dateKey, existing + header + lines.join("\n") + "\n");
-  } catch (e: any) {
-    console.error("[logs] failed to persist run log:", e?.message ?? e);
+// Live-flushing writer: periodically re-saves (prefix-from-before-this-run +
+// this run's header + everything logged so far), so checking the admin panel
+// MID-RUN shows real partial progress instead of "no logs yet" until the
+// whole run finishes. Each flush overwrites with the full reconstructed text
+// (not an incremental append), so it's safe to call repeatedly without
+// duplicating content.
+async function createLiveLogWriter(dateKey: string, source: string) {
+  const prefix = (await loadLogFromStorage(dateKey).catch(() => null)) ?? "";
+  const header = `\n===== ${new Date().toISOString()} — ${source} =====\n`;
+  const lines: string[] = [];
+  let lastFlush = 0;
+  const FLUSH_MS = 5000;
+
+  async function flush(force: boolean): Promise<void> {
+    const now = Date.now();
+    if (!force && now - lastFlush < FLUSH_MS) return;
+    lastFlush = now;
+    try {
+      await saveLogToStorage(dateKey, prefix + header + lines.join("\n") + "\n");
+    } catch (e: any) {
+      console.error("[logs] flush failed:", e?.message ?? e);
+    }
   }
+
+  function log(msg: string): void {
+    lines.push(`${new Date().toISOString()}  ${msg}`);
+    void flush(false);
+  }
+
+  async function finish(): Promise<void> {
+    await flush(true);
+  }
+
+  return { log, finish };
 }
 
 // Analytics is restricted to specific email(s) via Supabase login (not the admin key).
@@ -124,13 +150,13 @@ export async function handleGenerate(request: Request): Promise<Response> {
   resetQuota();
   resetDailyQuota();
   const dateKey = todayDateKey();
-  const lines: string[] = [];
   // Fire-and-forget — don't await so we return the stream immediately
   (async () => {
+    const logWriter = await createLiveLogWriter(dateKey, `manual:${provider}`);
     try {
       console.log(`[admin] generation triggered (provider: ${provider}, langs: ${languages.join(",")})`);
       const briefing = await generateDailyBriefing((msg) => {
-        lines.push(`${new Date().toISOString()}  ${msg}`);
+        logWriter.log(msg);
         send({ type: "log", msg });
       }, provider, languages);
       const rs = briefing.runSummary;
@@ -162,12 +188,12 @@ export async function handleGenerate(request: Request): Promise<Response> {
       });
     } catch (err: any) {
       console.error("[admin] generation failed", err);
-      lines.push(`✗ FAILED: ${err?.message ?? err}`);
+      logWriter.log(`✗ FAILED: ${err?.message ?? err}`);
       send({ type: "error", msg: err?.message ?? "Generation failed" });
     } finally {
       generating = false;
       runningJob = null;
-      await persistRunLog(dateKey, `manual:${provider}`, lines);
+      await logWriter.finish();
       try { writer.close(); } catch {}
     }
   })();
@@ -194,14 +220,18 @@ export async function handleCron(request: Request): Promise<Response> {
   resetQuota();
   resetDailyQuota();
   const dateKey = todayDateKey();
-  const lines: string[] = [];
-  const logger = (msg: string) => { lines.push(`${new Date().toISOString()}  ${msg}`); };
-  generateDailyBriefing(logger)
-    .catch((err) => { console.error("[cron] generation failed:", err?.message ?? err); lines.push(`✗ FAILED: ${err?.message ?? err}`); })
-    .finally(async () => {
+  (async () => {
+    const logWriter = await createLiveLogWriter(dateKey, "cron");
+    try {
+      await generateDailyBriefing(logWriter.log);
+    } catch (e: any) {
+      console.error("[cron] generation failed:", e?.message ?? e);
+      logWriter.log(`✗ FAILED: ${e?.message ?? e}`);
+    } finally {
       generating = false; runningJob = null;
-      await persistRunLog(dateKey, "cron", lines);
-    });
+      await logWriter.finish();
+    }
+  })();
 
   return json({ ok: true, message: "Generation started" });
 }
