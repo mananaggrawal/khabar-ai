@@ -6,10 +6,30 @@
  * doesn't support push for a PWA just open in a browser tab.
  */
 import webpush from "web-push";
+import { loadLogFromStorage, saveLogToStorage } from "@/lib/supabase-storage";
 
 const VAPID_PUBLIC_KEY  = process.env.VAPID_PUBLIC_KEY ?? "";
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY ?? "";
 const VAPID_SUBJECT      = process.env.VAPID_SUBJECT ?? "mailto:manan.aggrawal@vegapay.tech";
+
+// Persisted history of every push send attempt (cron-automatic or
+// admin-manual), so the admin panel can show "what notifications went out"
+// after the fact — mirrors the generation-log storage pattern (one entry per
+// UTC day, appended, keyed as its own storage "date" so it doesn't collide
+// with generation logs).
+function pushLogKey(): string {
+  return `pushlog-${new Date().toISOString().slice(0, 10)}`;
+}
+
+async function recordPushLog(entry: string): Promise<void> {
+  try {
+    const key = pushLogKey();
+    const prev = (await loadLogFromStorage(key).catch(() => null)) ?? "";
+    await saveLogToStorage(key, `${prev}${new Date().toISOString()}  ${entry}\n`);
+  } catch (e: any) {
+    console.error("[push] failed to record push log:", e?.message ?? e);
+  }
+}
 
 let configured = false;
 function ensureConfigured(): boolean {
@@ -26,17 +46,18 @@ export type BriefingPeriod = "morning" | "evening";
 // A few variants per period so it doesn't feel like the same robotic ping
 // every single day — picked at random per send.
 const MORNING_MESSAGES = [
-  { title: "☀️ Rise and hear it", body: "Your morning briefing just dropped — today's world, in your ears." },
-  { title: "Good morning!", body: "Fresh headlines are ready. Press play before the coffee kicks in." },
-  { title: "Today, spoken.", body: "Your morning news is live — catch up in minutes, not scrolling." },
-  { title: "☕ Briefing's up", body: "The day's biggest stories are ready to listen to, right now." },
+  { title: "☀️ Your morning briefing is ready", body: "Today's biggest stories, narrated and waiting — press play whenever you're ready." },
+  { title: "Good morning, Khabar's in", body: "Fresh headlines are live. Skip the scroll, just hit play." },
+  { title: "Today, spoken for you", body: "The morning news is ready to listen to — a few minutes, fully caught up." },
+  { title: "☕ Briefing's up", body: "The day's biggest stories are ready to hear before you've even had your coffee." },
+  { title: "News, narrated. Ready now.", body: "Your morning briefing just landed — tap to start listening." },
 ];
 
 const EVENING_MESSAGES = [
-  { title: "🌙 Evening wrap-up", body: "Today's update just landed — catch what you missed before it's tomorrow." },
-  { title: "Your evening briefing is ready", body: "Wind down and hear how the day actually went." },
-  { title: "One more listen before bed?", body: "The evening briefing is live — today's news, quickly." },
-  { title: "📻 Fresh update", body: "Your evening briefing just came in — a few minutes, fully caught up." },
+  { title: "🌙 Your evening briefing is ready", body: "Here's how today actually went — narrated and ready to hear." },
+  { title: "Catch up before the day ends", body: "Today's evening update just landed — a few minutes to hear what happened." },
+  { title: "One more listen before you wind down?", body: "The evening briefing is live — today's news, quickly." },
+  { title: "📻 Today's wrap is ready", body: "Your evening briefing just came in — tap to listen and stay caught up." },
 ];
 
 function pickMessage(period: BriefingPeriod): { title: string; body: string } {
@@ -46,10 +67,14 @@ function pickMessage(period: BriefingPeriod): { title: string; body: string } {
 
 /** Sends title/body to every currently-subscribed device, cleaning up any
  *  subscriptions the browser has revoked (404/410) along the way. Shared by
- *  the automatic post-generation send and the admin panel's manual trigger. */
-export async function sendPushToAll(title: string, body: string, logger: (msg: string) => void = () => {}): Promise<{ sent: number; removed: number; failed: number; total: number }> {
+ *  the automatic post-generation send and the admin panel's manual trigger.
+ *  `source` is just a label ("cron" | "admin-manual" | ...) recorded in the
+ *  persisted push log so the admin panel can show where each send came from. */
+export async function sendPushToAll(title: string, body: string, logger: (msg: string) => void = () => {}, source = "manual"): Promise<{ sent: number; removed: number; failed: number; total: number }> {
+  const log = (msg: string) => { logger(msg); void recordPushLog(`[${source}] ${msg}`); };
+
   if (!ensureConfigured()) {
-    logger("[push] skipped — VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY not configured");
+    log('[push] skipped — VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY not configured');
     return { sent: 0, removed: 0, failed: 0, total: 0 };
   }
 
@@ -60,12 +85,12 @@ export async function sendPushToAll(title: string, body: string, logger: (msg: s
     if (error) throw error;
     rows = data ?? [];
   } catch (e: any) {
-    logger(`[push] failed to load subscriptions: ${e?.message ?? e}`);
+    log(`[push] failed to load subscriptions: ${e?.message ?? e}`);
     return { sent: 0, removed: 0, failed: 0, total: 0 };
   }
 
   if (rows.length === 0) {
-    logger("[push] no subscribed devices, nothing to send");
+    log(`[push] "${title}" — no subscribed devices, nothing to send`);
     return { sent: 0, removed: 0, failed: 0, total: 0 };
   }
 
@@ -95,11 +120,18 @@ export async function sendPushToAll(title: string, body: string, logger: (msg: s
     }
   }));
 
-  logger(`[push] "${title}": sent ${sent}, removed ${removed} stale, ${failed} failed (of ${rows.length} subscribed)`);
+  log(`[push] "${title}": sent ${sent}, removed ${removed} stale, ${failed} failed (of ${rows.length} subscribed)`);
   return { sent, removed, failed, total: rows.length };
 }
 
-export async function sendBriefingPushNotifications(period: BriefingPeriod, logger: (msg: string) => void = () => {}): Promise<void> {
+export async function sendBriefingPushNotifications(period: BriefingPeriod, logger: (msg: string) => void = () => {}, source = "cron"): Promise<void> {
   const { title, body } = pickMessage(period);
-  await sendPushToAll(title, body, logger);
+  await sendPushToAll(title, body, logger, source);
+}
+
+// GET-style read for the admin panel's notification log view — same storage
+// pattern as generation logs (src/lib/api/handlers.ts loadLogFromStorage),
+// just under the "pushlog-{date}" key instead of "{date}".
+export async function loadPushLog(dateKey: string): Promise<string | null> {
+  return loadLogFromStorage(`pushlog-${dateKey}`).catch(() => null);
 }

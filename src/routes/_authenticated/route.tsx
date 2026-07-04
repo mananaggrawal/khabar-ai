@@ -1,4 +1,5 @@
 import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
+import { NotificationNudge } from "@/components/NotificationNudge";
 
 const LOCAL_MODE = import.meta.env.VITE_LOCAL_MODE === "true";
 
@@ -11,5 +12,10 @@ export const Route = createFileRoute("/_authenticated")({
     if (error || !data.user) throw redirect({ to: "/auth" });
     return { user: data.user };
   },
-  component: () => <Outlet />,
+  component: () => (
+    <>
+      <Outlet />
+      <NotificationNudge />
+    </>
+  ),
 });

@@ -41,7 +41,7 @@ if (!existsSync(SERVER_BUNDLE)) {
 }
 
 const { default: ssrHandler } = await import(SERVER_BUNDLE);
-const { handleGenerate, handleAsk, handleStatus, handleDownload, handleCron, handlePatchMissing, handlePatchTTS, handlePatchScripts, handleStop, handleTrack, handleAnalytics, handleLogs, handlePushSubscribe, handlePushUnsubscribe, handlePushSend } = await import(API_BUNDLE);
+const { handleGenerate, handleAsk, handleStatus, handleDownload, handleCron, handlePatchMissing, handlePatchTTS, handlePatchScripts, handleStop, handleTrack, handleAnalytics, handleLogs, handlePushSubscribe, handlePushUnsubscribe, handlePushSend, handlePushLog } = await import(API_BUNDLE);
 
 // Convert Node.js IncomingMessage to a Web Fetch Request
 async function toRequest(req) {
@@ -383,6 +383,19 @@ self.addEventListener('fetch', e => {
       await sendResponse(response, res);
     } catch (err) {
       console.error("[khabar] /api/admin/push-send error:", err);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: String(err?.message ?? err) }));
+    }
+    return;
+  }
+
+  if (pathname === "/api/admin/push-log" && req.method === "GET") {
+    try {
+      const request = await toRequest(req);
+      const response = await handlePushLog(request);
+      await sendResponse(response, res);
+    } catch (err) {
+      console.error("[khabar] /api/admin/push-log error:", err);
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: String(err?.message ?? err) }));
     }
@@ -1023,6 +1036,18 @@ function adminPage(supabaseUrl, supabaseKey) {
       </div>
       <div style="height:12px;"></div>
 
+      <!-- Notification history — every push send (cron-automatic or manual),
+           persisted per day, same pattern as generation logs above -->
+      <div class="group" style="padding:16px 20px;">
+        <div class="gen-sub" style="margin-bottom:10px;">Notification log (cron + manual sends, persisted per day)</div>
+        <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px;">
+          <input type="date" id="notiflog-date" style="background:#1a1330; border:1px solid #3a2d5c; color:#e8e0fb; border-radius:8px; padding:6px 10px; font-size:13px;">
+          <button class="btn-dl" onclick="loadNotifLog()">Load</button>
+        </div>
+        <pre id="notiflog-output" style="max-height:300px; overflow:auto; background:#0d0820; border:1px solid #241941; border-radius:10px; padding:12px; font-size:11px; line-height:1.5; color:#cbb8f0; white-space:pre-wrap; word-break:break-word; margin:0;">Pick a date and hit Load.</pre>
+      </div>
+      <div style="height:16px;"></div>
+
       <div class="group">
         <div class="gen-sub">Generate audio for stories that have scripts but no audio (e.g. after quota reset).</div>
         <div class="config-row" style="margin-bottom:14px;">
@@ -1084,6 +1109,8 @@ function adminPage(supabaseUrl, supabaseKey) {
     loadStatus();
     document.getElementById('logs-date').value = new Date().toISOString().slice(0, 10);
     loadLogs();
+    document.getElementById('notiflog-date').value = new Date().toISOString().slice(0, 10);
+    loadNotifLog();
   }
 
   function show(id) {
@@ -1285,6 +1312,22 @@ function adminPage(supabaseUrl, supabaseKey) {
     } catch {
       out.textContent = 'Could not load logs.';
       status.textContent = '';
+    }
+  }
+
+  async function loadNotifLog() {
+    const dateInput = document.getElementById('notiflog-date');
+    const date = dateInput.value || new Date().toISOString().slice(0, 10);
+    dateInput.value = date;
+    const out = document.getElementById('notiflog-output');
+    out.textContent = 'Loading…';
+    try {
+      const r = await fetch('/api/admin/push-log?date=' + date, { headers: { 'x-admin-key': AKEY } });
+      const d = await r.json();
+      out.textContent = d.log || ('No notifications logged for ' + date + '.');
+      out.scrollTop = out.scrollHeight;
+    } catch {
+      out.textContent = 'Could not load notification log.';
     }
   }
 

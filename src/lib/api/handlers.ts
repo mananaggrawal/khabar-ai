@@ -8,7 +8,7 @@ import { elevenLabsTTS, isQuotaExhausted, resetQuota } from "@/lib/tts/elevenlab
 import { resetDailyQuota } from "@/lib/tts/google";
 import { loadBriefingFromStorage, saveLogToStorage, loadLogFromStorage } from "@/lib/supabase-storage";
 import { requestAbort, resetAbort } from "@/lib/abort";
-import { sendBriefingPushNotifications, sendPushToAll } from "@/lib/push-notifications";
+import { sendBriefingPushNotifications, sendPushToAll, loadPushLog } from "@/lib/push-notifications";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -201,13 +201,14 @@ export async function handlePushSend(request: Request): Promise<Response> {
       customTitle || "Khabar AI",
       customBody || "Your briefing is ready.",
       logger,
+      "admin-manual",
     );
     return json({ ok: true, ...result, logs });
   }
 
   const istHour = new Date(Date.now() + 5.5 * 3_600_000).getUTCHours();
   const period = istHour < 12 ? "morning" : "evening";
-  await sendBriefingPushNotifications(period, logger);
+  await sendBriefingPushNotifications(period, logger, "admin-manual");
   return json({ ok: true, period, logs });
 }
 
@@ -361,6 +362,19 @@ export async function handleLogs(request: Request): Promise<Response> {
   const date = reqUrl.searchParams.get("date") || todayDateKey();
   const log = await loadLogFromStorage(date);
   return json({ date, log: log ?? null, running: generating, runningJob });
+}
+
+// GET /api/admin/push-log?date=YYYY-MM-DD — persisted history of push sends
+// (cron-automatic and admin-manual) for a given day, so "was a notification
+// actually sent, and to how many devices" is visible after the fact.
+export async function handlePushLog(request: Request): Promise<Response> {
+  const err = authCheck(request);
+  if (err) return err;
+
+  const reqUrl = new URL(request.url, "http://localhost");
+  const date = reqUrl.searchParams.get("date") || todayDateKey();
+  const log = await loadPushLog(date);
+  return json({ date, log: log ?? null });
 }
 
 // GET /api/admin/status  — last 3 days' generation status + running job info
