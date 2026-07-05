@@ -374,7 +374,49 @@ function storyId(url: string): string {
  * get the "both" corroboration, so they're filed under "india" as a fallback,
  * same as any other unclassifiable item — still included, just not labelled Headlines.
  */
-function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]; headlineIds: Set<string>; staleDropped: number; blockedDropped: number; notAllowedDropped: number } {
+// Topic feeds Google actually offers (everything except the synthetic
+// "headlines" bucket) — the valid classification targets below.
+const CLASSIFIABLE_SECTIONS: Exclude<SectionId, "headlines">[] =
+  ["india", "world", "business", "technology", "sports", "science", "health"];
+
+// Classifies homepage-only trending items (no topical-feed match at all) into
+// a real section by actual subject, via a cheap batched LLM call — replaces
+// a prior hardcoded "always india" default that misfiled non-India trending
+// stories (world/business/sports/etc.) under India with zero basis. Small
+// input (typically well under 20 items/run — only the trending stories Google
+// didn't also tag with one of the 7 topic feeds), so one cheap gpt-4o-mini
+// call is enough. Falls back to "india" per-item only if the model call fails
+// or returns something unparseable, so a transient API error can't break
+// generation.
+async function classifyOrphanSections(items: RssItem[]): Promise<SectionId[]> {
+  if (items.length === 0) return [];
+  const fallback = items.map(() => "india" as SectionId);
+  try {
+    const prompt = `Classify each of these ${items.length} trending news headlines into exactly one of these topics: ${CLASSIFIABLE_SECTIONS.join(", ")}.
+- "india": Indian domestic politics, society, crime, local affairs, government.
+- "world": international/foreign affairs, geopolitics, other countries' news.
+- "business": markets, companies, economy, finance, trade.
+- "technology": tech companies, gadgets, software, AI.
+- "sports": any sport, athletes, matches, tournaments.
+- "science": research, space, discoveries, health/medical science studies.
+- "health": personal health, medicine, disease, wellness, fitness.
+Pick the SINGLE best-fitting topic per headline based on its actual subject, not just where it might have been sourced from.
+
+Return ONLY JSON: {"s": ["topic0", "topic1", ...]} — exactly ${items.length} strings, in the same order, each one of: ${CLASSIFIABLE_SECTIONS.join(", ")}.
+
+${items.map((it, i) => `[${i}] ${it.title}`).join("\n")}`;
+    const raw = await openaiJson(prompt, CLUSTER_MODEL, 2048);
+    const arr: any[] = Array.isArray(raw?.s) ? raw.s : [];
+    if (arr.length !== items.length) return fallback;
+    return arr.map((x: any) =>
+      CLASSIFIABLE_SECTIONS.includes(x) ? (x as SectionId) : "india",
+    );
+  } catch {
+    return fallback;
+  }
+}
+
+async function buildRawStories(feedMap: Map<SectionId, RssItem[]>): Promise<{ stories: Story[]; headlineIds: Set<string>; staleDropped: number; blockedDropped: number; notAllowedDropped: number }> {
   const seenIds    = new Set<string>();
   const seenTitles = new Set<string>();
   const idToIdx    = new Map<string, number>();
@@ -456,8 +498,10 @@ function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]
   }
 
   // Headlines last — matches get promoted (their section becomes "headlines");
-  // homepage-only items (no topical match) default to "india", not "headlines".
+  // homepage-only items (no topical match at all) are classified by actual
+  // subject via a small LLM call below, rather than defaulting to "india".
   const promoteIds = new Set<string>();
+  const orphanItems: RssItem[] = [];
   for (const item of feedMap.get("headlines") ?? []) {
     const id  = storyId(item.link);
     const key = normalize(item.title).slice(0, 60);
@@ -468,10 +512,15 @@ function buildRawStories(feedMap: Map<SectionId, RssItem[]>): { stories: Story[]
       if (!isAllowed(item)) { notAllowedDropped++; continue; }
       if (isBlocked(item)) { blockedDropped++; continue; }
       if (!isFresh(item))  { staleDropped++;   continue; }
-      const idx = addStory(item, "india");
-      headlineIds.add(stories[idx].id);
+      orphanItems.push(item);
     }
   }
+
+  const orphanSections = await classifyOrphanSections(orphanItems);
+  orphanItems.forEach((item, i) => {
+    const idx = addStory(item, orphanSections[i] ?? "india");
+    headlineIds.add(stories[idx].id);
+  });
 
   // Promote homepage+topical matches into Headlines.
   for (const id of promoteIds) {
@@ -1294,6 +1343,23 @@ async function generateAllTTS(
   let lastCheckpoint = Date.now();
   const CHECKPOINT_MS = 20_000;
 
+  // Voice alternation index — NOT the raw array position. `updated` is
+  // grouped by section, but items promoted into "headlines" keep their
+  // original array slot while only their `.section` label changes (see
+  // buildRawStories), so a section's actual on-device playback order is a
+  // filtered, non-contiguous subsequence of this array. Alternating by raw
+  // index broke that: e.g. section "india" at raw positions 0,1,2,3,4 (voices
+  // A,B,A,B,A) with position 2 promoted out to "headlines" leaves india's
+  // real playback order as 0,1,3,4 → A,B,B,A, two B's in a row. Computing the
+  // index as "position within this story's own final section" instead keeps
+  // strict alternation for what listeners actually hear back-to-back.
+  const sectionCounters = new Map<string, number>();
+  const voiceIndexByStory = updated.map((s) => {
+    const n = sectionCounters.get(s.section) ?? 0;
+    sectionCounters.set(s.section, n + 1);
+    return n;
+  });
+
   // One job per (story, language) clip
   const jobs: Array<{ i: number; lang: string }> = [];
   for (let i = 0; i < updated.length; i++) for (const lang of languages) jobs.push({ i, lang });
@@ -1309,7 +1375,7 @@ async function generateAllTTS(
         if (!script) return;
 
         try {
-          const url = await synthesizeOne(script, `${date}-${updated[i].id}-${lang}`, provider, i);
+          const url = await synthesizeOne(script, `${date}-${updated[i].id}-${lang}`, provider, voiceIndexByStory[i]);
           setAudioUrl(updated[i], lang, url);
           updated[i].audioStartSec = 0;
           totalChars += script.length;
@@ -1439,7 +1505,7 @@ export async function generateDailyBriefing(
   if (isAbortRequested()) throw new Error("Aborted by user");
 
   // Step 2: Dedup
-  const { stories: rawStories, headlineIds, staleDropped, blockedDropped, notAllowedDropped } = buildRawStories(feedMap);
+  const { stories: rawStories, headlineIds, staleDropped, blockedDropped, notAllowedDropped } = await buildRawStories(feedMap);
   log(`After dedup: ${rawStories.length} unique articles (${headlineIds.size} on Google homepage) — dropped ${staleDropped} stale, ${blockedDropped} blocked-source, ${notAllowedDropped} non-allowlisted publisher`);
   for (const [sectionId, config] of FEED_MAP) {
     const n = rawStories.filter(s => s.section === sectionId).length;
