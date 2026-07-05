@@ -3,7 +3,7 @@ import { Play, Check, Flame, LandmarkIcon, Globe, TrendingUp, Cpu, Trophy, Flask
 import { cn } from "@/lib/utils";
 import type { Story } from "@/lib/news/generator";
 import { FEED_MAP, type SectionId } from "@/lib/news/sources";
-import { getStoryTitle } from "@/hooks/useMonologue";
+import { getStoryTitle, getSectionLabel } from "@/hooks/useMonologue";
 
 // Per-section accent colors
 export const SECTION_COLOR: Record<SectionId, string> = {
@@ -85,7 +85,7 @@ function StoryCardBase({ story, isPlaying, hasAudio, isCompleted = false, langua
   const feed    = FEED_MAP.get(section);
   const accent  = SECTION_COLOR[section] ?? "#EF4444";
   const displayTitle  = getStoryTitle(story, language ?? "en");
-  const sectionLabel  = language === "hi" ? (feed?.labelHi ?? feed?.label ?? story.section) : (feed?.label ?? story.section);
+  const sectionLabel  = getSectionLabel(feed, language ?? "en") || story.section;
 
   return (
     <div

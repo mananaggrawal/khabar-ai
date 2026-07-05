@@ -12,7 +12,7 @@ import {
 import { VoiceOrb } from "./VoiceOrb";
 import { StoryDetailSheet } from "./StoryDetailSheet";
 import type { useMonologue } from "@/hooks/useMonologue";
-import { getStoryTitle } from "@/hooks/useMonologue";
+import { getStoryTitle, getSectionLabel } from "@/hooks/useMonologue";
 import type { SectionId } from "@/lib/news/sources";
 
 type MonoHook = ReturnType<typeof useMonologue>;
@@ -159,7 +159,7 @@ export function PlayerScreen({ mono, visible, onClose, isSaved, onSave }: Player
             className="px-6 pb-2 cursor-pointer"
           >
             <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.08em] mb-1.5" style={{ color: accent }}>
-              {currentFeed && <span>{language === "hi" ? currentFeed.labelHi : currentFeed.label}</span>}
+              {currentFeed && <span>{getSectionLabel(currentFeed, language)}</span>}
               {sectionStories.length > 0 && (
                 <>
                   <span className="text-muted-foreground/40">·</span>

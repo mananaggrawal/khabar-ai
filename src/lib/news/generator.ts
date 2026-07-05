@@ -1266,12 +1266,20 @@ async function translateAll(stories: Story[], langs: string[], logger: Logger): 
     const tasks: Promise<void>[] = [];
     for (let i = 0; i < stories.length; i += BATCH) {
       const slice = stories.slice(i, i + BATCH);
+      // Only send stories that actually have an English script — previously the
+      // whole slice (including any empty-scriptEn stories) was sent as-is, wasting
+      // a slot in the batch on nothing for the model to translate.
+      const withScript = slice
+        .map((s, j) => ({ s, j }))
+        .filter(({ s }) => !!s.scriptEn);
       tasks.push(limit(async () => {
-        if (isAbortRequested()) return;
-        if (!slice.some(s => s.scriptEn)) return;
-        const out = await translateBatchWithRetry(slice.map(s => ({ title: s.title, script: s.scriptEn })), lang, logger);
-        slice.forEach((s, j) => {
-          const tr = out.get(j);
+        if (isAbortRequested() || withScript.length === 0) return;
+        const out = await translateBatchWithRetry(
+          withScript.map(({ s }) => ({ title: s.title, script: s.scriptEn })),
+          lang, logger,
+        );
+        withScript.forEach(({ s }, localIdx) => {
+          const tr = out.get(localIdx);
           if (tr && tr.script && LANG_SCRIPT_RE[lang]?.test(tr.script)) {
             setScript(s, lang, tr.script);
             if (tr.title && LANG_SCRIPT_RE[lang]?.test(tr.title)) setTitle(s, lang, tr.title);
@@ -1723,9 +1731,25 @@ export async function patchScripts(
   }));
 
   const rescripted = await scriptAllEvents(fakeEvents, log);
+  // Clear translations + audio derived from the OLD (broken) English script —
+  // otherwise a patched story ends up with a corrected scriptEn sitting next to
+  // a stale Hindi translation of the previous text, and/or stale audio in either
+  // language that no longer matches what's on screen. translateAll + TTS will
+  // regenerate these fresh on the next pass since scriptHi/audioUrlEn/audioUrlHi
+  // are now empty again, same as a brand-new story.
   const allStories = existing.stories.map(s => {
     const patched = rescripted.find(r => r.id === s.id);
-    return patched ? { ...s, scriptEn: patched.scriptEn, wordCount: patched.wordCount } : s;
+    if (!patched) return s;
+    return {
+      ...s,
+      scriptEn: patched.scriptEn,
+      wordCount: patched.wordCount,
+      scriptHi: "", titleHi: undefined,
+      scriptTa: undefined, titleTa: undefined,
+      scriptMr: undefined, titleMr: undefined,
+      audioUrlEn: undefined, audioUrlHi: undefined,
+      audioUrlTa: undefined, audioUrlMr: undefined,
+    };
   });
 
   const updatedBriefing: DailyBriefing = { ...existing, stories: allStories };

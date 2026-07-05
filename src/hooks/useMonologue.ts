@@ -58,6 +58,24 @@ export function getStoryTitle(story: import("@/lib/news/generator").Story, lang:
   return story.title;
 }
 
+// Language-aware section label. Previously every call site hardcoded
+// `language === "hi" ? labelHi : label`, so Tamil/Marathi listeners saw English
+// section headers (Headlines/India/World/…) everywhere even though their story
+// titles and scripts were correctly localized — FEED_MAP has labelTa/labelMr
+// (added 2026-07-05) but nothing read them. Centralising here so every screen
+// (StoryCard, PlayerScreen, MiniPlayer, StoryDetailSheet) picks up all 4
+// languages the same way.
+export function getSectionLabel(
+  feed: { label: string; labelHi: string; labelTa?: string; labelMr?: string } | null | undefined,
+  lang: Language,
+): string {
+  if (!feed) return "";
+  if (lang === "hi") return feed.labelHi || feed.label;
+  if (lang === "ta") return feed.labelTa || feed.label;
+  if (lang === "mr") return feed.labelMr || feed.label;
+  return feed.label;
+}
+
 const IS_LOCAL = typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_LOCAL_MODE === "true";
 
 // ── Per-account "listened" sync (Supabase) ─────────────────────────────────
@@ -266,18 +284,6 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
             markCompleted(storiesWithAudio[currentIdxRef.current]?.id);
             endedHandlerRef.current();
             return;
-          }
-
-          // Advance story index when crossing audioStartSec boundary (same section audio)
-          const nextIdx = currentIdxRef.current + 1;
-          const next = storiesWithAudio[nextIdx];
-          if (next) {
-            const nextUrl = getAudioUrl(next, language)!;
-            const nextFilename = nextUrl?.split('/').pop() ?? '';
-            if (nextFilename && audio.src.endsWith(nextFilename) && next.audioStartSec !== undefined && ct >= next.audioStartSec) {
-              markCompleted(storiesWithAudio[currentIdxRef.current]?.id);
-              setCurrentStoryIdx(nextIdx);
-            }
           }
 
           // Preload next section's audio at 70%

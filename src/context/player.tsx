@@ -12,7 +12,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Play, Pause, SkipBack, SkipForward } from "lucide-react";
 
 import { fetchBriefing } from "@/lib/news/briefing.functions";
-import { useMonologue, getStoryTitle } from "@/hooks/useMonologue";
+import { useMonologue, getStoryTitle, getSectionLabel, getAudioUrl } from "@/hooks/useMonologue";
 import { useSavedStories } from "@/hooks/useSavedStories";
 import { PlayerScreen } from "@/components/PlayerScreen";
 import { type SectionId } from "@/lib/news/sources";
@@ -62,7 +62,7 @@ function MiniPlayer({ mono, onOpen }: { mono: ReturnType<typeof useMonologue>; o
             <div className="flex items-center gap-3 px-4 py-3">
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[11px] text-muted-foreground">
-                  {currentFeed ? (language === "hi" ? currentFeed.labelHi : currentFeed.label) : "Playing"}
+                  {currentFeed ? getSectionLabel(currentFeed, language) : "Playing"}
                 </p>
                 <p className="truncate text-sm font-medium text-foreground leading-tight">
                   {currentStory ? getStoryTitle(currentStory, language) : "—"}
@@ -121,18 +121,21 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // Close the full player when playback stops
   useEffect(() => { if (mono.state === "idle") setPlayerOpen(false); }, [mono.state]);
 
-  // Persist which languages are available in this briefing
+  // Persist which languages are available in this briefing. Requires at least
+  // half the stories to have audio in that language (2026-07-05, was "any
+  // single story") — with the old any-story threshold, a language with only a
+  // handful of successful translations (e.g. after a partial translateAll
+  // failure) would show as fully selectable in Settings even though the
+  // filtered feed (see routes/index.tsx) would then show almost nothing in it.
+  const AVAILABLE_LANG_COVERAGE = 0.5;
   useEffect(() => {
     if (!briefing?.stories?.length) return;
-    const langs = ["en", "hi", "ta", "mr"].filter((lang) =>
-      briefing.stories.some((s) => {
-        if (lang === "en") return !!s.audioUrlEn;
-        if (lang === "hi") return !!s.audioUrlHi;
-        if (lang === "ta") return !!(s as any).audioUrlTa;
-        if (lang === "mr") return !!(s as any).audioUrlMr;
-        return false;
-      }),
-    );
+    const total = briefing.stories.length;
+    const allLangs: Array<"en" | "hi" | "ta" | "mr"> = ["en", "hi", "ta", "mr"];
+    const langs = allLangs.filter((lang) => {
+      const withAudio = briefing.stories.filter((s) => !!getAudioUrl(s, lang)).length;
+      return withAudio / total >= AVAILABLE_LANG_COVERAGE;
+    });
     try { localStorage.setItem("khabar-available-languages", JSON.stringify(langs)); } catch {}
   }, [briefing]);
 

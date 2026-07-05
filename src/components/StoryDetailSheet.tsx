@@ -8,7 +8,7 @@ import { motion, AnimatePresence, useDragControls } from "motion/react";
 import { X, ExternalLink, ArrowUpRight, Bookmark, Newspaper } from "lucide-react";
 import type { Story } from "@/lib/news/generator";
 import { FEED_MAP } from "@/lib/news/sources";
-import { type Language, getStoryTitle } from "@/hooks/useMonologue";
+import { type Language, getStoryTitle, getSectionLabel } from "@/hooks/useMonologue";
 import { SECTION_COLOR } from "@/components/StoryCard";
 
 interface StoryDetailSheetProps {
@@ -176,7 +176,7 @@ export function StoryDetailSheet({
               <div className="flex-1 min-w-0">
                 {feed && (
                   <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-primary/70 mb-1">
-                    {language === "hi" ? feed.labelHi : feed.label}
+                    {getSectionLabel(feed, language)}
                   </p>
                 )}
                 <p className="font-serif text-lg leading-snug text-foreground">

@@ -17,6 +17,8 @@ export type FeedConfig = {
   feedId: SectionId;
   label: string;
   labelHi: string;
+  labelTa: string;
+  labelMr: string;
   emoji: string;
   buildUrl: () => string;
   fallbackUrl?: string;
@@ -26,6 +28,8 @@ export type SectionConfig = {
   id: SectionId;
   label: string;
   labelHi: string;
+  labelTa: string;
+  labelMr: string;
   emoji: string;
 };
 
@@ -51,6 +55,8 @@ export const FEEDS: FeedConfig[] = [
     feedId:  "headlines",
     label:   "Headlines",
     labelHi: "मुख्य खबरें",
+    labelTa: "தலைப்புச் செய்திகள்",
+    labelMr: "ठळक बातम्या",
     emoji:   "🔥",
     buildUrl: () => `${GN_BASE}?${LOCALE}`,
   },
@@ -58,6 +64,8 @@ export const FEEDS: FeedConfig[] = [
     feedId:  "india",
     label:   "India",
     labelHi: "भारत",
+    labelTa: "இந்தியா",
+    labelMr: "भारत",
     emoji:   "🇮🇳",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.india}?${LOCALE}`,
     fallbackUrl: `${GN_BASE}/search?q=india+news&${LOCALE}`,
@@ -66,6 +74,8 @@ export const FEEDS: FeedConfig[] = [
     feedId:  "world",
     label:   "World",
     labelHi: "विश्व",
+    labelTa: "உலகம்",
+    labelMr: "जग",
     emoji:   "🌍",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.world}?${LOCALE}`,
     fallbackUrl: `${GN_BASE}/search?q=world+international+news&${LOCALE}`,
@@ -74,6 +84,8 @@ export const FEEDS: FeedConfig[] = [
     feedId:  "business",
     label:   "Business",
     labelHi: "व्यापार",
+    labelTa: "வணிகம்",
+    labelMr: "व्यवसाय",
     emoji:   "💼",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.business}?${LOCALE}`,
     fallbackUrl: `${GN_BASE}/search?q=india+business+economy+markets&${LOCALE}`,
@@ -82,6 +94,8 @@ export const FEEDS: FeedConfig[] = [
     feedId:  "technology",
     label:   "Technology",
     labelHi: "तकनीक",
+    labelTa: "தொழில்நுட்பம்",
+    labelMr: "तंत्रज्ञान",
     emoji:   "💻",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.technology}?${LOCALE}`,
     fallbackUrl: `${GN_BASE}/search?q=technology&${LOCALE}`,
@@ -90,6 +104,8 @@ export const FEEDS: FeedConfig[] = [
     feedId:  "sports",
     label:   "Sports",
     labelHi: "खेल",
+    labelTa: "விளையாட்டு",
+    labelMr: "क्रीडा",
     emoji:   "🏆",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.sports}?${LOCALE}`,
     fallbackUrl: `${GN_BASE}/search?q=sports&${LOCALE}`,
@@ -98,6 +114,8 @@ export const FEEDS: FeedConfig[] = [
     feedId:  "science",
     label:   "Science",
     labelHi: "विज्ञान",
+    labelTa: "அறிவியல்",
+    labelMr: "विज्ञान",
     emoji:   "🔬",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.science}?${LOCALE}`,
     fallbackUrl: `${GN_BASE}/search?q=science&${LOCALE}`,
@@ -106,6 +124,8 @@ export const FEEDS: FeedConfig[] = [
     feedId:  "health",
     label:   "Health",
     labelHi: "स्वास्थ्य",
+    labelTa: "சுகாதாரம்",
+    labelMr: "आरोग्य",
     emoji:   "🩺",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.health}?${LOCALE}`,
     fallbackUrl: `${GN_BASE}/search?q=health&${LOCALE}`,
@@ -117,35 +137,20 @@ export const FEEDS: FeedConfig[] = [
 export const SECTION_ORDER: SectionId[] = ["headlines", "india", "world", "business", "technology", "sports", "science", "health"];
 
 const SECTION_CONFIGS: SectionConfig[] = [
-  { id: "headlines",  label: "Headlines",   labelHi: "मुख्य खबरें", emoji: "🔥" },
-  { id: "india",      label: "India",       labelHi: "भारत",         emoji: "🇮🇳" },
-  { id: "world",      label: "World",       labelHi: "विश्व",         emoji: "🌍" },
-  { id: "business",   label: "Business",    labelHi: "व्यापार",       emoji: "💼" },
-  { id: "technology", label: "Technology",  labelHi: "तकनीक",        emoji: "💻" },
-  { id: "sports",     label: "Sports",      labelHi: "खेल",          emoji: "🏆" },
-  { id: "science",    label: "Science",     labelHi: "विज्ञान",       emoji: "🔬" },
-  { id: "health",     label: "Health",      labelHi: "स्वास्थ्य",     emoji: "🩺" },
+  { id: "headlines",  label: "Headlines",   labelHi: "मुख्य खबरें", labelTa: "தலைப்புச் செய்திகள்", labelMr: "ठळक बातम्या", emoji: "🔥" },
+  { id: "india",      label: "India",       labelHi: "भारत",         labelTa: "இந்தியா",              labelMr: "भारत",         emoji: "🇮🇳" },
+  { id: "world",      label: "World",       labelHi: "विश्व",         labelTa: "உலகம்",                labelMr: "जग",           emoji: "🌍" },
+  { id: "business",   label: "Business",    labelHi: "व्यापार",       labelTa: "வணிகம்",               labelMr: "व्यवसाय",      emoji: "💼" },
+  { id: "technology", label: "Technology",  labelHi: "तकनीक",        labelTa: "தொழில்நுட்பம்",         labelMr: "तंत्रज्ञान",   emoji: "💻" },
+  { id: "sports",     label: "Sports",      labelHi: "खेल",          labelTa: "விளையாட்டு",           labelMr: "क्रीडा",       emoji: "🏆" },
+  { id: "science",    label: "Science",     labelHi: "विज्ञान",       labelTa: "அறிவியல்",             labelMr: "विज्ञान",      emoji: "🔬" },
+  { id: "health",     label: "Health",      labelHi: "स्वास्थ्य",     labelTa: "சுகாதாரம்",            labelMr: "आरोग्य",       emoji: "🩺" },
 ];
 
 /** FEED_MAP: SectionId → SectionConfig. Used in UI for labels and emojis. */
 export const FEED_MAP = new Map<SectionId, SectionConfig>(
   SECTION_CONFIGS.map((c) => [c.id, c]),
 );
-
-// ── Section preferences (localStorage, client-side only) ─────────────────────
-
-export const SECTIONS_KEY = "khabar-preferred-sections";
-
-export function readPreferredSections(): Set<SectionId> {
-  try {
-    const stored = localStorage.getItem(SECTIONS_KEY);
-    if (stored) {
-      const arr = JSON.parse(stored) as SectionId[];
-      if (Array.isArray(arr) && arr.length > 0) return new Set(arr);
-    }
-  } catch {}
-  return new Set(SECTION_CONFIGS.map((c) => c.id)); // default: all 4 sections
-}
 
 // ── Publisher allowlist (2026-07-02) ──────────────────────────────────────────
 // Generation only keeps articles from these 7 mastheads — everything else is

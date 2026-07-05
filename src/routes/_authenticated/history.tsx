@@ -8,7 +8,7 @@ import { StoryCard } from "@/components/StoryCard";
 import { StoryDetailSheet } from "@/components/StoryDetailSheet";
 import { PlayerScreen } from "@/components/PlayerScreen";
 import { useSavedStories } from "@/hooks/useSavedStories";
-import { useMonologue } from "@/hooks/useMonologue";
+import { useMonologue, getStoryTitle, getSectionLabel, getAudioUrl } from "@/hooks/useMonologue";
 import type { DailyBriefing, Story } from "@/lib/news/generator";
 
 export const Route = createFileRoute("/_authenticated/history")({
@@ -45,9 +45,11 @@ function SavedMiniPlayer({ mono, onOpen }: { mono: ReturnType<typeof useMonologu
             <div className="flex items-center gap-3 px-4 py-3">
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[11px] text-muted-foreground">
-                  {currentFeed ? (language === "hi" ? currentFeed.labelHi : currentFeed.label) : "Playing"}
+                  {currentFeed ? getSectionLabel(currentFeed, language) : "Playing"}
                 </p>
-                <p className="truncate text-sm font-medium text-foreground leading-tight">{currentStory?.title ?? "—"}</p>
+                <p className="truncate text-sm font-medium text-foreground leading-tight">
+                  {currentStory ? getStoryTitle(currentStory, language) : "—"}
+                </p>
               </div>
               <div className="flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
                 <button onClick={() => mono.prev()} className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:text-foreground">
@@ -145,16 +147,14 @@ function SavedPage() {
                 </p>
                 <div className="flex flex-col gap-1.5">
                   {stories.map((story) => {
-                    const hasAudio = mono.language === "hi" ? !!story.audioUrlHi
-                      : mono.language === "ta" ? !!story.audioUrlTa
-                      : mono.language === "mr" ? !!story.audioUrlMr
-                      : !!story.audioUrlEn;
+                    const hasAudio = !!getAudioUrl(story, mono.language);
                     const storyIdx = mono.storiesWithAudio.findIndex((s) => s.id === story.id);
                     const isActive = mono.currentStory?.id === story.id;
                     return (
                       <StoryCard
                         key={story.id}
                         story={story}
+                        language={mono.language}
                         isPlaying={isActive && mono.state === "playing"}
                         hasAudio={hasAudio}
                         onPlay={() => storyIdx >= 0 && mono.playFromInSection(storyIdx, story.section)}
