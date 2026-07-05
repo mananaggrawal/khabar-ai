@@ -200,12 +200,20 @@ function HomePage() {
     }
   }, [mono.currentStory, detailStory]);
 
-  // Group stories by section in display order (helpers are module-scope)
+  // Group stories by section in display order (helpers are module-scope).
+  // Excludes stories with no audio in the selected language (2026-07-05) — a
+  // translation gap (rare now, but not impossible even with the retry added to
+  // translateAll) previously left the story in the list anyway, showing an
+  // English-titled, unplayable card mixed into an otherwise-Hindi list. This
+  // matches the filter HeroCard and useMonologue's storiesWithAudio already
+  // apply; the feed list was the one place still showing every story regardless.
   const storiesBySection = SECTION_DISPLAY_ORDER
     .map(sectionId => ({
       sectionId,
       feed: FEED_MAP.get(sectionId),
-      stories: (briefing?.stories ?? []).filter(s => resolveSection(s.section) === sectionId),
+      stories: (briefing?.stories ?? [])
+        .filter(s => resolveSection(s.section) === sectionId)
+        .filter(s => !!getAudioUrl(s, mono.language)),
     }))
     .filter(g => g.stories.length > 0);
 

@@ -117,12 +117,17 @@ function synthesizeOnce(input: string, voice: string): Promise<Buffer> {
 // Retry transient failures (websocket drops, EAI_AGAIN, timeouts) and treat an
 // empty/too-small result as a failure to retry. Last attempt falls back to plain
 // text in case the SSML transform is what Edge is choking on.
+// 4 attempts (was 3, 2026-07-05) with longer backoff — under full-run concurrency
+// (5 parallel TTS jobs × ~100+ stories × up to 4 languages) a small percentage of
+// clips still exhausted 3 attempts and were permanently skipped; one more attempt
+// with more spacing catches most of those without materially slowing the run
+// (this only fires for the ~1-2% of clips that were already retrying).
 async function synthesize(script: string, voice: string): Promise<Buffer> {
   const ssml = prepareSpoken(script);
   let lastErr: Error | null = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt > 0) await new Promise(r => setTimeout(r, 600 * attempt));
-    const input = attempt < 2 ? ssml : ssmlEscape(script); // final attempt: plain
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, 800 * attempt));
+    const input = attempt < 3 ? ssml : ssmlEscape(script); // final attempt: plain
     try {
       const buf = await synthesizeOnce(input, voice);
       if (buf && buf.length >= 2000) return buf;
