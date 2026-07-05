@@ -531,71 +531,6 @@ async function buildRawStories(feedMap: Map<SectionId, RssItem[]>): Promise<{ st
   return { stories, headlineIds, staleDropped, blockedDropped, notAllowedDropped };
 }
 
-// ─── Step 2b: OG image fetching ───────────────────────────────────────────────
-
-const FETCH_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1";
-
-function extractOgImage(html: string): string | undefined {
-  const head = html.slice(0, 20_000);
-  const patterns = [
-    /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i,
-    /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i,
-    /<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i,
-    /<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image["']/i,
-  ];
-  for (const re of patterns) {
-    const m = head.match(re);
-    if (m?.[1] && m[1].startsWith("http")) return m[1];
-  }
-}
-
-async function fetchOgImage(url: string): Promise<string | undefined> {
-  const ctrl  = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 8000);
-  try {
-    const res = await fetch(url, {
-      signal: ctrl.signal,
-      headers: { "User-Agent": FETCH_UA, "Accept": "text/html,*/*;q=0.8", "Accept-Language": "en-IN,en;q=0.9" },
-      redirect: "follow",
-    });
-    if (!res.ok) return undefined;
-    const reader = res.body?.getReader();
-    if (!reader) return undefined;
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    while (total < 40_000) {
-      const { done, value } = await reader.read();
-      if (done || !value) break;
-      chunks.push(value); total += value.byteLength;
-    }
-    ctrl.abort();
-    const html = new TextDecoder().decode(
-      chunks.reduce((acc, c) => { const a = new Uint8Array(acc.length + c.length); a.set(acc); a.set(c, acc.length); return a; }, new Uint8Array(0))
-    );
-    return extractOgImage(html);
-  } catch { return undefined; } finally { clearTimeout(timer); }
-}
-
-async function fetchAllOgImages(stories: Story[], logger: Logger, liveMap?: Map<string, string>): Promise<Story[]> {
-  logger(`Fetching OG images for ${stories.length} stories…`);
-  const updated = stories.map(s => ({ ...s }));
-  const CONCURRENCY = 10;
-  for (let i = 0; i < stories.length; i += CONCURRENCY) {
-    if (isAbortRequested()) break;
-    await Promise.allSettled(
-      stories.slice(i, i + CONCURRENCY).map(async (story, j) => {
-        const idx = i + j;
-        if (updated[idx].imageUrl) { liveMap?.set(story.id, updated[idx].imageUrl!); return; }
-        const img = await fetchOgImage(story.link);
-        if (img) { updated[idx] = { ...updated[idx], imageUrl: img }; liveMap?.set(story.id, img); }
-      }),
-    );
-  }
-  const withImages = updated.filter(s => s.imageUrl).length;
-  logger(`OG images: ${withImages}/${stories.length} fetched`);
-  return updated;
-}
-
 // ─── Step 3: Fetch article body text ─────────────────────────────────────────
 
 async function fetchArticleText(url: string): Promise<string> {
@@ -1540,19 +1475,7 @@ export async function generateDailyBriefing(
     });
     log(`Clustering input: ${clusterInput.length} articles (from ${rawStories.length})`);
 
-    // Steps 2b + 4 in parallel: OG images + cluster
-    const liveImageById = new Map<string, string>();
-    const [withImages, clustered] = await Promise.all([
-      fetchAllOgImages(clusterInput, log, liveImageById),
-      clusterAndSelect(clusterInput, headlineIds, MAX_STORIES, log, targets),
-    ]);
-    selectedEvents = clustered;
-
-    // Merge OG images into events
-    const imageById = new Map(withImages.map(s => [s.id, s.imageUrl]));
-    for (const ev of selectedEvents) {
-      if (!ev.imageUrl) ev.imageUrl = ev.sourceStories.map(s => imageById.get(s.id)).find(Boolean);
-    }
+    selectedEvents = await clusterAndSelect(clusterInput, headlineIds, MAX_STORIES, log, targets);
   } else {
     // No clustering + no cap (2026-07-02): with generation restricted to the
     // 7-publisher allowlist, the point is to include EVERY article those papers
@@ -1588,12 +1511,6 @@ export async function generateDailyBriefing(
     selectedEvents = capEnabled ? capProportional(topicGrouped, MAX_STORIES, targets) : topicGrouped;
     log(`Clustering disabled (title-dedup ${process.env.ENABLE_TITLE_DEDUP !== "false" ? "on" : "off"}, merge ${dupMergeEnabled ? "on" : "off"}, topic-grouping ${topicGroupingEnabled ? "on" : "off"}) — ${selectedEvents.length} events${capEnabled ? ` (capped from ${topicGrouped.length})` : ", no cap"}`);
 
-    const liveImageById = new Map<string, string>();
-    const withImages = await fetchAllOgImages(selectedEvents.map(ev => ev.sourceStories[0]), log, liveImageById);
-    const imageById = new Map(withImages.map(s => [s.id, s.imageUrl]));
-    for (const ev of selectedEvents) {
-      if (!ev.imageUrl) ev.imageUrl = imageById.get(ev.sourceStories[0].id);
-    }
   }
 
   // "Listened" status fix (2026-07-03): mergeDuplicateEvents/topicGroupEvents
