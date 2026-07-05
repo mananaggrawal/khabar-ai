@@ -9,6 +9,7 @@ import { StoryDetailSheet } from "@/components/StoryDetailSheet";
 import { PlayerScreen } from "@/components/PlayerScreen";
 import { useSavedStories } from "@/hooks/useSavedStories";
 import { useMonologue, getStoryTitle, getSectionLabel, getAudioUrl } from "@/hooks/useMonologue";
+import { usePlayer } from "@/context/player";
 import type { DailyBriefing, Story } from "@/lib/news/generator";
 
 export const Route = createFileRoute("/_authenticated/history")({
@@ -74,12 +75,27 @@ function SavedMiniPlayer({ mono, onOpen }: { mono: ReturnType<typeof useMonologu
 
 function SavedPage() {
   const { saved, loading, isSaved, toggle, remove } = useSavedStories();
+  const { briefing: liveBriefing } = usePlayer();
   const [detailStory, setDetailStory] = useState<Story | null>(null);
   const [playerOpen, setPlayerOpen] = useState(false);
 
+  // Saved stories are a snapshot taken at save time (useSavedStories writes the
+  // full story object into Supabase). If that story's script/title/audio is
+  // later corrected — e.g. via the admin "patch scripts" action, which now
+  // clears and regenerates translations/audio (2026-07-05) — the saved
+  // snapshot would otherwise keep showing the OLD content forever, since it's
+  // a copy, not a live reference. Where today's briefing still has the same
+  // story id, prefer its current fields over the stale snapshot; keep the
+  // original savedAt so grouping/sorting by save date is unaffected.
+  const liveById = new Map((liveBriefing?.stories ?? []).map((s) => [s.id, s]));
+  const freshSaved = saved.map((s) => {
+    const live = liveById.get(s.id);
+    return live ? { ...live, savedAt: s.savedAt } : s;
+  });
+
   // Build synthetic briefing from saved stories so useMonologue can play them
-  const syntheticBriefing: DailyBriefing | null = saved.length > 0
-    ? { date: new Date().toISOString().slice(0, 10), generatedAt: new Date().toISOString(), stories: saved }
+  const syntheticBriefing: DailyBriefing | null = freshSaved.length > 0
+    ? { date: new Date().toISOString().slice(0, 10), generatedAt: new Date().toISOString(), stories: freshSaved }
     : null;
 
   const mono = useMonologue({ briefing: syntheticBriefing });
@@ -87,8 +103,8 @@ function SavedPage() {
   useEffect(() => { if (mono.state === "idle") setPlayerOpen(false); }, [mono.state]);
 
   // Group by save date
-  const groups: { label: string; stories: typeof saved }[] = [];
-  for (const story of saved) {
+  const groups: { label: string; stories: typeof freshSaved }[] = [];
+  for (const story of freshSaved) {
     const label = formatGroup(story.savedAt);
     const g = groups.find((x) => x.label === label);
     if (g) g.stories.push(story); else groups.push({ label, stories: [story] });

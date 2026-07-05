@@ -489,6 +489,11 @@ export async function handlePatchMissing(request: Request): Promise<Response> {
   runningJob = "patch-missing";
   resetAbort();
   resetQuota();
+  // Matches handleGenerate/handleCron/handlePatchTTS, which all reset this too.
+  // Harmless today since generateMissingSections always uses the free Edge TTS
+  // provider (no daily quota to hit), but keeps this action from silently
+  // starting with a stale "exhausted" flag if that ever changes.
+  resetDailyQuota();
   (async () => {
     try {
       const { added, briefing } = await generateMissingSections((msg) => send({ type: "log", msg }));
