@@ -1202,16 +1202,57 @@ function setAudioUrl(s: Story, lang: string, url: string): void {
 
 type TransItem = { title: string; script: string };
 
-async function translateBatch(items: TransItem[], lang: string): Promise<TransItem[]> {
+// Translate one batch, matching results back to inputs by an explicit "i" index
+// the model must echo — NOT by array position. Position-based matching (the old
+// approach) silently corrupted data whenever the model dropped, merged, split, or
+// reordered even one item in a batch: everything after that point would zip onto
+// the WRONG story, so a story could end up with another story's Hindi title/script
+// (this is what showed up as "Hindi/English text overlapping" — the wrong-story
+// translation was genuinely being saved and spoken, not a display bug). Any item
+// missing a valid, in-range, unique "i" is dropped rather than guessed at.
+async function translateBatch(items: TransItem[], lang: string): Promise<Map<number, TransItem>> {
   const name = LANG_NAMES[lang] ?? lang;
-  const prompt = `Translate each of these ${items.length} short English news items into ${name}. Each item has a TITLE (headline) and a SCRIPT (read ALOUD in an audio briefing). Translate BOTH. They must sound natural spoken: everyday conversational ${name} (not heavy or over-Sanskritised), keep every name, place and number accurate, and write in the ${name} script. Keep the same order and the same count.
+  const prompt = `Translate each of these ${items.length} short English news items into ${name}. Each item has an INDEX (i), a TITLE (headline), and a SCRIPT (read ALOUD in an audio briefing). Translate BOTH the title and script. They must sound natural spoken: everyday conversational ${name} (not heavy or over-Sanskritised), keep every name, place and number accurate, and write in the ${name} script.
 
-Return ONLY JSON: {"t": [{"title": "…", "script": "…"}, …]} — exactly ${items.length} objects, in order.
+CRITICAL: echo back the exact same "i" index given for each item below, so translations can be matched to the correct original item. Do not renumber, skip, merge, or reorder items — one output object per input index.
+
+Return ONLY JSON: {"t": [{"i": 0, "title": "…", "script": "…"}, …]} — exactly ${items.length} objects, one per input index below.
 
 ${items.map((it, i) => `[${i}] TITLE: ${it.title}\nSCRIPT: ${it.script}`).join("\n\n")}`;
   const raw = await openaiJson(prompt, getTranslateModel(), 8192);
   const arr: any[] = Array.isArray(raw?.t) ? raw.t : (Array.isArray(raw) ? raw : []);
-  return arr.map((x: any) => ({ title: String(x?.title ?? "").trim(), script: String(x?.script ?? "").trim() }));
+
+  const out = new Map<number, TransItem>();
+  for (const x of arr) {
+    const i = Number(x?.i);
+    if (!Number.isInteger(i) || i < 0 || i >= items.length || out.has(i)) continue;
+    const script = String(x?.script ?? "").trim();
+    if (!script) continue;
+    out.set(i, { title: String(x?.title ?? "").trim(), script });
+  }
+  return out;
+}
+
+// Retry a batch translation like every other AI call in this file (scripts retry
+// 2x, TTS retries 3x) — translateAll previously had NO retry, so a single
+// transient OpenAI timeout/429 permanently dropped Hindi for up to BATCH stories
+// in that run. That's the other direct cause of EN/HI script-count mismatches.
+async function translateBatchWithRetry(
+  items: TransItem[],
+  lang: string,
+  logger: Logger,
+): Promise<Map<number, TransItem>> {
+  let lastErr: any;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      return await translateBatch(items, lang);
+    } catch (err: any) {
+      lastErr = err;
+      if (attempt < 2) await new Promise(r => setTimeout(r, 1500 * attempt));
+    }
+  }
+  logger(`  ✗ translate ${lang} batch failed after retry: ${lastErr?.message?.slice(0, 60)}`);
+  return new Map();
 }
 
 /** Translate every story's English title + script into each language (in place). Batched + cheap. */
@@ -1228,19 +1269,15 @@ async function translateAll(stories: Story[], langs: string[], logger: Logger): 
       tasks.push(limit(async () => {
         if (isAbortRequested()) return;
         if (!slice.some(s => s.scriptEn)) return;
-        try {
-          const out = await translateBatch(slice.map(s => ({ title: s.title, script: s.scriptEn })), lang);
-          slice.forEach((s, j) => {
-            const tr = out[j];
-            if (tr && tr.script && LANG_SCRIPT_RE[lang]?.test(tr.script)) {
-              setScript(s, lang, tr.script);
-              if (tr.title && LANG_SCRIPT_RE[lang]?.test(tr.title)) setTitle(s, lang, tr.title);
-              ok++;
-            }
-          });
-        } catch (err: any) {
-          logger(`  ✗ translate ${lang}: ${err.message?.slice(0, 60)}`);
-        }
+        const out = await translateBatchWithRetry(slice.map(s => ({ title: s.title, script: s.scriptEn })), lang, logger);
+        slice.forEach((s, j) => {
+          const tr = out.get(j);
+          if (tr && tr.script && LANG_SCRIPT_RE[lang]?.test(tr.script)) {
+            setScript(s, lang, tr.script);
+            if (tr.title && LANG_SCRIPT_RE[lang]?.test(tr.title)) setTitle(s, lang, tr.title);
+            ok++;
+          }
+        });
       }));
     }
     await Promise.all(tasks);
