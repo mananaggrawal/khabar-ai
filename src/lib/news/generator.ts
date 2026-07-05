@@ -594,14 +594,17 @@ function titlesSimilar(a: Set<string>, b: Set<string>): boolean {
   if (a.size === 0 || b.size === 0) return false;
   let inter = 0;
   for (const w of a) if (b.has(w)) inter++;
-  if (inter < 3) return false; // need several shared content words
+  if (inter < 4) return false; // need several shared content words (was 3, 2026-07-06 — raised alongside topic-grouping's confidence gate)
   const union       = a.size + b.size - inter;
   const jaccard     = inter / union;
   const containment = inter / Math.min(a.size, b.size);
   // Conservative: only merge near-IDENTICAL titles here (avoids merging unrelated
   // stories that merely share a few words). The LLM dedupe pass + shared-source
   // matching catch same-event stories that are worded differently.
-  return jaccard >= 0.65 || containment >= 0.85;
+  // Thresholds raised 0.65→0.72 / 0.85→0.9 (2026-07-06) after a report of two
+  // non-relevant stories getting merged — tightening this deterministic merge
+  // as a second safety margin alongside the new topic-grouping confidence gate.
+  return jaccard >= 0.72 || containment >= 0.9;
 }
 
 /** Two events are the same if they share any underlying source article. */
@@ -713,6 +716,15 @@ ${list}`;
   return events.filter((_, i) => !removed.has(i));
 }
 
+// Minimum confidence (0-1) the model must self-report for a topic-grouping
+// group to actually be applied. Added 2026-07-06 after a report of two
+// unrelated stories getting clubbed into one bracket — the prompt already said
+// "when in doubt, leave separate," but nothing enforced that beyond the
+// model's own judgment call on a single pass. Requiring an explicit score and
+// discarding anything below this bar gives a real, tunable gate instead of
+// just stronger wording. Override via TOPIC_GROUP_MIN_CONFIDENCE.
+const TOPIC_GROUP_MIN_CONFIDENCE = Number(process.env.TOPIC_GROUP_MIN_CONFIDENCE ?? 0.9);
+
 /**
  * Topic grouping (2026-07-02): a narrowly-scoped LLM call, separate from the
  * old broad clustering call this replaces. Its ONLY job is to group stories
@@ -738,7 +750,9 @@ STRICT RULES — do NOT group:
 
 When in doubt, leave stories separate. Under-grouping is fine; over-grouping is not — a group that wrongly combines two different subjects will produce a garbled, confusing summary.
 
-Return JSON only: {"groups": [[2,7],[4,9,12]]} — only groups of 2+ indices sharing the same specific named subject. If none qualify, return {"groups": []}.
+For every group, also give a "confidence" score from 0 to 1 for how certain you are the indices genuinely share the exact same specific named subject — 1.0 only if it's unmistakable (e.g. the identical person's name or case name appears in both headlines), lower if there's any ambiguity. Be honest and conservative with this score; it will be used to filter out shaky groups, so do not inflate it.
+
+Return JSON only: {"groups": [{"indices": [2,7], "confidence": 0.95}, ...]} — only include groups of 2+ indices sharing the same specific named subject. If none qualify, return {"groups": []}.
 
 Stories:
 ${list}`;
@@ -750,13 +764,26 @@ ${list}`;
     logger(`  topic-grouping pass skipped: ${err.message?.slice(0, 60)}`);
     return events;
   }
-  const groups: any[] = Array.isArray(raw?.groups) ? raw.groups : [];
-  if (groups.length === 0) return events;
+  const rawGroups: any[] = Array.isArray(raw?.groups) ? raw.groups : [];
+  if (rawGroups.length === 0) return events;
 
+  // Accept both the new {indices, confidence} shape and a bare array of
+  // indices (defensive — in case the model ever reverts to the old format
+  // despite the schema; treat that as confidence 1 rather than dropping it,
+  // since the model wasn't asked to hedge in that shape).
+  const groups: Array<{ indices: number[]; confidence: number }> = rawGroups
+    .map((g: any) => {
+      if (Array.isArray(g)) return { indices: g, confidence: 1 };
+      if (g && Array.isArray(g.indices)) return { indices: g.indices, confidence: Number(g.confidence) };
+      return null;
+    })
+    .filter((g): g is { indices: number[]; confidence: number } => g !== null);
+
+  let belowThreshold = 0;
   const removed = new Set<number>();
   for (const g of groups) {
-    if (!Array.isArray(g)) continue;
-    const idxs = [...new Set(g.filter((i: any) => Number.isInteger(i) && i >= 0 && i < events.length && !removed.has(i)))]
+    if (!Number.isFinite(g.confidence) || g.confidence < TOPIC_GROUP_MIN_CONFIDENCE) { belowThreshold++; continue; }
+    const idxs = [...new Set(g.indices.filter((i: any) => Number.isInteger(i) && i >= 0 && i < events.length && !removed.has(i)))]
       .sort((a: number, b: number) => a - b);
     if (idxs.length < 2) continue;
     const keep = events[idxs[0]];
@@ -765,6 +792,7 @@ ${list}`;
       removed.add(idxs[j]);
     }
   }
+  if (belowThreshold > 0) logger(`Topic grouping discarded ${belowThreshold} low-confidence group(s) (< ${TOPIC_GROUP_MIN_CONFIDENCE})`);
   if (removed.size === 0) return events;
   logger(`Topic grouping combined ${removed.size} stories into shared-subject events`);
   return events.filter((_, i) => !removed.has(i));
