@@ -131,7 +131,7 @@ function SettingsPage() {
         <section>
           <h2 className="font-serif text-lg">Notifications</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Get a nudge when your morning and evening briefing are ready. On iPhone, this only works after adding Khabar AI to your home screen (Share → Add to Home Screen).
+            Get a nudge when your morning and evening briefing are ready.
           </p>
           <div className="mt-4">
             {!push.supported ? (
