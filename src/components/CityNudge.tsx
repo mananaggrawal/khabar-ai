@@ -1,9 +1,10 @@
 /**
  * One-time dialog asking a logged-in user for their city, so the "local"
  * section can eventually reflect where they actually are (2026-07-06).
- * Only Mumbai is real today — everything else shows as "Coming soon" and
- * isn't selectable (see CITIES in @/lib/news/sources). Skippable; the user
- * can pick or change their city anytime from Settings.
+ * Mumbai is always selectable; the rest unlock the moment the admin has
+ * actually generated that city (usePlayer().generatedCities) — not only once
+ * its static `available` flag in @/lib/news/sources is flipped in a deploy.
+ * Skippable; the user can pick or change their city anytime from Settings.
  *
  * This intentionally fires before NotificationNudge (see CITY_RESOLVED_EVENT)
  * so the two first-open dialogs don't stack on top of each other.
@@ -13,6 +14,7 @@ import { MapPin } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CITIES, type CityId } from "@/lib/news/sources";
 import { useCityPreference, useShouldPromptCity } from "@/hooks/useCityPreference";
+import { usePlayer } from "@/context/player";
 import {
   Dialog,
   DialogContent,
@@ -25,6 +27,7 @@ import {
 export function CityNudge() {
   const { selectCity } = useCityPreference();
   const { shouldPrompt, dismiss } = useShouldPromptCity();
+  const { generatedCities } = usePlayer();
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -60,24 +63,27 @@ export function CityNudge() {
         </DialogHeader>
 
         <div className="mt-2 space-y-2">
-          {CITIES.map((c) => (
-            <button
-              key={c.id}
-              disabled={!c.available}
-              onClick={() => c.available && choose(c.id)}
-              className={cn(
-                "flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left text-sm font-medium transition-colors",
-                c.available
-                  ? "border-border text-foreground hover:border-border/80 hover:bg-black/[0.02]"
-                  : "border-border/40 text-muted-foreground/40 cursor-not-allowed",
-              )}
-            >
-              <span>{c.label}</span>
-              {!c.available && (
-                <span className="text-[10px] uppercase tracking-widest text-muted-foreground/40">Coming soon</span>
-              )}
-            </button>
-          ))}
+          {CITIES.map((c) => {
+            const available = c.available || generatedCities.has(c.id);
+            return (
+              <button
+                key={c.id}
+                disabled={!available}
+                onClick={() => available && choose(c.id)}
+                className={cn(
+                  "flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left text-sm font-medium transition-colors",
+                  available
+                    ? "border-border text-foreground hover:border-border/80 hover:bg-black/[0.02]"
+                    : "border-border/40 text-muted-foreground/40 cursor-not-allowed",
+                )}
+              >
+                <span>{c.label}</span>
+                {!available && (
+                  <span className="text-[10px] uppercase tracking-widest text-muted-foreground/40">Coming soon</span>
+                )}
+              </button>
+            );
+          })}
         </div>
 
         <DialogFooter className="mt-2 sm:flex-col sm:space-x-0 sm:gap-2">

@@ -34,7 +34,7 @@ export const Route = createFileRoute("/_authenticated/settings")({
 
 function SettingsPage() {
   const router = useRouter();
-  const { mono } = usePlayer();
+  const { mono, generatedCities } = usePlayer();
   const hasMiniPlayer = mono.state === "playing" || mono.state === "paused";
   const [selectedLang, setSelectedLang]       = useState<string>(readLanguage);
   const [availableLangs, setAvailableLangs]   = useState<string[]>(readAvailableLanguages);
@@ -131,7 +131,9 @@ function SettingsPage() {
           </div>
         </section>
 
-        {/* City — only Mumbai is real today, others shown as coming soon */}
+        {/* City — Mumbai is always on; others unlock the moment the admin has
+            actually generated them (generatedCities), not just once their
+            static `available` flag is flipped in a future deploy. */}
         <section>
           <h2 className="font-serif text-lg">City</h2>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -139,17 +141,18 @@ function SettingsPage() {
           </p>
           <div className="mt-4 space-y-2">
             {CITIES.map((c) => {
-              const active = c.available && city === c.id;
+              const available = c.available || generatedCities.has(c.id);
+              const active = available && city === c.id;
               return (
                 <button
                   key={c.id}
-                  disabled={!c.available}
-                  onClick={() => c.available && selectCity(c.id)}
+                  disabled={!available}
+                  onClick={() => available && selectCity(c.id)}
                   className={cn(
                     "flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-colors",
                     active
                       ? "border-primary/40 bg-primary/10 text-foreground"
-                      : c.available
+                      : available
                       ? "border-border text-foreground/70 hover:border-border/80 hover:bg-black/[0.02]"
                       : "border-border/40 text-muted-foreground/40 cursor-not-allowed",
                   )}
@@ -161,7 +164,7 @@ function SettingsPage() {
                         <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                       </svg>
                     </span>
-                  ) : !c.available ? (
+                  ) : !available ? (
                     <span className="text-[10px] uppercase tracking-widest text-muted-foreground/40">Coming soon</span>
                   ) : null}
                 </button>

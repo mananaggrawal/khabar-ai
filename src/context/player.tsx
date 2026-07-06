@@ -16,7 +16,7 @@ import { useMonologue, getStoryTitle, getSectionLabel, getAudioUrl } from "@/hoo
 import { useSavedStories } from "@/hooks/useSavedStories";
 import { useCityPreference } from "@/hooks/useCityPreference";
 import { PlayerScreen } from "@/components/PlayerScreen";
-import { type SectionId } from "@/lib/news/sources";
+import { type SectionId, type CityId } from "@/lib/news/sources";
 import type { Story, DailyBriefing } from "@/lib/news/generator";
 
 const SECTION_DISPLAY_ORDER: SectionId[] = ["headlines", "local", "india", "world", "business", "technology", "sports", "science", "health"];
@@ -33,6 +33,12 @@ type PlayerContextValue = {
   isLoading: boolean;
   saved: ReturnType<typeof useSavedStories>;
   openPlayer: () => void;
+  // Which cities actually have "local" content in TODAY's briefing (2026-07-06)
+  // — computed from the UNFILTERED raw briefing, since `briefing` above is
+  // already narrowed to the reader's own city. Lets Settings/CityNudge offer
+  // a city as soon as the admin has generated it, without waiting for its
+  // static `available` flag in sources.ts to be flipped in a deploy.
+  generatedCities: Set<CityId>;
 };
 
 const PlayerCtx = createContext<PlayerContextValue | null>(null);
@@ -125,6 +131,15 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     return { ...rawBriefing, stories };
   }, [rawBriefing, city]);
 
+  // Computed from rawBriefing (pre-city-filter) — see PlayerContextValue note.
+  const generatedCities = useMemo(() => {
+    const set = new Set<CityId>();
+    for (const s of rawBriefing?.stories ?? []) {
+      if (resolveSection(s.section) === "local" && s.city) set.add(s.city);
+    }
+    return set;
+  }, [rawBriefing]);
+
   const mono = useMonologue({ briefing });
   const saved = useSavedStories();
   const [playerOpen, setPlayerOpen] = useState(false);
@@ -156,6 +171,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     isLoading: briefingQuery.isLoading,
     saved,
     openPlayer: () => setPlayerOpen(true),
+    generatedCities,
   };
 
   return (
