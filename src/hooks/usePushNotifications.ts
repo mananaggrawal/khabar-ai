@@ -86,7 +86,19 @@ export function usePushNotifications() {
       const perm = await Notification.requestPermission();
       setPermission(perm);
       if (perm !== "granted") {
-        setError(perm === "denied" ? "Notifications blocked — enable them in your browser settings." : "Permission not granted.");
+        // Once "denied", no page can ever re-prompt — that's an intentional
+        // OS anti-nagging protection, not something JS can work around.
+        // Point the user straight at the one place that actually fixes it
+        // (2026-07-06 — a generic "check your browser settings" message left
+        // people stuck with no idea where to look, especially on an installed
+        // iOS PWA, which shows up as its own entry in iOS Settings).
+        setError(
+          perm === "denied"
+            ? isIOS()
+              ? "Notifications are blocked. Open iPhone Settings → Notifications → Khabar AI, and turn on Allow Notifications — then come back and try again."
+              : "Notifications are blocked for this site. Check your browser's site settings to re-allow them, then try again."
+            : "Permission not granted.",
+        );
         return false;
       }
       const reg = await withTimeout(
