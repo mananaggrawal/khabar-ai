@@ -24,7 +24,20 @@
  * separate "Turn on" button inside it — same as InstallNudge's Android row,
  * which is itself a single <button>. The dismiss X sits outside that button
  * as a sibling so it isn't nested inside it (invalid HTML / broken semantics)
- * and stopPropagation isn't needed for its own click to work correctly.
+ * and stopPropagation isn't needed for its own click to work correctly. A
+ * visible "Turn on" pill (a <span>, not a nested <button>) sits inside it so
+ * the card visibly reads as an actionable control, not just informational text.
+ *
+ * BUG FIX (2026-07-06): this used to hide itself whenever
+ * `push.permission !== "default"` — which also matches "granted". If the OS
+ * permission was granted in an earlier session but the actual push
+ * subscription was never saved (or later got deleted server-side), the
+ * browser still reports "granted" forever; the card then had no way to ever
+ * show again, silently killing the only CTA to retry. Now it only hides for
+ * an explicit "denied" (nothing we can do there) or once actually subscribed
+ * — "granted but not subscribed" still shows the card, and clicking it calls
+ * subscribe() again, which skips the OS prompt (already granted) and just
+ * redoes the service-worker/save steps that didn't finish before.
  */
 import { useState } from "react";
 import { Bell, X } from "lucide-react";
@@ -36,7 +49,8 @@ export function NotificationNudge() {
   const [dismissed, setDismissed] = useState(false);
 
   if (!push.supported) return null;
-  if (push.permission !== "default" || push.subscribed) return null;
+  if (push.subscribed) return null;
+  if (push.permission === "denied") return null;
   if (isIOS() && !isStandalone()) return null;
   if (dismissed) return null;
 
@@ -45,24 +59,23 @@ export function NotificationNudge() {
       <button
         onClick={() => void push.subscribe()}
         disabled={push.loading}
-        className="flex flex-1 min-w-0 items-start gap-3 rounded-2xl px-4 py-3 text-left transition-colors hover:bg-primary/[0.06] disabled:opacity-60"
+        className="flex flex-1 min-w-0 items-center gap-3 rounded-2xl px-4 py-3 text-left transition-colors hover:bg-primary/[0.06] disabled:opacity-60"
       >
         <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10">
           <Bell className="size-4 text-primary" />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium text-foreground">
-            {push.loading ? "Turning on…" : "Never miss your briefing"}
-          </p>
+          <p className="text-sm font-medium text-foreground">Never miss your briefing</p>
           <p className="text-xs text-muted-foreground mt-0.5">
-            {push.loading
-              ? "Just a moment…"
-              : "Tap to get a nudge the moment it's ready — no need to keep checking back."}
+            Get a nudge the moment it's ready — no need to keep checking back.
           </p>
           {push.error && (
             <p className="mt-1 text-xs text-destructive/80">{push.error}</p>
           )}
         </div>
+        <span className="shrink-0 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground">
+          {push.loading ? "Working…" : "Turn on"}
+        </span>
       </button>
       <button
         onClick={() => setDismissed(true)}
