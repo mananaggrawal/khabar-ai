@@ -64,15 +64,26 @@ export function InstallNudge({ variant = "banner" }: InstallNudgeProps) {
         <h2 className="font-serif text-lg">Install app</h2>
         <p className="mt-1 text-sm text-muted-foreground">
           {isIOS
-            ? "Add Khabar AI to your home screen for the best experience."
+            ? "Notifications are only available once Khabar AI is added to your home screen."
             : "Install Khabar AI for faster access and background playback."}
         </p>
         <div className="mt-4">
           {isIOS ? (
-            <div className="flex items-center gap-3 rounded-2xl border border-border px-4 py-3 text-sm text-foreground/70">
-              <Share className="size-4 text-muted-foreground shrink-0" />
-              <span>Tap Share, then "Add to Home Screen"</span>
-            </div>
+            // Plain numbered steps, not a bordered/button-shaped box — there's
+            // nothing to tap here (iOS has no programmatic install), so it
+            // shouldn't visually read as an interactive control (2026-07-06).
+            <ol className="space-y-2.5">
+              <li className="flex items-center gap-2.5 text-sm text-foreground/70">
+                <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-medium text-muted-foreground">1</span>
+                <span className="inline-flex items-center gap-1 flex-wrap">
+                  Tap <Share className="size-3.5 inline shrink-0 mx-0.5 text-muted-foreground" /> Share in Safari
+                </span>
+              </li>
+              <li className="flex items-center gap-2.5 text-sm text-foreground/70">
+                <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-medium text-muted-foreground">2</span>
+                <span>Choose "Add to Home Screen"</span>
+              </li>
+            </ol>
           ) : (
             <button
               onClick={() => void promptInstall()}

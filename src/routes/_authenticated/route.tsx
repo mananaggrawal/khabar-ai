@@ -1,5 +1,6 @@
 import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
 import { NotificationNudge } from "@/components/NotificationNudge";
+import { CityNudge } from "@/components/CityNudge";
 
 const LOCAL_MODE = import.meta.env.VITE_LOCAL_MODE === "true";
 
@@ -15,6 +16,7 @@ export const Route = createFileRoute("/_authenticated")({
   component: () => (
     <>
       <Outlet />
+      <CityNudge />
       <NotificationNudge />
     </>
   ),

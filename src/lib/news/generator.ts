@@ -485,7 +485,7 @@ async function buildRawStories(feedMap: Map<SectionId, RssItem[]>): Promise<{ st
   }
 
   // Process topical feeds first
-  for (const feedId of ["india", "world", "business", "technology", "sports", "science", "health"] as SectionId[]) {
+  for (const feedId of ["local", "india", "world", "business", "technology", "sports", "science", "health"] as SectionId[]) {
     for (const item of feedMap.get(feedId) ?? []) {
       const id  = storyId(item.link);
       const key = normalize(item.title).slice(0, 60);
@@ -805,7 +805,7 @@ ${list}`;
  */
 const SECTION_BIAS: Record<string, number> = {
   headlines: 2.4, india: 1.3, world: 1.4, business: 1.4,
-  technology: 1.0, sports: 1.0, science: 0.5, health: 0.6,
+  technology: 1.0, sports: 1.0, science: 0.5, health: 0.6, local: 0.6,
 };
 
 /**
@@ -926,7 +926,7 @@ Return a JSON object with a single key "events":
 RULES:
 - Return exactly ${maxStories} events (or fewer if total distinct events is less)
 - Every index used in sourceIndices must be in range 0–${stories.length - 1}
-- section: assign based on content — "headlines" for major cross-cutting stories, else the best-fitting topic: india, world, business, technology, sports, science, or health
+- section: assign based on content — "headlines" for major cross-cutting stories, "local" ONLY for stories specifically about Mumbai, else the best-fitting topic: india, world, business, technology, sports, science, or health
 - imageIndex: which sourceIndex is most likely to have a good image (Reuters, AP, PTI, AFP > others)
 - Keep clusters tight — only group articles covering the SAME specific event
 
@@ -984,7 +984,7 @@ ${articleList}`;
     const title    = (g.title ?? "").trim();
     if (!title) continue;
 
-    const section  = (["headlines", "india", "world", "business", "technology", "sports", "science", "health"].includes(g.section)
+    const section  = (["headlines", "local", "india", "world", "business", "technology", "sports", "science", "health"].includes(g.section)
       ? g.section : stories[indices[0]].section) as SectionId;
 
     const imageIdx      = (g.imageIndex != null && indices.includes(g.imageIndex)) ? g.imageIndex : indices[0];
@@ -1432,9 +1432,10 @@ function mapOldSection(cat: string): SectionId {
   const m: Record<string, SectionId> = {
     headlines: "headlines", india: "india", world: "world", business: "business",
     technology: "technology", sports: "sports", science: "science", health: "health",
-    // old taxonomy → nearest new section (local section removed 2026-07-02 — was
-    // hardcoded to one default city with no real per-user wiring)
-    politics: "india", techlife: "technology", entertainment: "india", local: "india",
+    // old taxonomy → nearest new section ("local" reintroduced 2026-07-06 as a
+    // real Mumbai-only section — no longer aliased away to "india")
+    local: "local",
+    politics: "india", techlife: "technology", entertainment: "india",
     // legacy v2/v3
     "india-national": "india", "india-business": "business", "india-sports": "india",
     "india-tech": "india", "global-world": "world", "global-business": "business",

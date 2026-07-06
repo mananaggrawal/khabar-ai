@@ -1,15 +1,34 @@
 /**
  * Google News RSS feed configuration.
- * headlines | india | world | business | technology | sports | science | health
- * (Local/city-scoped feed removed 2026-07-02 — was hardcoded to a single
- * default city with no real per-user wiring; see project notes.)
+ * headlines | local | india | world | business | technology | sports | science | health
+ * (Local/city-scoped feed removed 2026-07-02 for being hardcoded to a single
+ * default city with no real per-user wiring; reintroduced 2026-07-06 — Mumbai
+ * only for now, city selection lives in Settings, see CITIES below. Generation
+ * stays single-tenant/global: everyone gets the same Mumbai "local" content
+ * until more cities are actually generated.)
  */
 
 // ── Section IDs — straight from Google News feed names ───────────────────────
 
 export type SectionId =
-  | "headlines" | "india" | "world" | "business"
+  | "headlines" | "local" | "india" | "world" | "business"
   | "technology" | "sports" | "science" | "health";
+
+// ── City selection (2026-07-06) ───────────────────────────────────────────────
+// Only Mumbai has a real generated feed right now. The rest are listed so the
+// picker communicates what's coming rather than looking unfinished — they're
+// not selectable until a real feed + generation entry exists for them.
+export type CityId = "mumbai" | "delhi" | "bangalore" | "chennai" | "kolkata";
+
+export type CityConfig = { id: CityId; label: string; available: boolean };
+
+export const CITIES: CityConfig[] = [
+  { id: "mumbai",    label: "Mumbai",    available: true },
+  { id: "delhi",     label: "Delhi",     available: false },
+  { id: "bangalore", label: "Bangalore", available: false },
+  { id: "chennai",   label: "Chennai",   available: false },
+  { id: "kolkata",   label: "Kolkata",   available: false },
+];
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -59,6 +78,19 @@ export const FEEDS: FeedConfig[] = [
     labelMr: "ठळक बातम्या",
     emoji:   "🔥",
     buildUrl: () => `${GN_BASE}?${LOCALE}`,
+  },
+  {
+    // Mumbai-only for now (2026-07-06) — hardcoded label until more cities are
+    // actually generated (see CITIES above). No Google News topic ID exists for
+    // a city, so this uses a search query like the other feeds' fallbackUrl does.
+    feedId:  "local",
+    label:   "Mumbai",
+    labelHi: "मुंबई",
+    labelTa: "மும்பை",
+    labelMr: "मुंबई",
+    emoji:   "🏙️",
+    buildUrl: () => `${GN_BASE}/search?q=Mumbai&${LOCALE}`,
+    fallbackUrl: `${GN_BASE}/search?q=Mumbai+news&${LOCALE}`,
   },
   {
     feedId:  "india",
@@ -134,10 +166,11 @@ export const FEEDS: FeedConfig[] = [
 
 // ── Display section configs ───────────────────────────────────────────────────
 
-export const SECTION_ORDER: SectionId[] = ["headlines", "india", "world", "business", "technology", "sports", "science", "health"];
+export const SECTION_ORDER: SectionId[] = ["headlines", "local", "india", "world", "business", "technology", "sports", "science", "health"];
 
 const SECTION_CONFIGS: SectionConfig[] = [
   { id: "headlines",  label: "Headlines",   labelHi: "मुख्य खबरें", labelTa: "தலைப்புச் செய்திகள்", labelMr: "ठळक बातम्या", emoji: "🔥" },
+  { id: "local",      label: "Mumbai",      labelHi: "मुंबई",        labelTa: "மும்பை",               labelMr: "मुंबई",        emoji: "🏙️" },
   { id: "india",      label: "India",       labelHi: "भारत",         labelTa: "இந்தியா",              labelMr: "भारत",         emoji: "🇮🇳" },
   { id: "world",      label: "World",       labelHi: "विश्व",         labelTa: "உலகம்",                labelMr: "जग",           emoji: "🌍" },
   { id: "business",   label: "Business",    labelHi: "व्यापार",       labelTa: "வணிகம்",               labelMr: "व्यवसाय",      emoji: "💼" },

@@ -12,6 +12,7 @@
 import { useEffect, useState } from "react";
 import { Bell } from "lucide-react";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
+import { hasCityBeenAsked, CITY_RESOLVED_EVENT } from "@/hooks/useCityPreference";
 import {
   Dialog,
   DialogContent,
@@ -28,10 +29,23 @@ export function NotificationNudge() {
   useEffect(() => {
     if (!push.supported) return;
     if (push.permission !== "default" || push.subscribed) return;
+
     // Small delay so this doesn't fight with the initial page load / audio
-    // autoplay prompts — feels like a nudge, not a wall.
-    const t = setTimeout(() => setOpen(true), 1500);
-    return () => clearTimeout(t);
+    // autoplay prompts — feels like a nudge, not a wall. If the one-time
+    // CityNudge dialog hasn't been answered yet this session, wait for it to
+    // resolve first so the two first-open dialogs don't stack (2026-07-06).
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const startTimer = () => { timer = setTimeout(() => setOpen(true), 1500); };
+
+    if (hasCityBeenAsked()) {
+      startTimer();
+      return () => { if (timer) clearTimeout(timer); };
+    }
+    window.addEventListener(CITY_RESOLVED_EVENT, startTimer, { once: true });
+    return () => {
+      window.removeEventListener(CITY_RESOLVED_EVENT, startTimer);
+      if (timer) clearTimeout(timer);
+    };
   }, [push.supported, push.permission, push.subscribed]);
 
   function dismiss() {
