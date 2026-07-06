@@ -4,6 +4,7 @@ import { MessageCircle, Bell, BellOff } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import { BottomNav } from "@/components/BottomNav";
+import { InstallNudge } from "@/components/InstallNudge";
 import { usePlayer } from "@/context/player";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
 
@@ -126,6 +127,9 @@ function SettingsPage() {
             })}
           </div>
         </section>
+
+        {/* Install app — renders nothing once the PWA is installed */}
+        <InstallNudge variant="row" />
 
         {/* Notifications */}
         <section>

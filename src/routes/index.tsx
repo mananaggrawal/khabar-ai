@@ -6,6 +6,7 @@ import { VoiceOrb } from "@/components/VoiceOrb";
 import { StoryCard } from "@/components/StoryCard";
 import { StoryDetailSheet }  from "@/components/StoryDetailSheet";
 import { BottomNav }         from "@/components/BottomNav";
+import { InstallNudge }      from "@/components/InstallNudge";
 import { getStoryTitle, getAudioUrl } from "@/hooks/useMonologue";
 import { usePlayer }         from "@/context/player";
 import { initAnalytics, identify, track } from "@/lib/analytics/track";
@@ -246,6 +247,8 @@ function HomePage() {
           </button>
         </div>
       </header>
+
+      <InstallNudge variant="banner" />
 
       {/* Loading state */}
       {isLoading && (

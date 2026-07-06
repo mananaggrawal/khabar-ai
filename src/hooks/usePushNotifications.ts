@@ -10,6 +10,7 @@
  *    no reliable way to detect "installed" ahead of actually trying.
  */
 import { useCallback, useEffect, useState } from "react";
+import { isIOS, isStandalone } from "@/lib/platform";
 
 const LOCAL_MODE = import.meta.env.VITE_LOCAL_MODE === "true";
 const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY || "";
@@ -29,16 +30,6 @@ async function authHeader(): Promise<Record<string, string>> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
   return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
-function isIOS(): boolean {
-  if (typeof navigator === "undefined") return false;
-  return /iPad|iPhone|iPod/.test(navigator.userAgent) && !("MSStream" in window);
-}
-
-function isStandalone(): boolean {
-  if (typeof window === "undefined") return false;
-  return window.matchMedia?.("(display-mode: standalone)").matches || (navigator as any).standalone === true;
 }
 
 // iOS Safari silently never completes a push subscription unless the page is

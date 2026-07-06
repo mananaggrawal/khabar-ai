@@ -135,6 +135,20 @@ function RootShell({ children }: { children: ReactNode }) {
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
 
+  // Register the service worker eagerly at app boot (2026-07-06) — previously
+  // this only happened lazily inside usePushNotifications when that hook
+  // mounted/ran, so a user who never touched notification settings would
+  // never get a controlling service worker. Chrome's PWA-installability check
+  // (which gates whether beforeinstallprompt ever fires, powering the new
+  // install nudge) generally wants an active service worker; registering here
+  // makes that reliable regardless of whether push notifications are ever
+  // used. Safe to also call from usePushNotifications — register() with the
+  // same URL is idempotent and just returns the existing registration.
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       {/* Player lives above the routes so audio + mini-player persist across tabs. */}
