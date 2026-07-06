@@ -29,9 +29,32 @@ function resolveSection(s: string): SectionId {
   return "india";
 }
 
+// Shown while beforeLoad's async supabase.auth.getUser() check is in flight
+// (2026-07-06) — most visible right after the Google OAuth redirect lands
+// back on "/", where that check also has to wait for supabase-js to finish
+// parsing the #access_token=... hash before it can resolve. Without this,
+// TanStack Router renders nothing in the outlet for however long that takes,
+// which is exactly the "blank screen after logging in" users reported.
+function AuthCheckingScreen() {
+  return (
+    <div className="fixed inset-0 z-10 flex flex-col items-center justify-center gap-5 bg-background">
+      <VoiceOrb state="idle" size={160} />
+      <div className="flex flex-col items-center gap-1">
+        <span className="font-serif text-2xl tracking-tight">
+          Khabar <em className="italic text-primary">AI</em>
+        </span>
+        <p className="text-xs text-muted-foreground animate-pulse">Signing you in…</p>
+      </div>
+    </div>
+  );
+}
+
 export const Route = createFileRoute("/")({
   head: () => ({ meta: [{ title: "Khabar AI" }] }),
   ssr: false,
+  pendingComponent: AuthCheckingScreen,
+  pendingMs: 200,
+  pendingMinMs: 300,
   beforeLoad: async () => {
     // Capture a referral code from the link BEFORE any auth redirect can drop the
     // query string. Stored in localStorage so it survives the OAuth round-trip.

@@ -149,6 +149,30 @@ function RootComponent() {
     navigator.serviceWorker.register("/sw.js").catch(() => {});
   }, []);
 
+  // Defensive OAuth-hash cleanup (2026-07-06). Google's redirect back through
+  // Supabase lands as "/#access_token=...&..."; supabase-js is supposed to
+  // parse that itself and strip it via history.replaceState, but users kept
+  // seeing the URL linger on a bare "/#" after signing in. Belt-and-suspenders:
+  // wait long enough for supabase-js's own hash parsing to finish (it happens
+  // on client init, well under a second), then force-clear anything left over
+  // so the address bar doesn't keep showing a stray hash.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!window.location.hash || window.location.hash === "#") {
+      // Still worth clearing a truly empty "#" — some browsers keep it visible.
+      if (window.location.hash === "#") {
+        window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      }
+      return;
+    }
+    const t = setTimeout(() => {
+      if (window.location.hash) {
+        window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      }
+    }, 1500);
+    return () => clearTimeout(t);
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       {/* Player lives above the routes so audio + mini-player persist across tabs. */}
