@@ -104,6 +104,16 @@ async function isFirstEverLogin(): Promise<boolean> {
  * "never asked" by the plain localStorage flag alone, so they were all
  * getting prompted like new signups). Also still respects the flag once
  * answered, so a real new user doesn't see it again after their first open.
+ *
+ * BUG FIX (2026-07-06): for an EXISTING user, isFirstEverLogin() correctly
+ * resolves false, so the dialog never opens — but markCityAsked() (which sets
+ * the "resolved" flag AND fires CITY_RESOLVED_EVENT) was only ever called
+ * from inside the dialog's own choose()/skip() handlers. That left existing
+ * users permanently stuck in "not yet resolved" state, and NotificationNudge
+ * waits on exactly that resolution before it will show itself — so real
+ * users stopped seeing the notification nudge at all, silently, the moment
+ * this feature shipped. Fix: when we determine there's nothing to ask this
+ * user, resolve it immediately ourselves instead of leaving it pending.
  */
 export function useShouldPromptCity() {
   const [shouldPrompt, setShouldPrompt] = useState(false);
@@ -112,7 +122,9 @@ export function useShouldPromptCity() {
     let cancelled = false;
     if (hasCityBeenAsked()) return;
     isFirstEverLogin().then((isNew) => {
-      if (!cancelled && isNew) setShouldPrompt(true);
+      if (cancelled) return;
+      if (isNew) setShouldPrompt(true);
+      else markCityAsked(); // nothing to ask this user — unblock NotificationNudge
     });
     return () => { cancelled = true; };
   }, []);
