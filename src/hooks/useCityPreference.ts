@@ -23,12 +23,17 @@ const CITY_ASKED_KEY = "khabar-city-asked";
 // turn instead of stacking dialogs on top of each other.
 export const CITY_RESOLVED_EVENT = "khabar-city-resolved";
 
-export function readCity(): CityId | null {
+// Defaults to "mumbai" rather than null (2026-07-06) — same pattern as
+// language's readLanguage() defaulting to "en". Mumbai is the one real city
+// today, so it should show pre-selected everywhere (Settings, the "local"
+// section filter) without requiring the user to have gone through CityNudge
+// first, exactly like language never required an explicit first choice.
+export function readCity(): CityId {
   try {
     const v = localStorage.getItem(CITY_KEY);
-    return CITIES.some((c) => c.id === v) ? (v as CityId) : null;
+    return CITIES.some((c) => c.id === v) ? (v as CityId) : "mumbai";
   } catch {
-    return null;
+    return "mumbai";
   }
 }
 
@@ -46,7 +51,7 @@ function markCityAsked(): void {
 }
 
 export function useCityPreference() {
-  const [city, setCityState] = useState<CityId | null>(readCity);
+  const [city, setCityState] = useState<CityId>(readCity);
 
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
