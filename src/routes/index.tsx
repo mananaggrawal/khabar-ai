@@ -69,8 +69,25 @@ export const Route = createFileRoute("/")({
     }
     if (LOCAL_MODE) return;
     const { supabase } = await import("@/integrations/supabase/client");
-    const { data, error } = await supabase.auth.getUser();
-    if (error || !data.user) throw redirect({ to: "/auth" });
+    // getSession() reads the persisted session from local storage (fast, no
+    // network round trip needed unless the token is actually expired) —
+    // switched from getUser() (2026-07-06), which always calls out to the
+    // Supabase Auth server to revalidate. That network dependency is exactly
+    // the kind of thing that can hang on a freshly-installed PWA's very first
+    // cold start (new storage/network context, install often coincides with
+    // a network transition), leaving beforeLoad stuck and the screen blank
+    // until force-quit — reported repeatedly as "dark screen after install."
+    // Belt-and-suspenders: also hard-cap the check at 8s so a genuine hang
+    // can never block the app forever — falls through to /auth instead,
+    // which is a much better failure mode than an indefinite blank screen.
+    const timeout = new Promise<{ hasSession: false }>((resolve) =>
+      setTimeout(() => resolve({ hasSession: false }), 8000),
+    );
+    const check = supabase.auth.getSession().then(({ data, error }) => ({
+      hasSession: !error && !!data.session,
+    }));
+    const { hasSession } = await Promise.race([check, timeout]);
+    if (!hasSession) throw redirect({ to: "/auth" });
   },
   component: HomePage,
 });
