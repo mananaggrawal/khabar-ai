@@ -19,6 +19,12 @@
  * iOS can't receive push at all from a browser tab — only once installed —
  * so this stays hidden on iOS until isStandalone() is true, instead of
  * showing an ask that's guaranteed to fail.
+ *
+ * The whole card is the tap target (2026-07-06, per feedback) — not a
+ * separate "Turn on" button inside it — same as InstallNudge's Android row,
+ * which is itself a single <button>. The dismiss X sits outside that button
+ * as a sibling so it isn't nested inside it (invalid HTML / broken semantics)
+ * and stopPropagation isn't needed for its own click to work correctly.
  */
 import { useState } from "react";
 import { Bell, X } from "lucide-react";
@@ -35,30 +41,33 @@ export function NotificationNudge() {
   if (dismissed) return null;
 
   return (
-    <div className="mx-4 mt-3 mb-3 flex items-start gap-3 rounded-2xl border border-primary/20 bg-primary/[0.04] px-4 py-3">
-      <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10">
-        <Bell className="size-4 text-primary" />
-      </div>
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium text-foreground">Never miss your briefing</p>
-        <p className="text-xs text-muted-foreground mt-0.5">
-          Get a nudge the moment it's ready — no need to keep checking back.
-        </p>
-        {push.error && (
-          <p className="mt-1 text-xs text-destructive/80">{push.error}</p>
-        )}
-        <button
-          onClick={() => void push.subscribe()}
-          disabled={push.loading}
-          className="mt-2 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-60"
-        >
-          {push.loading ? "Working…" : "Turn on"}
-        </button>
-      </div>
+    <div className="mx-4 mt-3 mb-3 flex items-start gap-2 rounded-2xl border border-primary/20 bg-primary/[0.04] pr-2">
+      <button
+        onClick={() => void push.subscribe()}
+        disabled={push.loading}
+        className="flex flex-1 min-w-0 items-start gap-3 rounded-2xl px-4 py-3 text-left transition-colors hover:bg-primary/[0.06] disabled:opacity-60"
+      >
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10">
+          <Bell className="size-4 text-primary" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-foreground">
+            {push.loading ? "Turning on…" : "Never miss your briefing"}
+          </p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {push.loading
+              ? "Just a moment…"
+              : "Tap to get a nudge the moment it's ready — no need to keep checking back."}
+          </p>
+          {push.error && (
+            <p className="mt-1 text-xs text-destructive/80">{push.error}</p>
+          )}
+        </div>
+      </button>
       <button
         onClick={() => setDismissed(true)}
         aria-label="Dismiss"
-        className="flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground/60 hover:text-foreground transition-colors"
+        className="mt-3 flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground/60 hover:text-foreground transition-colors"
       >
         <X className="size-3.5" />
       </button>
