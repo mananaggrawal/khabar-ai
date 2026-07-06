@@ -21,6 +21,19 @@ function json(data: unknown, status = 200): Response {
 let generating = false;
 let runningJob: string | null = null;
 
+/** Exposed so server.mjs can log a clear message if the process is being
+ * killed (e.g. a Render deploy) while a generation is mid-run (2026-07-06) —
+ * otherwise a run just silently stops with no error and no "Done" line,
+ * which looked like a mystery hang/crash rather than what it actually was:
+ * the whole process got replaced by a new deploy before the ~10min job
+ * finished. There's no way to gracefully finish a job that long inside a
+ * platform's shutdown grace period, so this can't be "fixed" outright — but
+ * making it loud in the log means the next stall is instantly diagnosable
+ * instead of requiring a support back-and-forth to reconstruct. */
+export function currentGenerationStatus(): { generating: boolean; runningJob: string | null } {
+  return { generating, runningJob };
+}
+
 function authCheck(request: Request): Response | null {
   const adminKey = process.env.ADMIN_KEY;
   if (!adminKey) return json({ error: "ADMIN_KEY not configured" }, 500);

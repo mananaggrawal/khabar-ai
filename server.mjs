@@ -41,7 +41,28 @@ if (!existsSync(SERVER_BUNDLE)) {
 }
 
 const { default: ssrHandler } = await import(SERVER_BUNDLE);
-const { handleGenerate, handleAsk, handleStatus, handleDownload, handleCron, handlePatchMissing, handlePatchTTS, handlePatchScripts, handleStop, handleTrack, handleAnalytics, handleLogs, handlePushSubscribe, handlePushUnsubscribe, handlePushSend, handlePushLog } = await import(API_BUNDLE);
+const { handleGenerate, handleAsk, handleStatus, handleDownload, handleCron, handlePatchMissing, handlePatchTTS, handlePatchScripts, handleStop, handleTrack, handleAnalytics, handleLogs, handlePushSubscribe, handlePushUnsubscribe, handlePushSend, handlePushLog, currentGenerationStatus } = await import(API_BUNDLE);
+
+// Make deploy-triggered restarts loud when they interrupt a run (2026-07-06).
+// A generation takes ~10 minutes with no HTTP connection attached to signal
+// "wait, I'm not done" — a platform deploy just replaces the process outright,
+// which previously looked like a silent, unexplained mid-run stall. There's
+// no way to actually finish a 10-minute job inside a shutdown grace period,
+// so this can't prevent the interruption — it just makes the cause obvious
+// in the logs instead of requiring guesswork next time.
+for (const sig of ["SIGTERM", "SIGINT"]) {
+  process.on(sig, () => {
+    try {
+      const { generating, runningJob } = currentGenerationStatus();
+      if (generating) {
+        console.error(`[khabar] ${sig} received while a generation was running (job: ${runningJob ?? "unknown"}) — it will be interrupted mid-run, likely by a new deploy replacing this process.`);
+      } else {
+        console.log(`[khabar] ${sig} received, shutting down (no generation in progress).`);
+      }
+    } catch {}
+    process.exit(0);
+  });
+}
 
 // Convert Node.js IncomingMessage to a Web Fetch Request
 async function toRequest(req) {
