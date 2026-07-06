@@ -7,6 +7,7 @@ import { StoryCard } from "@/components/StoryCard";
 import { StoryDetailSheet }  from "@/components/StoryDetailSheet";
 import { BottomNav }         from "@/components/BottomNav";
 import { InstallNudge }      from "@/components/InstallNudge";
+import { NotificationNudge } from "@/components/NotificationNudge";
 import { getStoryTitle, getAudioUrl } from "@/hooks/useMonologue";
 import { usePlayer }         from "@/context/player";
 import { initAnalytics, identify, track } from "@/lib/analytics/track";
@@ -289,6 +290,7 @@ function HomePage() {
       </header>
 
       <InstallNudge variant="banner" />
+      <NotificationNudge />
 
       {/* Loading state */}
       {isLoading && (

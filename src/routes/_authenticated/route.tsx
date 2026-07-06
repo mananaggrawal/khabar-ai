@@ -1,5 +1,4 @@
 import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
-import { NotificationNudge } from "@/components/NotificationNudge";
 import { CityNudge } from "@/components/CityNudge";
 
 const LOCAL_MODE = import.meta.env.VITE_LOCAL_MODE === "true";
@@ -17,7 +16,9 @@ export const Route = createFileRoute("/_authenticated")({
     <>
       <Outlet />
       <CityNudge />
-      <NotificationNudge />
+      {/* NotificationNudge moved to Home (2026-07-06) — it's now an inline
+          banner like InstallNudge, not a global popup, so it belongs next to
+          that banner rather than mounted app-wide. */}
     </>
   ),
 });
