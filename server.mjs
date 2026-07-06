@@ -406,7 +406,22 @@ self.addEventListener('fetch', e => {
   try {
     const request = await toRequest(req);
     const response = await ssrHandler.fetch(request);
-    await sendResponse(response, res);
+    // Force the HTML document itself to always revalidate (2026-07-06).
+    // Hashed assets under /assets/ are safely immutable-cached above, but the
+    // document that REFERENCES those hashed filenames must never be served
+    // stale — otherwise a hard navigation (e.g. the OAuth redirect landing
+    // back on "/") can fetch an old cached page pointing at JS/CSS files a
+    // newer deploy already deleted, which loads nothing and shows a blank
+    // screen. Users reported exactly this ("fixed by killing and reopening
+    // the app" — a fresh network fetch finally got a current document).
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("text/html")) {
+      const headers = new Headers(response.headers);
+      headers.set("Cache-Control", "no-cache, no-store, must-revalidate");
+      await sendResponse(new Response(response.body, { status: response.status, headers }), res);
+    } else {
+      await sendResponse(response, res);
+    }
   } catch (err) {
     console.error("[khabar] SSR error:", err);
     res.writeHead(500);

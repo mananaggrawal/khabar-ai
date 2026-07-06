@@ -72,8 +72,14 @@ export function usePushNotifications() {
     })();
   }, [supported]);
 
-  const subscribe = useCallback(async () => {
-    if (!supported) { setError("Notifications aren't supported in this browser."); return; }
+  // Returns whether the subscription actually succeeded (2026-07-06) — callers
+  // used to infer success from `subscribed`/`error` state read right after
+  // awaiting this, but those are stale closure values from the render that
+  // called subscribe(), not the updated state (React state updates aren't
+  // visible until the next render). That silently let NotificationNudge close
+  // itself as if it had succeeded even when a later step here failed.
+  const subscribe = useCallback(async (): Promise<boolean> => {
+    if (!supported) { setError("Notifications aren't supported in this browser."); return false; }
     setLoading(true);
     setError(null);
     try {
@@ -81,7 +87,7 @@ export function usePushNotifications() {
       setPermission(perm);
       if (perm !== "granted") {
         setError(perm === "denied" ? "Notifications blocked — enable them in your browser settings." : "Permission not granted.");
-        return;
+        return false;
       }
       const reg = await withTimeout(
         navigator.serviceWorker.ready,
@@ -110,8 +116,10 @@ export function usePushNotifications() {
       );
       if (!res.ok) throw new Error("Failed to save subscription");
       setSubscribed(true);
+      return true;
     } catch (e: any) {
       setError(e?.message ?? "Couldn't enable notifications.");
+      return false;
     } finally {
       setLoading(false);
     }

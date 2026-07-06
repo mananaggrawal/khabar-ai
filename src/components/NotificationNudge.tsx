@@ -80,9 +80,16 @@ export function NotificationNudge() {
     setOpen(false);
   }
 
+  // BUG FIX (2026-07-06): this used to call setOpen(false) BEFORE awaiting
+  // subscribe() — closing the dialog immediately regardless of whether the
+  // subscription actually succeeded. A granted OS permission prompt is only
+  // step one; the subsequent service-worker/VAPID/server-save steps can still
+  // fail (silently, since the dialog was already gone and push.error had
+  // nowhere to render). Now it stays open through the attempt and only
+  // closes on success, showing push.error inline otherwise.
   async function enable() {
-    setOpen(false);
-    await push.subscribe();
+    const ok = await push.subscribe();
+    if (ok) setOpen(false);
   }
 
   return (
@@ -99,6 +106,9 @@ export function NotificationNudge() {
             Get a nudge the moment your morning and evening briefings are ready — no need to keep checking back.
           </DialogDescription>
         </DialogHeader>
+        {push.error && (
+          <p className="text-center text-xs text-destructive/80">{push.error}</p>
+        )}
         <DialogFooter className="mt-2 sm:flex-col sm:space-x-0 sm:gap-2">
           <button
             onClick={enable}

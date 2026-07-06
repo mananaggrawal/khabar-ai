@@ -12,6 +12,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { CITIES, type CityId } from "@/lib/news/sources";
 
+const LOCAL_MODE = import.meta.env.VITE_LOCAL_MODE === "true";
+
 const CITY_KEY = "khabar-city";
 // Separate "have we ever asked" flag from the value itself, so skipping the
 // one-time prompt doesn't look indistinguishable from "no preference yet."
@@ -66,12 +68,48 @@ export function useCityPreference() {
   return { city, selectCity };
 }
 
-/** Drives the one-time CityNudge dialog — true until the user answers once. */
+// A brand-new account's very first sign-in has `created_at` and
+// `last_sign_in_at` within a second or two of each other (both set at
+// account creation). On every later login `last_sign_in_at` moves forward
+// while `created_at` stays fixed, so the gap grows. This is what "new login,
+// not existing user" actually means for an app with no separate onboarding
+// step — checking wall-clock "was this just now" would also catch an
+// EXISTING user's normal re-login a minute after opening the app.
+const FIRST_LOGIN_WINDOW_MS = 2 * 60_000;
+
+async function isFirstEverLogin(): Promise<boolean> {
+  if (LOCAL_MODE) return false; // never nag in local dev
+  try {
+    const { supabase } = await import("@/integrations/supabase/client");
+    const { data, error } = await supabase.auth.getUser();
+    const user = data?.user;
+    if (error || !user?.created_at || !user?.last_sign_in_at) return false;
+    const created = new Date(user.created_at).getTime();
+    const lastSignIn = new Date(user.last_sign_in_at).getTime();
+    return Math.abs(lastSignIn - created) < FIRST_LOGIN_WINDOW_MS;
+  } catch {
+    return false; // fail closed — don't nag existing users on an auth hiccup
+  }
+}
+
+/**
+ * Drives the one-time CityNudge dialog. Only true for a genuinely new
+ * account's first-ever login (2026-07-06 fix — this feature shipping after
+ * existing users already had accounts meant EVERY existing user looked
+ * "never asked" by the plain localStorage flag alone, so they were all
+ * getting prompted like new signups). Also still respects the flag once
+ * answered, so a real new user doesn't see it again after their first open.
+ */
 export function useShouldPromptCity() {
   const [shouldPrompt, setShouldPrompt] = useState(false);
 
   useEffect(() => {
-    setShouldPrompt(!hasCityBeenAsked());
+    let cancelled = false;
+    if (hasCityBeenAsked()) return;
+    isFirstEverLogin().then((isNew) => {
+      if (!cancelled && isNew) setShouldPrompt(true);
+    });
+    return () => { cancelled = true; };
   }, []);
 
   const dismiss = useCallback(() => {
