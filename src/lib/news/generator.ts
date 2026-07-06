@@ -15,7 +15,7 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fetchRss, type RssItem } from "./rss";
-import { FEEDS, FEED_MAP, SECTION_ORDER, matchPublisher, type SectionId } from "./sources";
+import { FEEDS, FEED_MAP, SECTION_ORDER, CITY_FEEDS, matchPublisher, type SectionId, type CityId } from "./sources";
 import { edgeTTS } from "@/lib/tts/edge";
 import { elevenLabsTTS, isQuotaExhausted } from "@/lib/tts/elevenlabs";
 import { googleTTS, isDailyQuotaExhausted } from "@/lib/tts/google";
@@ -56,6 +56,11 @@ export type Story = {
   link: string;
   publishedAt: string;
   section: SectionId;
+  // Which city this came from — only set for "local"-section stories
+  // (2026-07-06). Lets several cities' local news share the one "local"
+  // section/bucket in a single shared briefing; readers are filtered down to
+  // their own city's stories client-side (see context/player.tsx).
+  city?: CityId;
   imageUrl?: string;
   description?: string;
   sources?: StorySource[];
@@ -326,8 +331,12 @@ function aiJson(prompt: string, model: string, maxTokens = 8192): Promise<any> {
 
 // ─── Step 1: Fetch all feeds ──────────────────────────────────────────────────
 
-async function fetchAllFeeds(): Promise<Map<SectionId, RssItem[]>> {
-  const results = await Promise.allSettled(
+// `cities` controls which per-city "local" feeds get fetched this run
+// (2026-07-06) — the admin panel can request several at once. Defaults to
+// just Mumbai (the one available-to-readers city today) when omitted, so
+// existing callers (cron, generateMissingSections) keep their old behavior.
+async function fetchAllFeeds(cities: CityId[] = ["mumbai"]): Promise<Map<SectionId, RssItem[]>> {
+  const topicalResults = await Promise.allSettled(
     FEEDS.map(async (feed) => {
       const url = feed.buildUrl();
       let items = await fetchRss(url, feed.label, feed.feedId);
@@ -340,11 +349,33 @@ async function fetchAllFeeds(): Promise<Map<SectionId, RssItem[]>> {
   );
 
   const map = new Map<SectionId, RssItem[]>();
-  for (const r of results) {
+  for (const r of topicalResults) {
     if (r.status === "fulfilled" && r.value.items.length > 0) {
       map.set(r.value.feedId, r.value.items);
     }
   }
+
+  // Fetch each requested city's feed separately and tag every item with its
+  // city, then merge them all into the one "local" bucket — one AI-facing
+  // section, several cities' worth of stories distinguished by `.city`.
+  const uniqueCities = [...new Set(cities)].filter((c) => CITY_FEEDS[c]);
+  if (uniqueCities.length > 0) {
+    const cityResults = await Promise.allSettled(
+      uniqueCities.map(async (city) => {
+        const feed = CITY_FEEDS[city];
+        let items = await fetchRss(feed.buildUrl(), `local:${city}`, "local");
+        if (items.length === 0 && feed.fallbackUrl) {
+          console.warn(`[feeds] local:${city}: primary returned 0 — trying fallback`);
+          items = await fetchRss(feed.fallbackUrl, `local:${city}`, "local");
+        }
+        return items.map((item) => ({ ...item, city }));
+      }),
+    );
+    const localItems: RssItem[] = [];
+    for (const r of cityResults) if (r.status === "fulfilled") localItems.push(...r.value);
+    if (localItems.length > 0) map.set("local", localItems);
+  }
+
   return map;
 }
 
@@ -474,7 +505,8 @@ async function buildRawStories(feedMap: Map<SectionId, RssItem[]>): Promise<{ st
     stories.push({
       id, title: item.title, source: item.source, link: item.link,
       publishedAt: item.pubDate ? new Date(item.pubDate).toISOString() : new Date().toISOString(),
-      section, imageUrl: item.imageUrl, description: item.description,
+      section, city: item.city as CityId | undefined,
+      imageUrl: item.imageUrl, description: item.description,
       scriptEn: "", scriptHi: "",
     });
     seenIds.add(id);
@@ -1491,6 +1523,7 @@ export async function generateDailyBriefing(
   logger: Logger = () => {},
   ttsProvider: TtsProvider = "edge",
   languages: string[] = ["en"],
+  cities: CityId[] = ["mumbai"],
 ): Promise<DailyBriefing & { runSummary?: RunSummary }> {
   const runStart = Date.now();
   const date     = new Date().toISOString().slice(0, 10);
@@ -1506,8 +1539,8 @@ export async function generateDailyBriefing(
 
   // Step 1: Fetch
   const t0 = Date.now();
-  log(`Fetching ${FEEDS.length} Google News feeds…`);
-  const feedMap  = await fetchAllFeeds();
+  log(`Fetching ${FEEDS.length} Google News feeds + local (${cities.join(", ")})…`);
+  const feedMap  = await fetchAllFeeds(cities);
   const rawTotal = [...feedMap.values()].reduce((n, v) => n + v.length, 0);
   log(`Fetched ${rawTotal} raw items from ${feedMap.size} feeds (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
 

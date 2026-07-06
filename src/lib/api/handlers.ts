@@ -4,6 +4,7 @@
  * needing routeTree.gen.ts to be updated.
  */
 import { generateDailyBriefing, generateMissingSections, generateMissingTTS, patchScripts, getLatestBriefing as getTodayBriefing, type TtsProvider } from "@/lib/news/generator";
+import { CITIES, type CityId } from "@/lib/news/sources";
 import { elevenLabsTTS, isQuotaExhausted, resetQuota } from "@/lib/tts/elevenlabs";
 import { resetDailyQuota } from "@/lib/tts/google";
 import { loadBriefingFromStorage, saveLogToStorage, loadLogFromStorage } from "@/lib/supabase-storage";
@@ -242,6 +243,16 @@ export async function handleGenerate(request: Request): Promise<Response> {
   const scriptProvider = reqUrl.searchParams.get("scriptProvider");
   const scriptModel    = reqUrl.searchParams.get("scriptModel");
   const ttsModel       = reqUrl.searchParams.get("ttsModel");
+  // Which cities' local feeds to include this run (2026-07-06) — validated
+  // against the configured CITIES list (not gated by `available`, so a city
+  // can be test-generated before it's flipped on for readers). Defaults to
+  // just Mumbai to match prior behavior when the admin panel sends nothing.
+  const knownCityIds = new Set(CITIES.map((c) => c.id));
+  const citiesParam  = reqUrl.searchParams.get("cities");
+  const parsedCities = citiesParam
+    ? citiesParam.split(",").map((c) => c.trim()).filter((c): c is CityId => knownCityIds.has(c as CityId))
+    : [];
+  const cities: CityId[] = parsedCities.length > 0 ? parsedCities : ["mumbai"];
 
   // Apply per-request model overrides via env vars (safe: generation is gated to one job at a time)
   if (scriptProvider) process.env.SCRIPT_PROVIDER   = scriptProvider;
@@ -258,16 +269,17 @@ export async function handleGenerate(request: Request): Promise<Response> {
   (async () => {
     const logWriter = await createLiveLogWriter(dateKey, `manual:${provider}`);
     try {
-      console.log(`[admin] generation triggered (provider: ${provider}, langs: ${languages.join(",")})`);
+      console.log(`[admin] generation triggered (provider: ${provider}, langs: ${languages.join(",")}, cities: ${cities.join(",")})`);
       const briefing = await generateDailyBriefing((msg) => {
         logWriter.log(msg);
         send({ type: "log", msg });
-      }, provider, languages);
+      }, provider, languages, cities);
       const rs = briefing.runSummary;
       void logServerEvent("generation_run", {
         date:        briefing.date,
         provider,
         languages:   languages.join(","),
+        cities:      cities.join(","),
         stories:     briefing.stories.length,
         elapsedSec:  rs?.elapsedSec ?? 0,
         scriptSec:   rs?.scriptSec ?? 0,

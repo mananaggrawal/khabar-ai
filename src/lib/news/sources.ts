@@ -3,9 +3,17 @@
  * headlines | local | india | world | business | technology | sports | science | health
  * (Local/city-scoped feed removed 2026-07-02 for being hardcoded to a single
  * default city with no real per-user wiring; reintroduced 2026-07-06 — Mumbai
- * only for now, city selection lives in Settings, see CITIES below. Generation
- * stays single-tenant/global: everyone gets the same Mumbai "local" content
- * until more cities are actually generated.)
+ * only for now, city selection lives in Settings, see CITIES below.
+ *
+ * Multi-city groundwork (2026-07-06): the "local" SectionId stays singular —
+ * there's still one shared daily briefing, not one per city — but a "local"
+ * story now carries a `city` tag (see Story.city in generator.ts) saying
+ * which city's feed it came from. The admin panel can request generation for
+ * several cities in one run (their local stories all land in the same
+ * "local" bucket, distinguished by that tag); each reader's Home/player then
+ * only shows the "local" stories matching their own city preference (see the
+ * `briefing` filter in context/player.tsx). Everything downstream of that one
+ * filter point (Home's list, playback order) automatically respects it.)
  */
 
 // ── Section IDs — straight from Google News feed names ───────────────────────
@@ -67,6 +75,18 @@ const TOPIC: Record<string, string> = {
   health:     "CAAqIQgKIhtDQkFTRGdvSUwyMHZNR3QwTlRFU0FtVnVLQUFQAQ",
 };
 
+// Per-city Google News feed (search-based — there's no topic ID for a city).
+// Every configured city has a real, fetchable feed here regardless of its
+// `available` flag above, so the admin panel can generate/test a city's
+// content ahead of actually flipping it on for readers.
+export const CITY_FEEDS: Record<CityId, { buildUrl: () => string; fallbackUrl: string }> = {
+  mumbai:    { buildUrl: () => `${GN_BASE}/search?q=Mumbai&${LOCALE}`,    fallbackUrl: `${GN_BASE}/search?q=Mumbai+news&${LOCALE}` },
+  delhi:     { buildUrl: () => `${GN_BASE}/search?q=Delhi&${LOCALE}`,     fallbackUrl: `${GN_BASE}/search?q=Delhi+news&${LOCALE}` },
+  bangalore: { buildUrl: () => `${GN_BASE}/search?q=Bangalore&${LOCALE}`, fallbackUrl: `${GN_BASE}/search?q=Bangalore+news&${LOCALE}` },
+  chennai:   { buildUrl: () => `${GN_BASE}/search?q=Chennai&${LOCALE}`,   fallbackUrl: `${GN_BASE}/search?q=Chennai+news&${LOCALE}` },
+  kolkata:   { buildUrl: () => `${GN_BASE}/search?q=Kolkata&${LOCALE}`,   fallbackUrl: `${GN_BASE}/search?q=Kolkata+news&${LOCALE}` },
+};
+
 // ── Feed configs ──────────────────────────────────────────────────────────────
 
 export const FEEDS: FeedConfig[] = [
@@ -78,19 +98,6 @@ export const FEEDS: FeedConfig[] = [
     labelMr: "ठळक बातम्या",
     emoji:   "🔥",
     buildUrl: () => `${GN_BASE}?${LOCALE}`,
-  },
-  {
-    // Mumbai-only for now (2026-07-06) — hardcoded label until more cities are
-    // actually generated (see CITIES above). No Google News topic ID exists for
-    // a city, so this uses a search query like the other feeds' fallbackUrl does.
-    feedId:  "local",
-    label:   "Mumbai",
-    labelHi: "मुंबई",
-    labelTa: "மும்பை",
-    labelMr: "मुंबई",
-    emoji:   "🏙️",
-    buildUrl: () => `${GN_BASE}/search?q=Mumbai&${LOCALE}`,
-    fallbackUrl: `${GN_BASE}/search?q=Mumbai+news&${LOCALE}`,
   },
   {
     feedId:  "india",

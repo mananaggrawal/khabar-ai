@@ -14,6 +14,7 @@ import { Play, Pause, SkipBack, SkipForward } from "lucide-react";
 import { fetchBriefing } from "@/lib/news/briefing.functions";
 import { useMonologue, getStoryTitle, getSectionLabel, getAudioUrl } from "@/hooks/useMonologue";
 import { useSavedStories } from "@/hooks/useSavedStories";
+import { useCityPreference } from "@/hooks/useCityPreference";
 import { PlayerScreen } from "@/components/PlayerScreen";
 import { type SectionId } from "@/lib/news/sources";
 import type { Story, DailyBriefing } from "@/lib/news/generator";
@@ -101,18 +102,28 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   });
 
   const rawBriefing = briefingQuery.data ?? null;
+  // 2026-07-06: several cities' local stories can share the one "local"
+  // section in a single generation run (see generator.ts Story.city / the
+  // admin panel's city checkboxes). Readers only see their OWN city's local
+  // stories — this is the one place that filter is applied, so Home's list
+  // and the playback order (which both read this same `briefing`) stay in
+  // sync automatically. Stories with no `.city` tag (non-local sections, or
+  // pre-this-change local stories) are never filtered out.
+  const { city } = useCityPreference();
   const briefing = useMemo(() => {
     if (!rawBriefing) return null;
+    const myCity = city ?? "mumbai";
     const rank = (s: Story) => {
       const i = SECTION_DISPLAY_ORDER.indexOf(resolveSection(s.section));
       return i < 0 ? SECTION_DISPLAY_ORDER.length : i;
     };
     const stories = rawBriefing.stories
+      .filter((s) => resolveSection(s.section) !== "local" || !s.city || s.city === myCity)
       .map((s, i) => ({ s, i }))
       .sort((a, b) => rank(a.s) - rank(b.s) || a.i - b.i)
       .map((x) => x.s);
     return { ...rawBriefing, stories };
-  }, [rawBriefing]);
+  }, [rawBriefing, city]);
 
   const mono = useMonologue({ briefing });
   const saved = useSavedStories();

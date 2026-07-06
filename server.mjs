@@ -1017,6 +1017,19 @@ function adminPage(supabaseUrl, supabaseKey) {
           <label><input type="checkbox" name="gen-lang" value="mr"><span>MR</span></label>
         </div>
 
+        <!-- Cities (2026-07-06) — which cities' local feeds to include this run.
+             Mumbai is the only one live for readers today; the rest can still be
+             generated here ahead of actually flipping them on (see CITIES in
+             src/lib/news/sources.ts). -->
+        <div class="config-row" style="margin-bottom:16px;">
+          <span class="config-label">Cities</span>
+          <label><input type="checkbox" name="gen-city" value="mumbai" checked><span>Mumbai</span></label>
+          <label><input type="checkbox" name="gen-city" value="delhi"><span>Delhi</span></label>
+          <label><input type="checkbox" name="gen-city" value="bangalore"><span>Bangalore</span></label>
+          <label><input type="checkbox" name="gen-city" value="chennai"><span>Chennai</span></label>
+          <label><input type="checkbox" name="gen-city" value="kolkata"><span>Kolkata</span></label>
+        </div>
+
         <button class="btn-primary" id="gen-btn" onclick="runGenerate()">Generate now</button>
         <div id="gen-log" class="log-terminal"></div>
       </div>
@@ -1392,7 +1405,13 @@ function adminPage(supabaseUrl, supabaseKey) {
         btn.disabled = false; btn.textContent = 'Generate now';
         return;
       }
-      const params = new URLSearchParams({ provider: ttsProvider, languages: selectedLangs.join(','), scriptProvider, scriptModel });
+      const selectedCities = [...document.querySelectorAll('input[name="gen-city"]:checked')].map(el => el.value);
+      if (selectedCities.length === 0) {
+        appendLog('error', 'Select at least one city before generating.');
+        btn.disabled = false; btn.textContent = 'Generate now';
+        return;
+      }
+      const params = new URLSearchParams({ provider: ttsProvider, languages: selectedLangs.join(','), cities: selectedCities.join(','), scriptProvider, scriptModel });
       if (ttsModel) params.set('ttsModel', ttsModel);
       const r = await fetch('/api/admin/generate?' + params, { method: 'POST', headers: { 'x-admin-key': AKEY } });
       if (r.status === 409) {

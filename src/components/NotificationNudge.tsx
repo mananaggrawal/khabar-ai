@@ -8,6 +8,16 @@
  * the user has subscribed, `push.permission !== "default" || push.subscribed`
  * keeps it from showing again (re-asking after an explicit OS-level denial
  * would just be a dead end).
+ *
+ * BUG FIX (2026-07-06): "every open" didn't actually mean every open once the
+ * PWA was installed — closing and reopening an installed PWA (tapping the
+ * home-screen icon) does NOT necessarily unmount/remount this component the
+ * way a browser tab reload does. iOS/Android often just resume the existing
+ * page from the background, so the original mount-only useEffect below never
+ * re-ran and the dialog silently stopped reappearing after the first install.
+ * Fix: also listen for the document becoming visible again (the reliable
+ * cross-platform signal for "the app was foregrounded"), and re-run the same
+ * eligibility check + show timer then, not just once at mount.
  */
 import { useEffect, useState } from "react";
 import { Bell } from "lucide-react";
@@ -35,16 +45,34 @@ export function NotificationNudge() {
     // CityNudge dialog hasn't been answered yet this session, wait for it to
     // resolve first so the two first-open dialogs don't stack (2026-07-06).
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const startTimer = () => { timer = setTimeout(() => setOpen(true), 1500); };
+    const clearPending = () => { if (timer) clearTimeout(timer); timer = undefined; };
+    const scheduleShow = () => {
+      clearPending();
+      timer = setTimeout(() => setOpen(true), 1500);
+    };
+    const tryShow = () => {
+      if (hasCityBeenAsked()) {
+        scheduleShow();
+      } else {
+        window.addEventListener(CITY_RESOLVED_EVENT, scheduleShow, { once: true });
+      }
+    };
 
-    if (hasCityBeenAsked()) {
-      startTimer();
-      return () => { if (timer) clearTimeout(timer); };
-    }
-    window.addEventListener(CITY_RESOLVED_EVENT, startTimer, { once: true });
+    tryShow(); // first mount / fresh page load
+
+    // Re-check every time the app comes back to the foreground — covers
+    // installed-PWA close/reopen, which usually doesn't remount the app.
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") tryShow();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pageshow", onVisibility);
+
     return () => {
-      window.removeEventListener(CITY_RESOLVED_EVENT, startTimer);
-      if (timer) clearTimeout(timer);
+      clearPending();
+      window.removeEventListener(CITY_RESOLVED_EVENT, scheduleShow);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pageshow", onVisibility);
     };
   }, [push.supported, push.permission, push.subscribed]);
 
