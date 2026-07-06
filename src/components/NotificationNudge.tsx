@@ -1,10 +1,13 @@
 /**
- * One-time nudge, shown the first time a logged-in user lands in the app on
- * a device where they haven't yet decided about notifications, asking them
- * to turn on "your briefing is ready" pushes. There's no server-side
- * "first login" flag in this app, so this uses a localStorage marker instead
- * — it fires once per browser/device (which in practice means once per
- * install), not literally on the very first login across all devices.
+ * Recurring nudge, shown every time a logged-in user opens the app on a
+ * device where they haven't yet decided about notifications, asking them to
+ * turn on "your briefing is ready" pushes (2026-07-06: changed from a
+ * one-time-ever nudge to every-open, per explicit request — dismissing no
+ * longer permanently suppresses it). It still stays hidden for the rest of
+ * that permission state: once the browser reports "granted" or "denied", or
+ * the user has subscribed, `push.permission !== "default" || push.subscribed`
+ * keeps it from showing again (re-asking after an explicit OS-level denial
+ * would just be a dead end).
  */
 import { useEffect, useState } from "react";
 import { Bell } from "lucide-react";
@@ -18,22 +21,11 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 
-const SEEN_KEY = "khabar-notif-nudge-seen";
-
-function hasSeenNudge(): boolean {
-  try { return localStorage.getItem(SEEN_KEY) === "1"; } catch { return false; }
-}
-
-function markNudgeSeen(): void {
-  try { localStorage.setItem(SEEN_KEY, "1"); } catch {}
-}
-
 export function NotificationNudge() {
   const push = usePushNotifications();
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
-    if (hasSeenNudge()) return;
     if (!push.supported) return;
     if (push.permission !== "default" || push.subscribed) return;
     // Small delay so this doesn't fight with the initial page load / audio
@@ -43,12 +35,10 @@ export function NotificationNudge() {
   }, [push.supported, push.permission, push.subscribed]);
 
   function dismiss() {
-    markNudgeSeen();
     setOpen(false);
   }
 
   async function enable() {
-    markNudgeSeen();
     setOpen(false);
     await push.subscribe();
   }

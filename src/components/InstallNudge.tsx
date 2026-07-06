@@ -52,8 +52,8 @@ export function InstallNudge({ variant = "banner" }: InstallNudgeProps) {
   const iosBody = (
     <>
       <p className="text-sm font-medium text-foreground">Install Khabar AI</p>
-      <p className="text-xs text-muted-foreground mt-0.5 inline-flex items-center gap-1 flex-wrap">
-        Tap <Share className="size-3.5 inline shrink-0" /> Share, then "Add to Home Screen".
+      <p className="text-xs text-muted-foreground mt-0.5 inline-flex items-center gap-1.5 flex-wrap">
+        Tap <Share className="size-3.5 inline shrink-0 mx-0.5" /> Share, then "Add to Home Screen".
       </p>
     </>
   );
@@ -88,7 +88,7 @@ export function InstallNudge({ variant = "banner" }: InstallNudgeProps) {
   }
 
   return (
-    <div className="mx-4 mt-3 flex items-start gap-3 rounded-2xl border border-primary/20 bg-primary/[0.04] px-4 py-3">
+    <div className="mx-4 mt-3 mb-3 flex items-start gap-3 rounded-2xl border border-primary/20 bg-primary/[0.04] px-4 py-3">
       <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10">
         {isIOS ? <Share className="size-4 text-primary" /> : <Download className="size-4 text-primary" />}
       </div>
