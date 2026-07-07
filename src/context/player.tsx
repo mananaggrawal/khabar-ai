@@ -262,22 +262,6 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setQuickBatchVersion((v) => v + 1);
   }, [buildNextQuickBatch, quick, quickBatch]);
 
-  // Manual "Refresh" — swaps out only the already-consumed (heard or
-  // skipped) slots in the CURRENT batch for fresh unconsumed stories, in
-  // place at their exact original index. Deliberately NOT a full rebuild:
-  // replacing in place means every story that hasn't been reached yet —
-  // including whatever's currently playing — keeps the exact same array
-  // position, so no resync of currentStoryIdx or the playing <audio> element
-  // is needed at all; playback just continues undisturbed. Available
-  // whenever the batch itself has consumed slots, regardless of quickActive
-  // — you can refresh the list while just browsing it, not only while it's
-  // the one playing.
-  const canRefreshQuick = !!quickBatch?.some((s) => quick.consumedIds.has(s.id));
-  const refreshQuickBatch = useCallback(() => {
-    if (!briefing || !quickBatch) return;
-    setQuickBatch(refreshQuickQueue(quickBatch, briefing.stories, quickConsumedRef.current, readCompletedIds(briefing.date)));
-  }, [briefing, quickBatch]);
-
   const activeBriefing = useMemo((): DailyBriefing | null => {
     if (!quickActive) return briefing;
     if (!briefing || !quickBatch) return null;
@@ -347,6 +331,35 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     }
     prevQuickStoryIdRef.current = curId;
   }, [quickActive, mono.currentStory?.id, quick]);
+
+  // Manual "Refresh" — swaps out only the already-consumed (heard or
+  // skipped) slots in the CURRENT batch for fresh unconsumed stories, in
+  // place at their exact original index. Deliberately NOT a full rebuild:
+  // replacing in place means every story that hasn't been reached yet —
+  // including whatever's currently playing — keeps the exact same array
+  // position, so no resync of currentStoryIdx or the playing <audio> element
+  // is needed at all; playback just continues undisturbed. Available
+  // whenever the batch itself has consumed slots, regardless of quickActive
+  // — you can refresh the list while just browsing it, not only while it's
+  // the one playing.
+  //
+  // BUG FIX (2026-07-07): a story fully heard via FULL mode only ever lands
+  // in mono.completedIds, never in quick.consumedIds (the quick-only
+  // tracker) — since `quickBatch` is built once and cached, that story just
+  // sat in the batch forever looking "already seen" with no way to swap it
+  // out, because both canRefreshQuick and the refresh itself only checked
+  // quick.consumedIds. Now both also treat a mono.completedIds match as a
+  // slot that needs replacing.
+  const isQuickSlotStale = useCallback(
+    (id: string) => quick.consumedIds.has(id) || mono.completedIds.has(id),
+    [quick.consumedIds, mono.completedIds],
+  );
+  const canRefreshQuick = !!quickBatch?.some((s) => isQuickSlotStale(s.id));
+  const refreshQuickBatch = useCallback(() => {
+    if (!briefing || !quickBatch) return;
+    const staleIds = new Set(quickBatch.filter((s) => isQuickSlotStale(s.id)).map((s) => s.id));
+    setQuickBatch(refreshQuickQueue(quickBatch, briefing.stories, staleIds, readCompletedIds(briefing.date)));
+  }, [briefing, quickBatch, isQuickSlotStale]);
 
   const saved = useSavedStories();
   const [playerOpen, setPlayerOpen] = useState(false);
