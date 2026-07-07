@@ -179,13 +179,18 @@ export function refreshQuickQueue(
   currentBatch: Story[],
   pool: Story[],
   consumedIds: Set<string>,
+  // Extra ids to never draw a replacement FROM (2026-07-06) — separate from
+  // `consumedIds`, which also decides which SLOTS need replacing. A story
+  // heard via Full mode should never be pulled in as a fresh replacement
+  // here even though it was never "consumed" in this Quick batch itself.
+  extraExcludeIds: Set<string> = new Set(),
 ): Story[] {
   const replaceCount = currentBatch.filter((s) => consumedIds.has(s.id)).length;
   if (replaceCount === 0) return currentBatch;
 
   const voiceOf = inferVoiceIndices(pool);
   const stillActiveIds = new Set(currentBatch.filter((s) => !consumedIds.has(s.id)).map((s) => s.id));
-  const excludeIds = new Set([...consumedIds, ...stillActiveIds]);
+  const excludeIds = new Set([...consumedIds, ...stillActiveIds, ...extraExcludeIds]);
 
   const bySection = new Map<string, Story[]>();
   for (const s of pool) {

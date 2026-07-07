@@ -12,7 +12,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Play, Pause, SkipBack, SkipForward } from "lucide-react";
 
 import { fetchBriefing } from "@/lib/news/briefing.functions";
-import { useMonologue, getStoryTitle, getSectionLabel, getAudioUrl } from "@/hooks/useMonologue";
+import { useMonologue, getStoryTitle, getSectionLabel, getAudioUrl, readCompletedIds } from "@/hooks/useMonologue";
 import { useSavedStories } from "@/hooks/useSavedStories";
 import { useCityPreference } from "@/hooks/useCityPreference";
 import { useListenMode } from "@/hooks/useListenMode";
@@ -182,9 +182,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // buildNextQuickBatch() to see it via quick.consumedIds/quickConsumedRef.
   const prevQuickStoryIdRef = useRef<string | null>(null);
 
+  // Excludes stories already heard/skipped via EITHER mode (2026-07-06,
+  // explicit request) — quickConsumedRef alone only covers what happened in
+  // Quick mode itself; a story fully heard in Full mode wouldn't otherwise
+  // be excluded from a fresh Quick 15 batch. readCompletedIds() reads the
+  // same localStorage source useMonologue's own completedIds is backed by,
+  // callable directly (no need to wait on `mono`, which doesn't exist yet
+  // when the very first batch is built).
   const buildNextQuickBatch = useCallback((): Story[] | null => {
     if (!briefing) return null;
-    return buildQuickQueue(briefing.stories, quickConsumedRef.current);
+    const excludeIds = new Set([...quickConsumedRef.current, ...readCompletedIds(briefing.date)]);
+    return buildQuickQueue(briefing.stories, excludeIds);
   }, [briefing]);
 
   // Build the first batch when switching into Quick mode (or once the day's
@@ -249,7 +257,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     // replacement against its actual final neighbor — not just a blind
     // splice — which is what actually keeps voices alternating through a
     // refresh (2026-07-06 fix; see quickQueue.ts for the full reasoning).
-    setQuickBatch(refreshQuickQueue(quickBatch, briefing.stories, quickConsumedRef.current));
+    // Also never draws a replacement that's already been heard via Full mode.
+    setQuickBatch(refreshQuickQueue(quickBatch, briefing.stories, quickConsumedRef.current, readCompletedIds(briefing.date)));
   }, [briefing, quickBatch]);
 
   const activeBriefing = useMemo((): DailyBriefing | null => {

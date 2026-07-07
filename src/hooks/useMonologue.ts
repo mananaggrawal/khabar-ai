@@ -43,6 +43,25 @@ function readLanguage(): Language {
   } catch { return "en"; }
 }
 
+// Exported (2026-07-06) so PlayerProvider can read "already heard" stories
+// synchronously when building a Quick 15 batch — that happens before
+// useMonologue (and its own completedIds state) necessarily exists yet, so
+// it can't just read `mono.completedIds`. This is the same localStorage
+// source of truth, just callable without a hook. Since skipping a story now
+// marks it completed everywhere (not just playing it to the end — see
+// playAt's skip-marks-completed fix), this one set already reflects
+// "heard/skipped in EITHER Full or Quick mode."
+export function readCompletedIds(date: string | undefined): Set<string> {
+  if (!date) return new Set();
+  try {
+    const raw = localStorage.getItem(COMPLETED_KEY);
+    const obj = raw ? JSON.parse(raw) : null;
+    return obj?.date === date && Array.isArray(obj.ids) ? new Set(obj.ids) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
 export function getAudioUrl(story: import("@/lib/news/generator").Story, lang: Language): string | undefined {
   if (lang === "en") return story.audioUrlEn;
   if (lang === "hi") return story.audioUrlHi;
@@ -158,11 +177,7 @@ export function useMonologue({
     const d = briefing?.date;
     if (!d) return;
     currentDateRef.current = d;
-    try {
-      const raw = localStorage.getItem(COMPLETED_KEY);
-      const obj = raw ? JSON.parse(raw) : null;
-      setCompletedIds(obj?.date === d && Array.isArray(obj.ids) ? new Set(obj.ids) : new Set());
-    } catch { setCompletedIds(new Set()); }
+    setCompletedIds(readCompletedIds(d));
     fetchCompleted(d).then((ids) => {
       if (!ids.length) return;
       setCompletedIds((prev) => {
@@ -406,13 +421,19 @@ export function useMonologue({
 
       const onEnded = mode !== null
         ? () => {
-            // Find the next story with a different audio file (next section)
+            // Find the next story with a different audio file (next section),
+            // ALSO skipping any story already marked "listened" — whether
+            // heard/skipped in Full mode or Quick mode, since both write to
+            // this same completedIds tracker (2026-07-06, explicit request:
+            // auto-advance should never land on something already played,
+            // regardless of which mode played it).
             let next = currentIdxRef.current + 1;
             while (next < storiesWithAudio.length) {
               const s = storiesWithAudio[next];
               const sUrl = getAudioUrl(s, language)!;
               const sFilename = sUrl?.split('/').pop() ?? '';
-              if (!sFilename || !url.endsWith(sFilename)) break;
+              const sameFileAsCurrent = !!sFilename && url.endsWith(sFilename);
+              if (!sameFileAsCurrent && !completedIds.has(s.id)) break;
               next++;
             }
             if (next >= storiesWithAudio.length) {
@@ -461,16 +482,21 @@ export function useMonologue({
         setError(e?.message ?? "Playback blocked — tap again");
       });
     },
-    [storiesWithAudio, language, attachAudio, onQueueEnd, markCompleted],
+    [storiesWithAudio, language, attachAudio, onQueueEnd, markCompleted, completedIds],
   );
 
   useEffect(() => { playAtRef.current = playAt; }, [playAt]);
 
   // ── Public API ────────────────────────────────────────────────────────────
 
+  // Starts at the first not-yet-heard story rather than always index 0
+  // (2026-07-06) — same "never auto-play something already played" rule as
+  // the auto-advance skip above. Falls back to 0 (replay from the top) once
+  // genuinely everything has been heard, rather than doing nothing.
   const playAll = useCallback(() => {
-    playAt(0, "all");
-  }, [playAt]);
+    const startIdx = storiesWithAudio.findIndex((s) => !completedIds.has(s.id));
+    playAt(startIdx >= 0 ? startIdx : 0, "all");
+  }, [playAt, storiesWithAudio, completedIds]);
 
   /** Play all stories within a given section */
   const playSection = useCallback(
