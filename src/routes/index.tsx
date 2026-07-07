@@ -1,6 +1,6 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Share2 } from "lucide-react";
+import { Share2, RotateCw } from "lucide-react";
 import { VoiceOrb } from "@/components/VoiceOrb";
 
 import { StoryCard } from "@/components/StoryCard";
@@ -172,7 +172,7 @@ function HeroCard({
 function HomePage() {
   // Player + briefing now live in the app-wide PlayerProvider so audio keeps
   // playing across tab changes.
-  const { mono, briefing, isLoading, saved: savedStories, listenMode } = usePlayer();
+  const { mono, briefing, isLoading, saved: savedStories, listenMode, canRefreshQuick, refreshQuickBatch } = usePlayer();
   const isQuickMode = listenMode === "quick";
 
   const [detailStory, setDetailStory] = useState<Story | null>(null);
@@ -373,6 +373,20 @@ function HomePage() {
                 <div className="flex items-center gap-2 px-1 pt-2 pb-2">
                   <h2 className="truncate text-sm font-semibold text-foreground">Quick 15</h2>
                   <span className="text-[11px] text-muted-foreground">{mono.storiesWithAudio.length}</span>
+                  {/* Refreshes only the already-heard/skipped slots — whatever's
+                      currently playing (or not yet reached) is untouched
+                      (2026-07-06). Hidden once nothing's been consumed yet in
+                      this batch, since there'd be nothing to swap out. */}
+                  {canRefreshQuick && (
+                    <button
+                      onClick={refreshQuickBatch}
+                      aria-label="Refresh Quick 15"
+                      className="ml-auto flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium text-muted-foreground hover:bg-black/5 hover:text-foreground transition-colors"
+                    >
+                      <RotateCw className="size-3" />
+                      Refresh
+                    </button>
+                  )}
                 </div>
                 <div className="space-y-2">
                   {mono.storiesWithAudio.map((story) => (

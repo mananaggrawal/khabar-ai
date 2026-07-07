@@ -47,6 +47,12 @@ type PlayerContextValue = {
   // Play actually queues up; `mono.storiesWithAudio` already IS that batch
   // when this is "quick", in the exact curated order.
   listenMode: import("@/hooks/useListenMode").ListenMode;
+  // Manual refresh (2026-07-06) — swaps only already-consumed slots in the
+  // current Quick 15 batch for fresh unconsumed stories, in place. Disabled
+  // (canRefreshQuick false) when nothing in the current batch has been
+  // heard/skipped yet, since there'd be nothing to replace.
+  canRefreshQuick: boolean;
+  refreshQuickBatch: () => void;
 };
 
 const PlayerCtx = createContext<PlayerContextValue | null>(null);
@@ -210,6 +216,30 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setQuickBatchVersion((v) => v + 1);
   }, [buildNextQuickBatch, quick]);
 
+  // Manual "Refresh" (2026-07-06) — swaps out only the already-consumed
+  // (heard or skipped) slots in the CURRENT batch for fresh unconsumed
+  // stories, in place at their exact original index. Deliberately NOT a
+  // full rebuild: replacing in place means every story that hasn't been
+  // reached yet — including whatever's currently playing — keeps the exact
+  // same array position, so no resync of currentStoryIdx or the playing
+  // <audio> element is needed at all; playback just continues undisturbed.
+  const canRefreshQuick = listenMode === "quick" && !!quickBatch?.some((s) => quick.consumedIds.has(s.id));
+  const refreshQuickBatch = useCallback(() => {
+    if (!briefing || !quickBatch) return;
+    const consumed = quickConsumedRef.current;
+    const replaceCount = quickBatch.filter((s) => consumed.has(s.id)).length;
+    if (replaceCount === 0) return; // nothing consumed yet in this batch — nothing to refresh
+    const stillActiveIds = new Set(quickBatch.filter((s) => !consumed.has(s.id)).map((s) => s.id));
+    const excludeIds = new Set([...consumed, ...stillActiveIds]);
+    const fresh = buildQuickQueue(briefing.stories, excludeIds, replaceCount);
+    let freshIdx = 0;
+    // Falls back to keeping the old (consumed) story in a slot if the day's
+    // pool is nearly exhausted and there aren't enough fresh replacements —
+    // better than leaving a hole in the queue.
+    const newBatch = quickBatch.map((s) => (consumed.has(s.id) ? (fresh[freshIdx++] ?? s) : s));
+    setQuickBatch(newBatch);
+  }, [briefing, quickBatch]);
+
   const activeBriefing = useMemo((): DailyBriefing | null => {
     if (listenMode !== "quick") return briefing;
     if (!briefing || !quickBatch) return null;
@@ -277,6 +307,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     openPlayer: () => setPlayerOpen(true),
     generatedCities,
     listenMode,
+    canRefreshQuick,
+    refreshQuickBatch,
   };
 
   return (

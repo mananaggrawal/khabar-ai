@@ -100,8 +100,8 @@ function SettingsPage() {
           </p>
           <div className="mt-4 space-y-2">
             {([
-              { id: "full" as const, label: "Full briefing", desc: "Every story, section by section" },
               { id: "quick" as const, label: "Quick 15", desc: "A diverse, important-first mix — 15 at a time" },
+              { id: "full" as const, label: "Full briefing", desc: "Every story, section by section" },
             ]).map((m) => {
               const active = listenMode === m.id;
               return (
