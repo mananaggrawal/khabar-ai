@@ -127,20 +127,34 @@ export function buildQuickQueue(
 
   const nextAvailable = () => sectionIds.filter((id) => cursors.get(id)! < bySection.get(id)!.length);
 
+  // Genuine round-robin: every section with remaining candidates gets
+  // EXACTLY ONE pick per round before any section gets a second — this is
+  // what actually produces cross-section diversity. BUG FIX (2026-07-06):
+  // the voice-alternation change below used to just repeatedly `find()` the
+  // first section (in the same fixed order every time) whose next candidate
+  // happened to alternate voice, with no guarantee every section got a turn
+  // first — a section that alternates voice conveniently could get picked
+  // over and over while others never got reached, reported as "content
+  // coming from very few sections, concentrated." Fixed by keeping the
+  // voice preference but only to decide the ORDER sections are visited
+  // *within* a round, never letting a section go twice before the round's
+  // other available sections have each had their one pick.
   while (result.length < count) {
-    const available = nextAvailable();
-    if (available.length === 0) break;
-    // Prefer a section whose next (most important remaining) candidate has a
-    // different voice than the last placed story; never skips ahead within
-    // a section to chase this — only WHICH section goes next changes.
-    let id = available.find((sid) => {
-      const s = bySection.get(sid)![cursors.get(sid)!];
-      return lastVoice === null || voiceOf.get(s.id) !== lastVoice;
-    });
-    if (!id) id = available[0]; // everything left shares the same voice — take it anyway
-    const idx = cursors.get(id)!;
-    place(bySection.get(id)![idx]);
-    cursors.set(id, idx + 1);
+    const availableThisRound = nextAvailable();
+    if (availableThisRound.length === 0) break;
+    const usedThisRound = new Set<string>();
+    for (let step = 0; step < availableThisRound.length && result.length < count; step++) {
+      const remaining = availableThisRound.filter((sid) => !usedThisRound.has(sid));
+      let id = remaining.find((sid) => {
+        const s = bySection.get(sid)![cursors.get(sid)!];
+        return lastVoice === null || voiceOf.get(s.id) !== lastVoice;
+      });
+      if (!id) id = remaining[0]; // everything left this round shares the same voice — take it anyway
+      usedThisRound.add(id);
+      const idx = cursors.get(id)!;
+      place(bySection.get(id)![idx]);
+      cursors.set(id, idx + 1);
+    }
   }
 
   return result;
@@ -183,6 +197,11 @@ export function refreshQuickQueue(
   const cursors = new Map(sectionIds.map((id) => [id, 0]));
   const nextAvailable = () => sectionIds.filter((id) => cursors.get(id)! < bySection.get(id)!.length);
 
+  // Same round-robin-fairness fix as buildQuickQueue: `usedThisRound` stops
+  // one section's candidates from being preferred over and over just because
+  // it happens to alternate voice conveniently — every available section
+  // gets one replacement before any section supplies a second (2026-07-06).
+  let usedThisRound = new Set<string>();
   const newBatch = [...currentBatch];
   for (let i = 0; i < newBatch.length; i++) {
     if (!consumedIds.has(newBatch[i].id)) continue; // untouched slot — leave exactly as is
@@ -191,11 +210,14 @@ export function refreshQuickQueue(
     const available = nextAvailable();
     if (available.length === 0) break; // pool exhausted — leave the old (consumed) story here rather than a gap
 
-    let id = available.find((sid) => {
+    if (usedThisRound.size >= available.length) usedThisRound = new Set();
+    const remaining = available.filter((sid) => !usedThisRound.has(sid));
+    let id = remaining.find((sid) => {
       const s = bySection.get(sid)![cursors.get(sid)!];
       return lastVoice === null || voiceOf.get(s.id) !== lastVoice;
     });
-    if (!id) id = available[0]; // everything left shares the same voice — take it anyway
+    if (!id) id = remaining[0]; // everything left this round shares the same voice — take it anyway
+    usedThisRound.add(id);
 
     const idx = cursors.get(id)!;
     newBatch[i] = bySection.get(id)![idx];
