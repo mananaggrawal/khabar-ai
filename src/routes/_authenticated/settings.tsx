@@ -87,6 +87,51 @@ function SettingsPage() {
 
       <main className="flex-1 mx-auto w-full max-w-2xl space-y-10 px-6 py-4 overflow-y-auto">
 
+        {/* Listening mode — Full plays every section in order; Quick 15 plays
+            a diverse, importance-weighted 15-story batch across all sections
+            and auto-continues into a fresh unheard batch once it finishes
+            (2026-07-06). Only changes what "Play" queues up — the browse
+            list above is unaffected either way. Placed first, above
+            Language, per explicit request. */}
+        <section>
+          <h2 className="font-serif text-lg">Listening mode</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Quick 15 plays a mix of the day's most important stories across every section, then keeps going with fresh ones.
+          </p>
+          <div className="mt-4 space-y-2">
+            {([
+              { id: "full" as const, label: "Full briefing", desc: "Every story, section by section" },
+              { id: "quick" as const, label: "Quick 15", desc: "A diverse, important-first mix — 15 at a time" },
+            ]).map((m) => {
+              const active = listenMode === m.id;
+              return (
+                <button
+                  key={m.id}
+                  onClick={() => setListenMode(m.id)}
+                  className={cn(
+                    "flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-colors",
+                    active
+                      ? "border-primary/40 bg-primary/10 text-foreground"
+                      : "border-border text-foreground/70 hover:border-border/80 hover:bg-black/[0.02]",
+                  )}
+                >
+                  <div className="flex-1">
+                    <span className="block text-sm font-medium">{m.label}</span>
+                    <span className="block text-xs text-muted-foreground mt-0.5">{m.desc}</span>
+                  </div>
+                  {active && (
+                    <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-primary bg-primary">
+                      <svg viewBox="0 0 20 20" fill="white" className="size-full p-0.5">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
         {/* Language */}
         <section>
           <h2 className="font-serif text-lg">Language</h2>
@@ -169,50 +214,6 @@ function SettingsPage() {
                   ) : !available ? (
                     <span className="text-[10px] uppercase tracking-widest text-muted-foreground/40">Coming soon</span>
                   ) : null}
-                </button>
-              );
-            })}
-          </div>
-        </section>
-
-        {/* Listening mode — Full plays every section in order; Quick 15 plays
-            a diverse, importance-weighted 15-story batch across all sections
-            and auto-continues into a fresh unheard batch once it finishes
-            (2026-07-06). Only changes what "Play" queues up — the browse
-            list above is unaffected either way. */}
-        <section>
-          <h2 className="font-serif text-lg">Listening mode</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Quick 15 plays a mix of the day's most important stories across every section, then keeps going with fresh ones.
-          </p>
-          <div className="mt-4 space-y-2">
-            {([
-              { id: "full" as const, label: "Full briefing", desc: "Every story, section by section" },
-              { id: "quick" as const, label: "Quick 15", desc: "A diverse, important-first mix — 15 at a time" },
-            ]).map((m) => {
-              const active = listenMode === m.id;
-              return (
-                <button
-                  key={m.id}
-                  onClick={() => setListenMode(m.id)}
-                  className={cn(
-                    "flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-colors",
-                    active
-                      ? "border-primary/40 bg-primary/10 text-foreground"
-                      : "border-border text-foreground/70 hover:border-border/80 hover:bg-black/[0.02]",
-                  )}
-                >
-                  <div className="flex-1">
-                    <span className="block text-sm font-medium">{m.label}</span>
-                    <span className="block text-xs text-muted-foreground mt-0.5">{m.desc}</span>
-                  </div>
-                  {active && (
-                    <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-primary bg-primary">
-                      <svg viewBox="0 0 20 20" fill="white" className="size-full p-0.5">
-                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                      </svg>
-                    </span>
-                  )}
                 </button>
               );
             })}
