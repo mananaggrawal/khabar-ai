@@ -169,14 +169,23 @@ function HeroCard({
 
 // ── Home Page ─────────────────────────────────────────────────────────────────
 
+// Pinned pill id for the Quick 15 section, alongside real SectionIds.
+const QUICK_PILL = "quick15" as const;
+type PillId = SectionId | typeof QUICK_PILL;
+
 function HomePage() {
   // Player + briefing now live in the app-wide PlayerProvider so audio keeps
-  // playing across tab changes.
-  const { mono, briefing, isLoading, saved: savedStories, listenMode, canRefreshQuick, refreshQuickBatch } = usePlayer();
-  const isQuickMode = listenMode === "quick";
+  // playing across tab changes. Quick 15 (2026-07-07) is now a permanent
+  // pinned pill/section on Home, not a Settings-driven global mode — it
+  // coexists with the real topic sections rather than replacing them.
+  const { mono, briefing, isLoading, saved: savedStories, quickBatch, quickActive, playFromQuick, playFromFull, canRefreshQuick, refreshQuickBatch } = usePlayer();
 
   const [detailStory, setDetailStory] = useState<Story | null>(null);
-  const [activeSection, setActiveSection] = useState<SectionId | null>(null);
+  // Which list a tapped-into detail story came from — needed so its Play
+  // button in the sheet resumes into the right queue (Quick batch vs. the
+  // real section it belongs to).
+  const [detailSource, setDetailSource] = useState<"quick" | "full">("full");
+  const [activeSection, setActiveSection] = useState<PillId | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const pillsRef = useRef<HTMLDivElement>(null);
   // True when the open detail drawer is showing the currently-playing story, so
@@ -187,13 +196,38 @@ function HomePage() {
   // list on every section switch / save / playback tick.
   const currentIdRef = useRef<string | undefined>(undefined);
   currentIdRef.current = mono.currentStory?.id;
-  const handlePlay = useCallback((story: Story) => {
-    const idx = mono.storiesWithAudio.findIndex((s) => s.id === story.id);
-    if (idx >= 0) mono.playFrom(idx);
-  }, [mono.storiesWithAudio, mono.playFrom]);
+
+  // Full-section list, independent of whether Quick 15 is the one actually
+  // playing right now (mono.storiesWithAudio tracks whichever queue is bound
+  // to `mono`, which may be the Quick batch — this always reflects the real
+  // day's briefing, matching useMonologue's own audio filter exactly).
+  const fullStoriesWithAudio = (briefing?.stories ?? []).filter((s) => !!getAudioUrl(s, mono.language));
+
+  // Plain list card Play button — unscoped "all" auto-advance, matching the
+  // pre-Quick-15 behavior of the full story list.
+  const handlePlayFull = useCallback((story: Story) => {
+    const idx = fullStoriesWithAudio.findIndex((s) => s.id === story.id);
+    if (idx >= 0) playFromFull(idx);
+  }, [fullStoriesWithAudio, playFromFull]);
+  // Detail sheet Play — section-scoped auto-advance, matching the prior
+  // mono.playFromInSection(idx, detailStory.section) behavior.
+  const handlePlayFullInSection = useCallback((story: Story) => {
+    const idx = fullStoriesWithAudio.findIndex((s) => s.id === story.id);
+    if (idx >= 0) playFromFull(idx, resolveSection(story.section));
+  }, [fullStoriesWithAudio, playFromFull]);
+  const handlePlayQuick = useCallback((story: Story) => {
+    const idx = (quickBatch ?? []).findIndex((s) => s.id === story.id);
+    if (idx >= 0) playFromQuick(idx);
+  }, [quickBatch, playFromQuick]);
   const handlePause = useCallback(() => { mono.pause(); }, [mono.pause]);
-  const handleTap = useCallback((story: Story) => {
+  const handleTapFull = useCallback((story: Story) => {
     detailFollowsRef.current = currentIdRef.current === story.id;
+    setDetailSource("full");
+    setDetailStory(story);
+  }, []);
+  const handleTapQuick = useCallback((story: Story) => {
+    detailFollowsRef.current = currentIdRef.current === story.id;
+    setDetailSource("quick");
     setDetailStory(story);
   }, []);
 
@@ -265,10 +299,13 @@ function HomePage() {
     }))
     .filter(g => g.stories.length > 0);
 
-  // Active section defaults to the first available section (no "All" view)
-  const currentSection = activeSection ?? storiesBySection[0]?.sectionId ?? null;
+  // Active pill defaults to Quick 15 (pinned first) when it has content,
+  // otherwise the first real section (no "All" view).
+  const currentSection: PillId | null =
+    activeSection ?? (quickBatch && quickBatch.length > 0 ? QUICK_PILL : storiesBySection[0]?.sectionId ?? null);
+  const isQuickPillActive = currentSection === QUICK_PILL;
 
-  // Only the active section is shown
+  // Only the active section is shown (irrelevant when the Quick 15 pill is active)
   const groupsToRender = storiesBySection.filter(g => g.sectionId === currentSection);
 
   return (
@@ -325,54 +362,66 @@ function HomePage() {
 
       {briefing && (
         <>
-          {/* Hero card — reflects whichever list is actually queued right now */}
+          {/* Hero card — always reflects the full day's briefing now that
+              Quick 15 is a coexisting section rather than a global mode. */}
           <HeroCard
-            stories={isQuickMode ? mono.storiesWithAudio : briefing.stories}
-            estimatedDurationSec={isQuickMode ? undefined : briefing.meta?.estimatedDurationSec}
+            stories={briefing.stories}
+            estimatedDurationSec={briefing.meta?.estimatedDurationSec}
             mono={mono}
           />
 
-          {/* Section pills — Full mode only; Quick 15 is one diverse cross-section list */}
-          {!isQuickMode && (
-            <div
-              ref={pillsRef}
-              className="flex gap-2 overflow-x-auto px-4 pb-3"
-              style={{ scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}
-            >
-              {storiesBySection.map((g) => {
-                const id       = g.sectionId;
-                const label    = g.feed?.label ?? id;
-                const isActive = currentSection === id;
-                return (
-                  <button
-                    key={id}
-                    onClick={() => setActiveSection(id)}
-                    className={`shrink-0 rounded-full border px-3.5 py-1 text-xs font-semibold transition-all whitespace-nowrap ${
-                      isActive
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : "border-border bg-muted/60 text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-            </div>
-          )}
+          {/* Section pills — Quick 15 pinned first, then real topic sections */}
+          <div
+            ref={pillsRef}
+            className="flex gap-2 overflow-x-auto px-4 pb-3"
+            style={{ scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}
+          >
+            {quickBatch && quickBatch.length > 0 && (
+              <button
+                onClick={() => setActiveSection(QUICK_PILL)}
+                className={`shrink-0 rounded-full border px-3.5 py-1 text-xs font-semibold transition-all whitespace-nowrap ${
+                  isQuickPillActive
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border bg-muted/60 text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Quick 15
+              </button>
+            )}
+            {storiesBySection.map((g) => {
+              const id       = g.sectionId;
+              const label    = g.feed?.label ?? id;
+              const isActive = currentSection === id;
+              return (
+                <button
+                  key={id}
+                  onClick={() => setActiveSection(id)}
+                  className={`shrink-0 rounded-full border px-3.5 py-1 text-xs font-semibold transition-all whitespace-nowrap ${
+                    isActive
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border bg-muted/60 text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
 
-          {/* Story list — Quick 15: one flat list in the curated diverse order
-              (mono.storiesWithAudio IS the queue Play uses, unmodified, so
-              what's shown always matches what's playing/queued). Full mode:
+          {/* Story list — Quick 15: one flat curated cross-section list, read
+              from `quickBatch` directly (NOT mono.storiesWithAudio, which
+              tracks whichever queue is actually bound to playback and may be
+              the full briefing even while viewing this pill). Real sections:
               grouped by section, filtered by the active pill, as before. */}
           <div
             className="flex-1 overflow-y-auto px-4 pb-4"
             style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 148px)" }}
           >
-            {isQuickMode ? (
+            {isQuickPillActive ? (
               <section className="mb-5">
                 <div className="flex items-center gap-2 px-1 pt-2 pb-2">
                   <h2 className="truncate text-sm font-semibold text-foreground">Quick 15</h2>
-                  <span className="text-[11px] text-muted-foreground">{mono.storiesWithAudio.length}</span>
+                  <span className="text-[11px] text-muted-foreground">{quickBatch?.length ?? 0}</span>
                   {/* Refreshes only the already-heard/skipped slots — whatever's
                       currently playing (or not yet reached) is untouched
                       (2026-07-06). Hidden once nothing's been consumed yet in
@@ -389,17 +438,18 @@ function HomePage() {
                   )}
                 </div>
                 <div className="space-y-2">
-                  {mono.storiesWithAudio.map((story) => (
+                  {(quickBatch ?? []).map((story) => (
                     <StoryCard
                       key={story.id}
                       story={story}
                       language={mono.language}
-                      isPlaying={mono.currentStory?.id === story.id && mono.state === "playing"}
+                      isPlaying={quickActive && mono.currentStory?.id === story.id && mono.state === "playing"}
                       hasAudio={!!getAudioUrl(story, mono.language)}
                       isCompleted={mono.completedIds.has(story.id)}
-                      onPlay={handlePlay}
+                      onPlay={handlePlayQuick}
                       onPause={handlePause}
-                      onTap={handleTap}
+                      onTap={handleTapQuick}
+                      quickPick
                     />
                   ))}
                 </div>
@@ -421,12 +471,12 @@ function HomePage() {
                         key={story.id}
                         story={story}
                         language={mono.language}
-                        isPlaying={mono.currentStory?.id === story.id && mono.state === "playing"}
+                        isPlaying={!quickActive && mono.currentStory?.id === story.id && mono.state === "playing"}
                         hasAudio={!!getAudioUrl(story, mono.language)}
                         isCompleted={mono.completedIds.has(story.id)}
-                        onPlay={handlePlay}
+                        onPlay={handlePlayFull}
                         onPause={handlePause}
-                        onTap={handleTap}
+                        onTap={handleTapFull}
                       />
                     ))}
                   </div>
@@ -449,8 +499,11 @@ function HomePage() {
         onClose={() => setDetailStory(null)}
         onPlay={() => {
           if (detailStory) {
-            const idx = mono.storiesWithAudio.findIndex((s) => s.id === detailStory.id);
-            if (idx >= 0) mono.playFromInSection(idx, detailStory.section);
+            if (detailSource === "quick") {
+              handlePlayQuick(detailStory);
+            } else {
+              handlePlayFullInSection(detailStory);
+            }
           }
           setDetailStory(null);
         }}

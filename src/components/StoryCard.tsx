@@ -79,14 +79,20 @@ interface StoryCardProps {
   onPlay: (story: Story) => void;
   onPause: () => void;
   onTap?: (story: Story) => void;
+  // Shown under the Quick 15 pill (2026-07-06) — keeps each card's OWN
+  // section color/icon (per explicit request: no unified "Quick" styling),
+  // just prefixes the label so it's still clear this came from the curated
+  // mix rather than browsing that topic directly.
+  quickPick?: boolean;
 }
 
-function StoryCardBase({ story, isPlaying, hasAudio, isCompleted = false, language = "en", onPlay, onPause, onTap }: StoryCardProps) {
+function StoryCardBase({ story, isPlaying, hasAudio, isCompleted = false, language = "en", onPlay, onPause, onTap, quickPick = false }: StoryCardProps) {
   const section = resolveSection(story.section);
   const feed    = FEED_MAP.get(section);
   const accent  = SECTION_COLOR[section] ?? "#EF4444";
   const displayTitle  = getStoryTitle(story, language ?? "en");
-  const sectionLabel  = getSectionLabel(feed, language ?? "en") || story.section;
+  const rawSectionLabel = getSectionLabel(feed, language ?? "en") || story.section;
+  const sectionLabel  = quickPick ? `Quick pick · ${rawSectionLabel}` : rawSectionLabel;
 
   return (
     <div

@@ -15,7 +15,6 @@ import { fetchBriefing } from "@/lib/news/briefing.functions";
 import { useMonologue, getStoryTitle, getSectionLabel, getAudioUrl, readCompletedIds } from "@/hooks/useMonologue";
 import { useSavedStories } from "@/hooks/useSavedStories";
 import { useCityPreference } from "@/hooks/useCityPreference";
-import { useListenMode } from "@/hooks/useListenMode";
 import { useQuickConsumed } from "@/hooks/useQuickConsumed";
 import { buildQuickQueue, refreshQuickQueue } from "@/lib/news/quickQueue";
 import { PlayerScreen } from "@/components/PlayerScreen";
@@ -42,13 +41,26 @@ type PlayerContextValue = {
   // a city as soon as the admin has generated it, without waiting for its
   // static `available` flag in sources.ts to be flipped in a deploy.
   generatedCities: Set<CityId>;
-  // Full vs Quick 15 (2026-07-06) — Home reads this to swap its browse list
-  // (section-grouped vs the single diverse Quick 15 batch) to match what
-  // Play actually queues up; `mono.storiesWithAudio` already IS that batch
-  // when this is "quick", in the exact curated order.
-  listenMode: import("@/hooks/useListenMode").ListenMode;
-  // Manual refresh (2026-07-06) — swaps only already-consumed slots in the
-  // current Quick 15 batch for fresh unconsumed stories, in place. Disabled
+  // Quick 15 (2026-07-07 rewrite) — no longer a global mode; it's a
+  // permanent section/pill on Home that coexists with the real topic
+  // sections. `quickBatch` is the current curated 15-story list, built and
+  // kept ready regardless of whether anything's actively playing from it —
+  // Home renders this directly under the Quick 15 pill. `quickActive` is
+  // ONLY true while `mono` is actually bound to and playing through that
+  // batch (flips only in response to an explicit play action from either
+  // side — see playFromQuick/playFromFull — never just from browsing a
+  // pill), so switching which pill you're LOOKING at never disrupts
+  // whatever's currently playing.
+  quickBatch: Story[] | null;
+  quickActive: boolean;
+  playFromQuick: (idx: number) => void;
+  // `section`, when passed, scopes auto-advance to just that section (mirrors
+  // mono.playFromInSection) — needed so opening a story from StoryDetailSheet
+  // on a real section still auto-advances only within that section, matching
+  // its pre-Quick-15 behavior, instead of falling through into "all" mode.
+  playFromFull: (idx: number, section?: SectionId) => void;
+  // Manual refresh — swaps only already-consumed slots in the current Quick
+  // 15 batch for fresh unconsumed stories, in place. Disabled
   // (canRefreshQuick false) when nothing in the current batch has been
   // heard/skipped yet, since there'd be nothing to replace.
   canRefreshQuick: boolean;
@@ -154,27 +166,39 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     return set;
   }, [rawBriefing]);
 
-  // ── Quick 15 mode (2026-07-06) ──────────────────────────────────────────
-  // `briefing` above stays the full, normal per-section list — Home's browse
-  // list is unaffected by listen mode. Only the PLAYBACK queue fed into
-  // useMonologue changes: in "quick" mode it's a diverse, importance-weighted
-  // batch (see buildQuickQueue) instead of the full briefing, in the same
-  // `date`/shape useMonologue already expects, so resume/progress/completed
-  // tracking all keep working unmodified.
-  const { mode: listenMode } = useListenMode();
+  // ── Quick 15 (2026-07-07 rewrite — no longer a global mode) ─────────────
+  // `briefing` stays the full, normal per-section list at all times — Home's
+  // browse list for real sections is never affected by Quick 15 existing.
+  // `quickBatch` is built and kept ready as soon as the day's briefing loads,
+  // independent of whether it's currently playing or even being viewed, so
+  // it's ready the instant someone taps the pill.
   const quick = useQuickConsumed(briefing?.date);
   const [quickBatch, setQuickBatch] = useState<Story[] | null>(null);
+
+  // `quickActive` — true ONLY while `mono` is actually bound to and playing
+  // through the quick batch. Deliberately NOT tied to "which pill is being
+  // viewed": since Full and Quick share the one playback engine but use
+  // DIFFERENT underlying arrays, flipping this just from browsing would yank
+  // the array out from under whatever's already playing. It only changes in
+  // direct response to an explicit play action (playFromQuick/playFromFull).
+  const [quickActive, setQuickActive] = useState(false);
+  // Set alongside quickActive when that play action needs to wait for `mono`
+  // to actually finish rebinding to the new array before firing — see the
+  // effect below for why this can't just call mono.playFrom() synchronously.
+  // `section` carries through to playFromFull's section-scoped auto-advance
+  // (see PlayerContextValue.playFromFull); null means unscoped ("all" mode).
+  const [pendingPlay, setPendingPlay] = useState<{ idx: number; section: SectionId | null } | null>(null);
 
   // Avoids re-running the "build once" effect below every time a story is
   // marked consumed mid-batch — rebuilding on every consumption would yank
   // already-selected-but-not-yet-played stories out from under the queue
   // useMonologue is actively walking through. The ref always has the latest
-  // value for the deliberate, explicit rebuild points (mode switch, batch
-  // exhaustion) instead.
+  // value for the deliberate, explicit rebuild points (batch exhaustion,
+  // refresh) instead.
   const quickConsumedRef = useRef(quick.consumedIds);
   useEffect(() => { quickConsumedRef.current = quick.consumedIds; }, [quick.consumedIds]);
 
-  // Tracks the currently-playing story's id while in Quick mode, so we know
+  // Tracks the currently-playing story's id while quickActive, so we know
   // what to mark consumed when playback moves away from it (see the effect
   // near the bottom) AND so handleQuickQueueEnd (below) can synchronously
   // exclude the just-finished LAST story of a batch from the next one — that
@@ -182,39 +206,35 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // buildNextQuickBatch() to see it via quick.consumedIds/quickConsumedRef.
   const prevQuickStoryIdRef = useRef<string | null>(null);
 
-  // Excludes stories already heard/skipped via EITHER mode (2026-07-06,
-  // explicit request) — quickConsumedRef alone only covers what happened in
-  // Quick mode itself; a story fully heard in Full mode wouldn't otherwise
-  // be excluded from a fresh Quick 15 batch. readCompletedIds() reads the
-  // same localStorage source useMonologue's own completedIds is backed by,
-  // callable directly (no need to wait on `mono`, which doesn't exist yet
-  // when the very first batch is built).
+  // Excludes stories already heard/skipped via EITHER Full or Quick — a
+  // story fully heard in Full mode is excluded from Quick batches too.
+  // readCompletedIds() reads the same localStorage source useMonologue's own
+  // completedIds is backed by, callable directly (no need to wait on `mono`,
+  // which doesn't exist yet when the very first batch is built).
   const buildNextQuickBatch = useCallback((): Story[] | null => {
     if (!briefing) return null;
     const excludeIds = new Set([...quickConsumedRef.current, ...readCompletedIds(briefing.date)]);
     return buildQuickQueue(briefing.stories, excludeIds);
   }, [briefing]);
 
-  // Build the first batch when switching into Quick mode (or once the day's
-  // briefing loads while already in it). Deliberately NOT re-run on every
-  // quick.consumedIds change — see buildNextQuickBatch note above.
+  // Build the batch as soon as the day's briefing is available — always, not
+  // gated by any mode, so it's ready the moment Home renders the pill.
   useEffect(() => {
-    if (listenMode !== "quick") { setQuickBatch(null); return; }
+    if (!briefing) { setQuickBatch(null); return; }
     setQuickBatch((prev) => prev ?? buildNextQuickBatch());
-  }, [listenMode, buildNextQuickBatch]);
+  }, [briefing, buildNextQuickBatch]);
 
   // "Give me the next 15" — not a button anywhere, it's automatic: once the
   // current batch plays through to the end, load and immediately continue
   // into a fresh batch built from whatever's still unconsumed (per explicit
-  // decision: auto-refill, not a manual tap). onQueueEnd only fires for a
-  // natural end-of-"all"-queue, never for a manual stop() — see useMonologue.
+  // decision: auto-refill, never falls through to another section).
+  // onQueueEnd only fires for a natural end-of-"all"-queue, never for a
+  // manual stop() — see useMonologue.
   const [quickBatchVersion, setQuickBatchVersion] = useState(0);
   // Set when the batch "ends" but some of its OWN stories were never
   // actually heard — e.g. the user tapped a story further down the list,
   // jumping over earlier ones without them ever becoming "current" (so they
-  // were never marked consumed). Consumed by the effect below (needs `mono`,
-  // which isn't constructed yet at this point in the component).
-  const [quickResumeIdx, setQuickResumeIdx] = useState<number | null>(null);
+  // were never marked consumed).
   const handleQuickQueueEnd = useCallback(() => {
     // Explicitly (synchronously) exclude the batch's last story here, rather
     // than waiting for the generic "story changed" effect below to catch it
@@ -228,13 +248,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     }
 
     // Don't refill yet if the CURRENT batch still has an unheard story in it
-    // (2026-07-06, explicit decision) — finish the batch that's actually on
-    // screen before moving to a new one, rather than leaving a jumped-over
-    // story stranded and never played.
+    // — finish the batch that's actually on screen before moving to a new
+    // one, rather than leaving a jumped-over story stranded and never played.
     if (quickBatch) {
       const unheardIdx = quickBatch.findIndex((s) => !quickConsumedRef.current.has(s.id));
       if (unheardIdx >= 0) {
-        setQuickResumeIdx(unheardIdx);
+        setPendingPlay({ idx: unheardIdx, section: null });
         return;
       }
     }
@@ -243,53 +262,76 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setQuickBatchVersion((v) => v + 1);
   }, [buildNextQuickBatch, quick, quickBatch]);
 
-  // Manual "Refresh" (2026-07-06) — swaps out only the already-consumed
-  // (heard or skipped) slots in the CURRENT batch for fresh unconsumed
-  // stories, in place at their exact original index. Deliberately NOT a
-  // full rebuild: replacing in place means every story that hasn't been
-  // reached yet — including whatever's currently playing — keeps the exact
-  // same array position, so no resync of currentStoryIdx or the playing
-  // <audio> element is needed at all; playback just continues undisturbed.
-  const canRefreshQuick = listenMode === "quick" && !!quickBatch?.some((s) => quick.consumedIds.has(s.id));
+  // Manual "Refresh" — swaps out only the already-consumed (heard or
+  // skipped) slots in the CURRENT batch for fresh unconsumed stories, in
+  // place at their exact original index. Deliberately NOT a full rebuild:
+  // replacing in place means every story that hasn't been reached yet —
+  // including whatever's currently playing — keeps the exact same array
+  // position, so no resync of currentStoryIdx or the playing <audio> element
+  // is needed at all; playback just continues undisturbed. Available
+  // whenever the batch itself has consumed slots, regardless of quickActive
+  // — you can refresh the list while just browsing it, not only while it's
+  // the one playing.
+  const canRefreshQuick = !!quickBatch?.some((s) => quick.consumedIds.has(s.id));
   const refreshQuickBatch = useCallback(() => {
     if (!briefing || !quickBatch) return;
-    // refreshQuickQueue walks the final array left-to-right and picks each
-    // replacement against its actual final neighbor — not just a blind
-    // splice — which is what actually keeps voices alternating through a
-    // refresh (2026-07-06 fix; see quickQueue.ts for the full reasoning).
-    // Also never draws a replacement that's already been heard via Full mode.
     setQuickBatch(refreshQuickQueue(quickBatch, briefing.stories, quickConsumedRef.current, readCompletedIds(briefing.date)));
   }, [briefing, quickBatch]);
 
   const activeBriefing = useMemo((): DailyBriefing | null => {
-    if (listenMode !== "quick") return briefing;
+    if (!quickActive) return briefing;
     if (!briefing || !quickBatch) return null;
     return { ...briefing, stories: quickBatch };
-  }, [listenMode, briefing, quickBatch]);
+  }, [quickActive, briefing, quickBatch]);
 
   const mono = useMonologue({
     briefing: activeBriefing,
-    onQueueEnd: listenMode === "quick" ? handleQuickQueueEnd : undefined,
+    onQueueEnd: quickActive ? handleQuickQueueEnd : undefined,
   });
+
+  // Switching between Full and Quick is a deliberate two-step handshake, not
+  // a single synchronous call — `activeBriefing`/`mono` only reflect a new
+  // `quickActive` value on the NEXT render (React state updates aren't
+  // visible until then), so calling mono.playFrom() in the same tick as
+  // flipping quickActive would still hit the OLD array. Instead we set
+  // pendingPlay and let this effect fire the actual play once `mono` has
+  // genuinely rebound — checking storiesWithAudio[idx] exists handles the
+  // case where quickBatch itself was still null and needed a moment to build.
+  useEffect(() => {
+    if (pendingPlay === null) return;
+    if (!mono.storiesWithAudio[pendingPlay.idx]) return;
+    if (pendingPlay.section) mono.playFromInSection(pendingPlay.idx, pendingPlay.section);
+    else mono.playFrom(pendingPlay.idx);
+    setPendingPlay(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mono.storiesWithAudio, pendingPlay]);
+
+  const playFromQuick = useCallback((idx: number) => {
+    if (quickActive) { mono.playFrom(idx); return; }
+    setQuickActive(true);
+    setPendingPlay({ idx, section: null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quickActive]);
+
+  const playFromFull = useCallback((idx: number, section?: SectionId) => {
+    if (!quickActive) {
+      if (section) mono.playFromInSection(idx, section);
+      else mono.playFrom(idx);
+      return;
+    }
+    setQuickActive(false);
+    setPendingPlay({ idx, section: section ?? null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quickActive]);
 
   // Auto-continue into the freshly-built next batch once it lands (see
   // handleQuickQueueEnd above) — without this, the queue would correctly
   // refill but sit silently at idle instead of carrying on like radio.
   useEffect(() => {
     if (quickBatchVersion === 0) return; // skip the very first (non-refill) batch build
-    if (listenMode === "quick" && quickBatch && quickBatch.length > 0) mono.playAll();
+    if (quickActive && quickBatch && quickBatch.length > 0) mono.playAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [quickBatchVersion]);
-
-  // Resume into an unheard story still sitting in the CURRENT batch (see
-  // handleQuickQueueEnd above) — e.g. one that got jumped over earlier —
-  // instead of refilling with a brand new batch while it's stranded.
-  useEffect(() => {
-    if (quickResumeIdx === null) return;
-    mono.playFrom(quickResumeIdx);
-    setQuickResumeIdx(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quickResumeIdx]);
 
   // Mark a story "consumed" for Quick mode the moment playback moves past it
   // — on completion AND on skip (explicit decision: Quick mode is radio-like,
@@ -298,13 +340,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // separate completedIds/full-listen tracker instead). The batch's very
   // last story is instead handled synchronously in handleQuickQueueEnd above.
   useEffect(() => {
-    if (listenMode !== "quick") { prevQuickStoryIdRef.current = null; return; }
+    if (!quickActive) { prevQuickStoryIdRef.current = null; return; }
     const curId = mono.currentStory?.id ?? null;
     if (prevQuickStoryIdRef.current && prevQuickStoryIdRef.current !== curId) {
       quick.markConsumed(prevQuickStoryIdRef.current);
     }
     prevQuickStoryIdRef.current = curId;
-  }, [listenMode, mono.currentStory?.id, quick]);
+  }, [quickActive, mono.currentStory?.id, quick]);
 
   const saved = useSavedStories();
   const [playerOpen, setPlayerOpen] = useState(false);
@@ -337,7 +379,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     saved,
     openPlayer: () => setPlayerOpen(true),
     generatedCities,
-    listenMode,
+    quickBatch,
+    quickActive,
+    playFromQuick,
+    playFromFull,
     canRefreshQuick,
     refreshQuickBatch,
   };
