@@ -96,18 +96,23 @@ export const Route = createFileRoute("/")({
 // ── Hero Card ─────────────────────────────────────────────────────────────────
 
 function HeroCard({
-  briefing,
+  stories,
+  estimatedDurationSec,
   mono,
 }: {
-  briefing: NonNullable<ReturnType<typeof usePlayer>["briefing"]>;
+  // Whichever list is actually queued right now — the full day's briefing in
+  // Full mode, or the curated 15-story batch in Quick mode (2026-07-06) — so
+  // the hero's story count / listen time always matches what Play queues up.
+  stories: Story[];
+  estimatedDurationSec?: number;
   mono: ReturnType<typeof usePlayer>["mono"];
 }) {
-  const displayStory = mono.currentStory ?? briefing.stories[0];
+  const displayStory = mono.currentStory ?? stories[0];
 
-  const withAudio = briefing.stories.filter((s) => !!getAudioUrl(s, mono.language));
+  const withAudio = stories.filter((s) => !!getAudioUrl(s, mono.language));
   // Use meta duration if available, else estimate from word counts (~150 WPM)
-  const listenMins = briefing.meta?.estimatedDurationSec
-    ? Math.max(1, Math.round(briefing.meta.estimatedDurationSec / 60))
+  const listenMins = estimatedDurationSec
+    ? Math.max(1, Math.round(estimatedDurationSec / 60))
     : Math.max(1, Math.round(withAudio.reduce((n, s) => n + (s.wordCount ?? 115), 0) / 150));
   const today = new Date().toLocaleDateString("en-IN", {
     weekday: "short", day: "numeric", month: "long",
@@ -153,7 +158,7 @@ function HeroCard({
           {/* Story count */}
           <div className="flex items-center gap-2.5">
             <span className="text-[11px] text-white/45 font-medium">
-              {briefing.stories.length} stories
+              {stories.length} stories
             </span>
           </div>
         </div>
@@ -167,7 +172,8 @@ function HeroCard({
 function HomePage() {
   // Player + briefing now live in the app-wide PlayerProvider so audio keeps
   // playing across tab changes.
-  const { mono, briefing, isLoading, saved: savedStories } = usePlayer();
+  const { mono, briefing, isLoading, saved: savedStories, listenMode } = usePlayer();
+  const isQuickMode = listenMode === "quick";
 
   const [detailStory, setDetailStory] = useState<Story | null>(null);
   const [activeSection, setActiveSection] = useState<SectionId | null>(null);
@@ -319,41 +325,72 @@ function HomePage() {
 
       {briefing && (
         <>
-          {/* Hero card */}
-          <HeroCard briefing={briefing} mono={mono} />
+          {/* Hero card — reflects whichever list is actually queued right now */}
+          <HeroCard
+            stories={isQuickMode ? mono.storiesWithAudio : briefing.stories}
+            estimatedDurationSec={isQuickMode ? undefined : briefing.meta?.estimatedDurationSec}
+            mono={mono}
+          />
 
-          {/* Section pills */}
-          <div
-            ref={pillsRef}
-            className="flex gap-2 overflow-x-auto px-4 pb-3"
-            style={{ scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}
-          >
-            {storiesBySection.map((g) => {
-              const id       = g.sectionId;
-              const label    = g.feed?.label ?? id;
-              const isActive = currentSection === id;
-              return (
-                <button
-                  key={id}
-                  onClick={() => setActiveSection(id)}
-                  className={`shrink-0 rounded-full border px-3.5 py-1 text-xs font-semibold transition-all whitespace-nowrap ${
-                    isActive
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "border-border bg-muted/60 text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </div>
+          {/* Section pills — Full mode only; Quick 15 is one diverse cross-section list */}
+          {!isQuickMode && (
+            <div
+              ref={pillsRef}
+              className="flex gap-2 overflow-x-auto px-4 pb-3"
+              style={{ scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}
+            >
+              {storiesBySection.map((g) => {
+                const id       = g.sectionId;
+                const label    = g.feed?.label ?? id;
+                const isActive = currentSection === id;
+                return (
+                  <button
+                    key={id}
+                    onClick={() => setActiveSection(id)}
+                    className={`shrink-0 rounded-full border px-3.5 py-1 text-xs font-semibold transition-all whitespace-nowrap ${
+                      isActive
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-border bg-muted/60 text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
-          {/* Story list — grouped by section, filtered by active pill */}
+          {/* Story list — Quick 15: one flat list in the curated diverse order
+              (mono.storiesWithAudio IS the queue Play uses, unmodified, so
+              what's shown always matches what's playing/queued). Full mode:
+              grouped by section, filtered by the active pill, as before. */}
           <div
             className="flex-1 overflow-y-auto px-4 pb-4"
             style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 148px)" }}
           >
-            {groupsToRender.map(({ sectionId, feed, stories }) => {
+            {isQuickMode ? (
+              <section className="mb-5">
+                <div className="flex items-center gap-2 px-1 pt-2 pb-2">
+                  <h2 className="truncate text-sm font-semibold text-foreground">Quick 15</h2>
+                  <span className="text-[11px] text-muted-foreground">{mono.storiesWithAudio.length}</span>
+                </div>
+                <div className="space-y-2">
+                  {mono.storiesWithAudio.map((story) => (
+                    <StoryCard
+                      key={story.id}
+                      story={story}
+                      language={mono.language}
+                      isPlaying={mono.currentStory?.id === story.id && mono.state === "playing"}
+                      hasAudio={!!getAudioUrl(story, mono.language)}
+                      isCompleted={mono.completedIds.has(story.id)}
+                      onPlay={handlePlay}
+                      onPause={handlePause}
+                      onTap={handleTap}
+                    />
+                  ))}
+                </div>
+              </section>
+            ) : groupsToRender.map(({ sectionId, feed, stories }) => {
               const label = feed?.label ?? sectionId;
               return (
                 <section key={sectionId} className="mb-5">

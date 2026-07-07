@@ -42,6 +42,11 @@ type PlayerContextValue = {
   // a city as soon as the admin has generated it, without waiting for its
   // static `available` flag in sources.ts to be flipped in a deploy.
   generatedCities: Set<CityId>;
+  // Full vs Quick 15 (2026-07-06) — Home reads this to swap its browse list
+  // (section-grouped vs the single diverse Quick 15 batch) to match what
+  // Play actually queues up; `mono.storiesWithAudio` already IS that batch
+  // when this is "quick", in the exact curated order.
+  listenMode: import("@/hooks/useListenMode").ListenMode;
 };
 
 const PlayerCtx = createContext<PlayerContextValue | null>(null);
@@ -271,6 +276,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     saved,
     openPlayer: () => setPlayerOpen(true),
     generatedCities,
+    listenMode,
   };
 
   return (
