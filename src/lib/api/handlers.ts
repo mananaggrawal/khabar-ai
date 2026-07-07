@@ -353,15 +353,15 @@ export async function handleCron(request: Request): Promise<Response> {
     const logWriter = await createLiveLogWriter(dateKey, "cron");
     let succeeded = false;
     try {
-      // Must match the languages the app actually offers (en + hi — ta/mr are
-      // unchecked by default in the admin panel and not exposed to readers).
-      // Cron used to call this with NO languages arg, which defaulted to
-      // English-only inside generateDailyBriefing(); since a run REPLACES the
-      // whole day's briefing (not a merge), an English-only cron run after an
-      // earlier en+hi manual run wiped that day's Hindi scripts/audio outright
-      // — readers on Hindi would see English titles with no Hindi audio at all
-      // ("no voice") until the next en+hi run regenerated it.
-      await generateDailyBriefing(logWriter.log, "edge", ["en", "hi"]);
+      // TEMPORARY (2026-07-06): English-only for now, per explicit request —
+      // was ["en", "hi"]. NOTE for whoever re-enables Hindi: a run REPLACES
+      // the whole day's briefing rather than merging, so an English-only run
+      // after an earlier en+hi run wipes that day's Hindi scripts/audio
+      // outright — readers on Hindi would see English titles with no Hindi
+      // audio at all ("no voice") until the next en+hi run regenerates it.
+      // Re-add "hi" here (and consider a manual en+hi run the same day) once
+      // Hindi is turned back on.
+      await generateDailyBriefing(logWriter.log, "edge", ["en"]);
       succeeded = true;
     } catch (e: any) {
       console.error("[cron] generation failed:", e?.message ?? e);
