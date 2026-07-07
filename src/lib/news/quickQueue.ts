@@ -6,15 +6,24 @@
  * with an updated exclude set. No pipeline/backend change needed.
  *
  * Selection:
- *  1. Any not-yet-consumed "headlines" stories go first (small, must-cover
- *     tier — these are the cross-cutting major stories of the day).
- *  2. The rest fill round-robin across the remaining sections, in a shuffled
- *     visit order each call (so it's not the same lineup every time), always
- *     taking the next MOST IMPORTANT not-yet-consumed story within a section
- *     before moving to that section's next pick. `stories` is assumed
- *     already importance-ordered within each section — true here because it
- *     comes straight from the generation pipeline's own importance-ordered
- *     list (see generator.ts clusterAndSelect's single-LLM ordering pass);
+ *  1. A CAPPED lead-in of the top not-yet-consumed "headlines" stories (about
+ *     20% of the batch, minimum 2) — enough to guarantee the day's biggest
+ *     cross-cutting stories are covered without letting them swallow the
+ *     whole batch. BUG FIX (2026-07-06): this used to take ALL not-yet-
+ *     consumed headlines with no cap — on a headlines-heavy day that filled
+ *     the entire 15-story batch before the round-robin step ever ran,
+ *     producing an all-headlines batch instead of a diverse cross-section
+ *     mix, defeating the actual point of Quick 15.
+ *  2. The rest fill round-robin across ALL remaining sections — including
+ *     any leftover headlines past the cap, which now compete fairly for
+ *     slots alongside every other section instead of being either
+ *     first-in-line or excluded — in a shuffled visit order each call (so
+ *     it's not the same lineup every time), always taking the next MOST
+ *     IMPORTANT not-yet-consumed story within a section before moving to
+ *     that section's next pick. `stories` is assumed already
+ *     importance-ordered within each section — true here because it comes
+ *     straight from the generation pipeline's own importance-ordered list
+ *     (see generator.ts clusterAndSelect's single-LLM ordering pass);
  *     filtering by section preserves that relative order.
  *
  * This gives cross-section diversity and a bit of day-to-day variety while
@@ -26,6 +35,8 @@
 import type { Story } from "@/lib/news/generator";
 
 export const QUICK_BATCH_SIZE = 15;
+const HEADLINES_LEAD_SHARE = 0.2; // ~20% of the batch, minimum 2
+const HEADLINES_LEAD_MIN = 2;
 
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
@@ -50,12 +61,18 @@ export function buildQuickQueue(
 
   const result: Story[] = [];
 
+  const headlinesCap = Math.max(HEADLINES_LEAD_MIN, Math.round(count * HEADLINES_LEAD_SHARE));
   const headlines = bySection.get("headlines") ?? [];
-  bySection.delete("headlines");
-  for (const s of headlines) {
+  const headlinesLead = headlines.slice(0, headlinesCap);
+  const headlinesRest = headlines.slice(headlinesCap);
+  for (const s of headlinesLead) {
     if (result.length >= count) break;
     result.push(s);
   }
+  // Leftover headlines go back into the pool as just another section, so they
+  // compete fairly for the remaining slots instead of being fully excluded.
+  if (headlinesRest.length > 0) bySection.set("headlines", headlinesRest);
+  else bySection.delete("headlines");
 
   const sectionIds = shuffle([...bySection.keys()]);
   const cursors = new Map(sectionIds.map((id) => [id, 0]));
