@@ -1,13 +1,11 @@
 /**
  * Tracks which story ids have been "consumed" in Quick 15 mode today
- * (2026-07-06). Deliberately separate from useMonologue's `completedIds` —
- * that tracker only marks a story once it's heard all the way to the end,
- * which is the right definition for the normal "listened" checkmark
- * elsewhere in the app. Quick mode behaves more like radio: per explicit
- * product decision, skipping a story in Quick mode should still keep it from
- * repeating in the next Quick 15 batch, even though it shouldn't falsely show
- * up as "listened" in Home's normal per-section list. Hence its own
- * localStorage key, reset daily just like COMPLETED_KEY.
+ * (2026-07-06). Kept separate from useMonologue's `completedIds` even though
+ * skipping now marks a story "listened" there too (2026-07-06 follow-up,
+ * applies everywhere, not just Quick mode) — this set exists specifically so
+ * buildQuickQueue can exclude a story the instant it's passed, synchronously,
+ * without waiting on the async Supabase-backed completedIds round trip.
+ * Reset daily, same pattern as useMonologue's COMPLETED_KEY.
  */
 import { useCallback, useEffect, useState } from "react";
 

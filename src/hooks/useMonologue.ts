@@ -383,6 +383,20 @@ export function useMonologue({
       const story = storiesWithAudio[idx];
       if (!story) { setState("idle"); setCurrentStoryIdx(-1); return; }
 
+      // BUG FIX/FEATURE (2026-07-06): skipping away from a story — next(),
+      // prev(), tapping a different story, or auto-advance — now marks it
+      // "listened" too, not just playing it to the very end. currentIdxRef
+      // still holds the OLD story here (it's only synced to currentStoryIdx
+      // by a separate effect, which hasn't run yet for this synchronous
+      // call), so this fires exactly once per real transition away from a
+      // story. Auto-advance already calls markCompleted itself in the
+      // 'ended' handler before reaching here — markCompleted no-ops on an
+      // id it's already recorded, so that overlap is harmless.
+      const prevIdx = currentIdxRef.current;
+      if (prevIdx >= 0 && prevIdx !== idx) {
+        markCompleted(storiesWithAudio[prevIdx]?.id);
+      }
+
       const url = getAudioUrl(story, language)!;
       const seekTo = startAt > 0 ? startAt : (story.audioStartSec ?? 0);
 
@@ -447,7 +461,7 @@ export function useMonologue({
         setError(e?.message ?? "Playback blocked — tap again");
       });
     },
-    [storiesWithAudio, language, attachAudio, onQueueEnd],
+    [storiesWithAudio, language, attachAudio, onQueueEnd, markCompleted],
   );
 
   useEffect(() => { playAtRef.current = playAt; }, [playAt]);
