@@ -106,7 +106,19 @@ async function fetchCompleted(date: string): Promise<string[]> {
   } catch { return []; }
 }
 
-export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
+export function useMonologue({
+  briefing,
+  onQueueEnd,
+}: {
+  briefing: DailyBriefing | null;
+  // Fires when an "all"-mode queue runs off the end of storiesWithAudio
+  // naturally (2026-07-06, added for Quick 15 mode) — NOT on a manual stop()
+  // or a section-mode boundary (that's a different, unrelated early-exit
+  // branch below). PlayerProvider uses this single hook to know "the batch
+  // finished, build and start the next one" without useMonologue needing to
+  // know anything about Quick mode itself.
+  onQueueEnd?: () => void;
+}) {
   const [state, setState]               = useState<MonologueState>("idle");
   const [progress, setProgress]         = useState(0);
   const [duration, setDuration]         = useState(0);
@@ -392,6 +404,7 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
             if (next >= storiesWithAudio.length) {
               setState("idle"); setCurrentStoryIdx(-1); setQueueMode(null);
               try { localStorage.removeItem(RESUME_KEY); } catch {}
+              if (mode === "all") onQueueEnd?.();
               return;
             }
             if (mode !== "all" && storiesWithAudio[next]?.section !== mode) {
@@ -434,7 +447,7 @@ export function useMonologue({ briefing }: { briefing: DailyBriefing | null }) {
         setError(e?.message ?? "Playback blocked — tap again");
       });
     },
-    [storiesWithAudio, language, attachAudio],
+    [storiesWithAudio, language, attachAudio, onQueueEnd],
   );
 
   useEffect(() => { playAtRef.current = playAt; }, [playAt]);
