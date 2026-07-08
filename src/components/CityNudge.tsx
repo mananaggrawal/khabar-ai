@@ -13,13 +13,20 @@
  *
  * This intentionally fires before NotificationNudge (see CITY_RESOLVED_EVENT)
  * so the two first-open prompts don't compete for attention.
+ *
+ * `shouldPrompt` is passed in rather than computed here (2026-07-08) — the
+ * route shell (_authenticated/route.tsx) needs the same async
+ * isFirstEverLogin() result to gate Home's rendering via useOnboardingGate,
+ * so it owns the single useShouldPromptCity() call and hands the result down
+ * to avoid running that check twice.
  */
 import { useEffect, useState } from "react";
 import { MapPin, Languages } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CITIES, type CityId } from "@/lib/news/sources";
-import { useCityPreference, useShouldPromptCity } from "@/hooks/useCityPreference";
+import { useCityPreference } from "@/hooks/useCityPreference";
 import { LANGUAGES, useLanguagePreference, readAvailableLanguages, type LanguageCode } from "@/hooks/useLanguagePreference";
+import { markOnboardingDone } from "@/hooks/useOnboardingGate";
 import { usePlayer } from "@/context/player";
 import {
   Dialog,
@@ -31,10 +38,9 @@ import {
 
 type Step = "city" | "language";
 
-export function CityNudge() {
+export function CityNudge({ shouldPrompt }: { shouldPrompt: boolean }) {
   const { selectCity } = useCityPreference();
   const { selectLanguage } = useLanguagePreference();
-  const { shouldPrompt } = useShouldPromptCity();
   const { generatedCities } = usePlayer();
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<Step>("city");
@@ -61,6 +67,7 @@ export function CityNudge() {
 
   function chooseLanguage(code: LanguageCode) {
     selectLanguage(code);
+    markOnboardingDone(); // unblocks Home via useOnboardingGate
     setOpen(false);
   }
 

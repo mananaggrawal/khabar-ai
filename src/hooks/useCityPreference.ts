@@ -117,14 +117,20 @@ async function isFirstEverLogin(): Promise<boolean> {
  */
 export function useShouldPromptCity() {
   const [shouldPrompt, setShouldPrompt] = useState(false);
+  // Whether the (possibly async) check above has actually finished — added
+  // 2026-07-08 alongside useOnboardingGate, which needs to know "still
+  // checking" vs. "checked, nothing to ask" vs. "checked, please ask" as
+  // three distinct states rather than collapsing the first two into one.
+  const [resolved, setResolved] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    if (hasCityBeenAsked()) return;
+    if (hasCityBeenAsked()) { setResolved(true); return; }
     isFirstEverLogin().then((isNew) => {
       if (cancelled) return;
       if (isNew) setShouldPrompt(true);
       else markCityAsked(); // nothing to ask this user — unblock NotificationNudge
+      setResolved(true);
     });
     return () => { cancelled = true; };
   }, []);
@@ -134,5 +140,5 @@ export function useShouldPromptCity() {
     setShouldPrompt(false);
   }, []);
 
-  return { shouldPrompt, dismiss };
+  return { shouldPrompt, resolved, dismiss };
 }
