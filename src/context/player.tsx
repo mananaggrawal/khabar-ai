@@ -8,6 +8,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
+import { useRouterState } from "@tanstack/react-router";
 import { motion, AnimatePresence } from "motion/react";
 import { Play, Pause, SkipBack, SkipForward } from "lucide-react";
 
@@ -400,17 +401,31 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     refreshQuickBatch,
   };
 
+  // Defensive guard (2026-07-08) — PlayerProvider deliberately lives above
+  // every route so audio survives normal tab navigation (Home → Saved →
+  // Settings), but that also means the mini-player would otherwise keep
+  // floating on top of /auth if playback was active right when the session
+  // ended (e.g. sign-out — now also stopped explicitly at that call site,
+  // see settings.tsx's signOut()). Belt-and-suspenders: never render either
+  // player surface on the signed-out screen, regardless of how it got there.
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const onAuthPage = pathname.startsWith("/auth");
+
   return (
     <PlayerCtx.Provider value={value}>
       {children}
-      <MiniPlayer mono={mono} onOpen={() => setPlayerOpen(true)} />
-      <PlayerScreen
-        mono={mono}
-        visible={playerOpen}
-        onClose={() => setPlayerOpen(false)}
-        isSaved={mono.currentStory ? saved.isSaved(mono.currentStory.id) : false}
-        onSave={() => mono.currentStory && saved.toggle(mono.currentStory)}
-      />
+      {!onAuthPage && (
+        <>
+          <MiniPlayer mono={mono} onOpen={() => setPlayerOpen(true)} />
+          <PlayerScreen
+            mono={mono}
+            visible={playerOpen}
+            onClose={() => setPlayerOpen(false)}
+            isSaved={mono.currentStory ? saved.isSaved(mono.currentStory.id) : false}
+            onSave={() => mono.currentStory && saved.toggle(mono.currentStory)}
+          />
+        </>
+      )}
     </PlayerCtx.Provider>
   );
 }

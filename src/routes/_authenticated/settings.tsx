@@ -62,6 +62,12 @@ function SettingsPage() {
   }
 
   async function signOut() {
+    // Stop playback first (2026-07-08 fix) — PlayerProvider lives above the
+    // routes so audio survives normal tab navigation, but that meant signing
+    // out while something was playing left the mini-player floating on top
+    // of the signed-out /auth screen, fully interactive, with no session
+    // behind it at all.
+    mono.stop();
     await supabase.auth.signOut();
     router.navigate({ to: "/auth" });
   }
