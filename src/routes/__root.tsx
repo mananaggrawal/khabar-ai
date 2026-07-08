@@ -14,8 +14,7 @@ import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 import { PlayerProvider } from "@/context/player";
 import { CityNudge } from "@/components/CityNudge";
-import { useShouldPromptCity } from "@/hooks/useCityPreference";
-import { useOnboardingGate } from "@/hooks/useOnboardingGate";
+import { useOnboarding } from "@/hooks/useOnboardingGate";
 import { VoiceOrb } from "@/components/VoiceOrb";
 
 // Absolute base URL for social-share previews. Set VITE_PUBLIC_URL in Render for
@@ -159,15 +158,14 @@ function OnboardingGateScreen() {
 function OnboardingGate({ children }: { children: ReactNode }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const isAuthPage = pathname.startsWith("/auth");
-  const { shouldPrompt, resolved } = useShouldPromptCity();
-  const ready = useOnboardingGate(shouldPrompt, resolved);
+  const { shouldPrompt, ready, userId } = useOnboarding();
 
   if (isAuthPage) return <>{children}</>;
 
   return (
     <>
       {ready ? children : <OnboardingGateScreen />}
-      <CityNudge shouldPrompt={shouldPrompt} />
+      <CityNudge shouldPrompt={shouldPrompt} userId={userId} />
     </>
   );
 }

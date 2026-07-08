@@ -11,14 +11,14 @@
  * suppressed, so the only way through is picking an option on each step. The
  * user can still change either choice anytime from Settings afterward.
  *
- * This intentionally fires before NotificationNudge (see CITY_RESOLVED_EVENT)
- * so the two first-open prompts don't compete for attention.
+ * This intentionally fires before NotificationNudge so the two first-open
+ * prompts don't compete for attention.
  *
- * `shouldPrompt` is passed in rather than computed here (2026-07-08) — the
- * route shell (_authenticated/route.tsx) needs the same async
- * isFirstEverLogin() result to gate Home's rendering via useOnboardingGate,
- * so it owns the single useShouldPromptCity() call and hands the result down
- * to avoid running that check twice.
+ * `shouldPrompt` and `userId` are passed in rather than computed here
+ * (2026-07-08) — the root shell (__root.tsx) needs the same async
+ * first-login check to gate the whole app's rendering via useOnboarding(),
+ * so it owns the single call and hands the result down to avoid running
+ * that check twice.
  */
 import { useEffect, useState } from "react";
 import { MapPin, Languages } from "lucide-react";
@@ -38,7 +38,7 @@ import {
 
 type Step = "city" | "language";
 
-export function CityNudge({ shouldPrompt }: { shouldPrompt: boolean }) {
+export function CityNudge({ shouldPrompt, userId }: { shouldPrompt: boolean; userId: string | null }) {
   const { selectCity } = useCityPreference();
   const { selectLanguage } = useLanguagePreference();
   const { generatedCities } = usePlayer();
@@ -61,13 +61,13 @@ export function CityNudge({ shouldPrompt }: { shouldPrompt: boolean }) {
   }, [open]);
 
   function chooseCity(id: CityId) {
-    selectCity(id); // also marks the city step resolved internally
+    selectCity(id);
     setStep("language");
   }
 
   function chooseLanguage(code: LanguageCode) {
     selectLanguage(code);
-    markOnboardingDone(); // unblocks Home via useOnboardingGate
+    markOnboardingDone(userId); // unblocks the app via useOnboarding, scoped to this user
     setOpen(false);
   }
 
