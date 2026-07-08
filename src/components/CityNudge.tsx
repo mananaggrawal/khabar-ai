@@ -5,8 +5,11 @@
  * selectable for city; the rest unlock the moment the admin has actually
  * generated that city (usePlayer().generatedCities) — not only once its
  * static `available` flag in @/lib/news/sources is flipped in a deploy.
- * Both steps are skippable; the user can change either choice anytime from
- * Settings.
+ *
+ * NEITHER step is skippable (2026-07-08, explicit request) — no "Skip for
+ * now" buttons, no "X" close affordance, and Escape/outside-click are both
+ * suppressed, so the only way through is picking an option on each step. The
+ * user can still change either choice anytime from Settings afterward.
  *
  * This intentionally fires before NotificationNudge (see CITY_RESOLVED_EVENT)
  * so the two first-open prompts don't compete for attention.
@@ -24,7 +27,6 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
-  DialogFooter,
 } from "@/components/ui/dialog";
 
 type Step = "city" | "language";
@@ -32,7 +34,7 @@ type Step = "city" | "language";
 export function CityNudge() {
   const { selectCity } = useCityPreference();
   const { selectLanguage } = useLanguagePreference();
-  const { shouldPrompt, dismiss } = useShouldPromptCity();
+  const { shouldPrompt } = useShouldPromptCity();
   const { generatedCities } = usePlayer();
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<Step>("city");
@@ -57,31 +59,20 @@ export function CityNudge() {
     setStep("language");
   }
 
-  function skipCity() {
-    dismiss(); // marks the city step resolved (asked-and-skipped)
-    setStep("language");
-  }
-
   function chooseLanguage(code: LanguageCode) {
     selectLanguage(code);
     setOpen(false);
   }
 
-  function skipLanguage() {
-    setOpen(false);
-  }
-
-  // Overlay click / Escape — close entirely rather than forcing the user
-  // through whichever step they were on if they clearly just want out.
-  function handleOpenChange(next: boolean) {
-    if (next) return;
-    if (step === "city") dismiss();
-    setOpen(false);
-  }
-
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-sm rounded-3xl">
+    <Dialog open={open} onOpenChange={() => { /* mandatory — no-op, can't be closed except by choosing */ }}>
+      <DialogContent
+        className="max-w-sm rounded-3xl"
+        hideCloseButton
+        onEscapeKeyDown={(e) => e.preventDefault()}
+        onPointerDownOutside={(e) => e.preventDefault()}
+        onInteractOutside={(e) => e.preventDefault()}
+      >
         {step === "city" ? (
           <>
             <DialogHeader>
@@ -119,15 +110,6 @@ export function CityNudge() {
                 );
               })}
             </div>
-
-            <DialogFooter className="mt-2 sm:flex-col sm:space-x-0 sm:gap-2">
-              <button
-                onClick={skipCity}
-                className="w-full rounded-2xl px-5 py-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-black/[0.02]"
-              >
-                Skip for now
-              </button>
-            </DialogFooter>
           </>
         ) : (
           <>
@@ -169,15 +151,6 @@ export function CityNudge() {
                 );
               })}
             </div>
-
-            <DialogFooter className="mt-2 sm:flex-col sm:space-x-0 sm:gap-2">
-              <button
-                onClick={skipLanguage}
-                className="w-full rounded-2xl px-5 py-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-black/[0.02]"
-              >
-                Skip for now
-              </button>
-            </DialogFooter>
           </>
         )}
       </DialogContent>
