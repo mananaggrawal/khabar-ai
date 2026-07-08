@@ -358,9 +358,23 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const canRefreshQuick = !!quickBatch?.some((s) => isQuickSlotStale(s.id));
   const refreshQuickBatch = useCallback(() => {
     if (!briefing || !quickBatch) return;
+    // Which SLOTS in the current batch need replacing — current-batch-scoped
+    // is correct here, since refreshQuickQueue walks exactly this array.
     const staleIds = new Set(quickBatch.filter((s) => isQuickSlotStale(s.id)).map((s) => s.id));
-    setQuickBatch(refreshQuickQueue(quickBatch, briefing.stories, staleIds, readCompletedIds(briefing.date)));
-  }, [briefing, quickBatch, isQuickSlotStale]);
+    // BUG FIX (2026-07-08): which ids to AVOID drawing IN as replacements
+    // must be the FULL historical quick.consumedIds — not just staleIds
+    // above, which only covers what's stale in the CURRENT batch. A story
+    // consumed in an EARLIER Quick 15 batch (already scrolled past, no
+    // longer present in `quickBatch` at all) was never in that scoped set,
+    // so it was eligible to get redrawn as a "fresh" replacement here —
+    // exactly the "refresh gives me stories I've already heard" bug.
+    const excludeFromPool = new Set([
+      ...quickConsumedRef.current,
+      ...mono.completedIds,
+      ...readCompletedIds(briefing.date),
+    ]);
+    setQuickBatch(refreshQuickQueue(quickBatch, briefing.stories, staleIds, excludeFromPool));
+  }, [briefing, quickBatch, isQuickSlotStale, mono.completedIds]);
 
   const saved = useSavedStories();
   const [playerOpen, setPlayerOpen] = useState(false);

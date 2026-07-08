@@ -203,6 +203,17 @@ function HomePage() {
   // day's briefing, matching useMonologue's own audio filter exactly).
   const fullStoriesWithAudio = (briefing?.stories ?? []).filter((s) => !!getAudioUrl(s, mono.language));
 
+  // BUG FIX (2026-07-08): must apply the SAME audio filter useMonologue uses
+  // internally (storiesWithAudio = briefing.stories.filter(hasAudio)) before
+  // computing any index into it. Previously the Quick 15 list rendered and
+  // indexed the RAW `quickBatch` array — if even one story in it lacked
+  // audio in the current language, every index from that point on was off
+  // by however many such stories preceded it, since mono.playFrom(idx)
+  // actually indexes into the audio-FILTERED array. Tapping story N would
+  // silently play whatever landed at position N in that shorter array —
+  // reported as "random stories playing."
+  const quickStoriesWithAudio = (quickBatch ?? []).filter((s) => !!getAudioUrl(s, mono.language));
+
   // Plain list card Play button — unscoped "all" auto-advance, matching the
   // pre-Quick-15 behavior of the full story list.
   const handlePlayFull = useCallback((story: Story) => {
@@ -216,9 +227,9 @@ function HomePage() {
     if (idx >= 0) playFromFull(idx, resolveSection(story.section));
   }, [fullStoriesWithAudio, playFromFull]);
   const handlePlayQuick = useCallback((story: Story) => {
-    const idx = (quickBatch ?? []).findIndex((s) => s.id === story.id);
+    const idx = quickStoriesWithAudio.findIndex((s) => s.id === story.id);
     if (idx >= 0) playFromQuick(idx);
-  }, [quickBatch, playFromQuick]);
+  }, [quickStoriesWithAudio, playFromQuick]);
   const handlePause = useCallback(() => { mono.pause(); }, [mono.pause]);
   const handleTapFull = useCallback((story: Story) => {
     detailFollowsRef.current = currentIdRef.current === story.id;
@@ -421,7 +432,7 @@ function HomePage() {
               <section className="mb-5">
                 <div className="flex items-center gap-2 px-1 pt-2 pb-2">
                   <h2 className="truncate text-sm font-semibold text-foreground">Quick 15</h2>
-                  <span className="text-[11px] text-muted-foreground">{quickBatch?.length ?? 0}</span>
+                  <span className="text-[11px] text-muted-foreground">{quickStoriesWithAudio.length}</span>
                   {/* Refreshes only the already-heard/skipped slots — whatever's
                       currently playing (or not yet reached) is untouched
                       (2026-07-06). Hidden once nothing's been consumed yet in
@@ -438,13 +449,13 @@ function HomePage() {
                   )}
                 </div>
                 <div className="space-y-2">
-                  {(quickBatch ?? []).map((story) => (
+                  {quickStoriesWithAudio.map((story) => (
                     <StoryCard
                       key={story.id}
                       story={story}
                       language={mono.language}
                       isPlaying={quickActive && mono.currentStory?.id === story.id && mono.state === "playing"}
-                      hasAudio={!!getAudioUrl(story, mono.language)}
+                      hasAudio
                       isCompleted={mono.completedIds.has(story.id)}
                       onPlay={handlePlayQuick}
                       onPause={handlePause}
