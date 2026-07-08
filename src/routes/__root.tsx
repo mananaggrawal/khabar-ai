@@ -4,6 +4,7 @@ import {
   Link,
   createRootRouteWithContext,
   useRouter,
+  useRouterState,
   HeadContent,
   Scripts,
 } from "@tanstack/react-router";
@@ -12,6 +13,10 @@ import { useEffect, type ReactNode } from "react";
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 import { PlayerProvider } from "@/context/player";
+import { CityNudge } from "@/components/CityNudge";
+import { useShouldPromptCity } from "@/hooks/useCityPreference";
+import { useOnboardingGate } from "@/hooks/useOnboardingGate";
+import { VoiceOrb } from "@/components/VoiceOrb";
 
 // Absolute base URL for social-share previews. Set VITE_PUBLIC_URL in Render for
 // guaranteed-absolute og:image (WhatsApp/iMessage need absolute); falls back to a
@@ -118,6 +123,55 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
   errorComponent: ErrorComponent,
 });
 
+// Shown instead of the real app while the mandatory city/language onboarding
+// (see CityNudge) is still unresolved for a brand-new signup — otherwise
+// whichever page the user lands on (Home included) would flash its content
+// for a moment underneath the dialog right after login (2026-07-08).
+function OnboardingGateScreen() {
+  return (
+    <div className="fixed inset-0 z-10 flex flex-col items-center justify-center gap-5 bg-background">
+      <VoiceOrb state="idle" size={160} />
+      <div className="flex flex-col items-center gap-1">
+        <span className="font-serif text-2xl tracking-tight">
+          Khabar <em className="italic text-primary">AI</em>
+        </span>
+        <p className="text-xs text-muted-foreground animate-pulse">Setting things up…</p>
+      </div>
+    </div>
+  );
+}
+
+// BUG FIX (2026-07-08): this used to live in _authenticated/route.tsx,
+// wrapping only that layout's <Outlet /> — but "/" (Home, routes/index.tsx)
+// is a SEPARATE top-level route, a sibling of "_authenticated" rather than a
+// child of it (TanStack Router's file-based routing doesn't nest a bare
+// routes/index.tsx under routes/_authenticated/ just because they're both
+// under src/routes/). So the gate was never actually wrapping Home at all —
+// Home rendered immediately and unblocked, while CityNudge only ever
+// appeared once the user navigated into an actual _authenticated/* page
+// (Settings, History, Browse), which is exactly the "asks me on Settings,
+// but showed Home first" behavior reported. Moved here, to the one common
+// ancestor of every route, so it actually gates everything including Home.
+//
+// Skips gating entirely on /auth — that page has no logged-in user yet, so
+// running the check there would just add a pointless blocking flash in
+// front of the login screen itself before resolving unblocked.
+function OnboardingGate({ children }: { children: ReactNode }) {
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const isAuthPage = pathname.startsWith("/auth");
+  const { shouldPrompt, resolved } = useShouldPromptCity();
+  const ready = useOnboardingGate(shouldPrompt, resolved);
+
+  if (isAuthPage) return <>{children}</>;
+
+  return (
+    <>
+      {ready ? children : <OnboardingGateScreen />}
+      <CityNudge shouldPrompt={shouldPrompt} />
+    </>
+  );
+}
+
 function RootShell({ children }: { children: ReactNode }) {
   return (
     <html lang="en" className="light">
@@ -177,8 +231,10 @@ function RootComponent() {
     <QueryClientProvider client={queryClient}>
       {/* Player lives above the routes so audio + mini-player persist across tabs. */}
       <PlayerProvider>
-        {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-        <Outlet />
+        <OnboardingGate>
+          {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
+          <Outlet />
+        </OnboardingGate>
       </PlayerProvider>
     </QueryClientProvider>
   );
