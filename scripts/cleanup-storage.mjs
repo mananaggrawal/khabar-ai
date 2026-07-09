@@ -11,7 +11,7 @@
  * Storage API instead (same client the app itself uses to upload).
  *
  * Usage (from repo root):
- *   node scripts/cleanup-storage.mjs           # keep last 3 days (default)
+ *   node scripts/cleanup-storage.mjs           # keep today + yesterday (default)
  *   node scripts/cleanup-storage.mjs --keep=7  # keep last 7 days
  *   node scripts/cleanup-storage.mjs --dry-run # list what WOULD be deleted, delete nothing
  *
@@ -40,7 +40,7 @@ try {
 const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
 const keepArg = args.find((a) => a.startsWith("--keep="));
-const KEEP_DAYS = keepArg ? Number(keepArg.split("=")[1]) : 3;
+const KEEP_DAYS = keepArg ? Number(keepArg.split("=")[1]) : 2;
 
 const url = process.env.SUPABASE_URL;
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY;

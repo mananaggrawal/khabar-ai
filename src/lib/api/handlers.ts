@@ -281,7 +281,6 @@ export async function handleGenerate(request: Request): Promise<Response> {
         date:        briefing.date,
         provider,
         languages:   languages.join(","),
-        cities:      cities.join(","),
         stories:     briefing.stories.length,
         elapsedSec:  rs?.elapsedSec ?? 0,
         scriptSec:   rs?.scriptSec ?? 0,

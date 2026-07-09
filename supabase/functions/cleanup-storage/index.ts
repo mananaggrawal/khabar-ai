@@ -20,6 +20,18 @@
 // an authenticated app user — otherwise every call needs a valid Supabase
 // JWT. If you'd rather keep JWT verification on, drop that flag and always
 // pass a valid Authorization header from a logged-in admin session instead.
+//
+// SECURITY (2026-07-09 fix): --no-verify-jwt means Supabase's platform-level
+// auth check is OFF for this function — the Authorization/apikey headers in
+// the curl examples above are accepted by the edge runtime but were NEVER
+// actually checked by this function's own code, so ANYONE with the function
+// URL could trigger real deletion of Storage data with just the public
+// anon/publishable key (or arguably no header at all). This function now
+// requires a shared secret in an x-admin-key header, checked against the
+// ADMIN_KEY secret already used to gate this app's other admin routes
+// (server.mjs/handlers.ts) — set it once with:
+//   supabase secrets set ADMIN_KEY=<same value as Render's ADMIN_KEY>
+// and pass it as `-H "x-admin-key: <value>"` on every invocation from now on.
 
 // deno-lint-ignore-file no-explicit-any
 import { createClient } from "npm:@supabase/supabase-js@2";
@@ -35,7 +47,15 @@ Deno.serve(async (req: Request) => {
     return new Response("Method not allowed", { status: 405 });
   }
 
-  let keepDays = 3;
+  const adminKey = Deno.env.get("ADMIN_KEY");
+  if (!adminKey || req.headers.get("x-admin-key") !== adminKey) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  let keepDays = 2; // today + yesterday, by default
   let dryRun = false;
   try {
     if (req.method === "POST") {
