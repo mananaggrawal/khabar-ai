@@ -10,14 +10,16 @@ Pulls from Google News RSS across 5 focused feeds, merges articles about the sam
 
 Khabar AI generates a daily briefing on demand (or via cron):
 
-1. Fetches 5 Google News RSS feeds in parallel — Top Stories (headlines), India, World, Business, Local (city-scoped via the `city` option)
+1. Fetches Google News RSS feeds in parallel across 8 sections — Headlines, India, World, Business, Technology, Sports, Science, Health. (The former city-scoped "Local" section was removed 2026-07-09 — nothing in settings/onboarding/home references it anymore; legacy `local`/`politics`/`techlife`/`entertainment` story tags from older briefings are remapped to a current section via `resolveSection()` in `src/lib/news/sources.ts`, the single source of truth for that mapping.)
 2. Deduplicates by URL hash + title prefix; articles on Google's homepage feed are flagged (★) as a stronger editorial signal
 3. Clusters articles about the same event and selects as many distinct events as fit in one `gpt-4o-mini` call, ordered by importance and balanced across sections (count derives from `TARGET_MINUTES`, default 25 → ~63 stories)
 4. Writes a very quick ~45–65 word factual English script per event with `gpt-4o` — headline + key facts, no interpretation — using the live-fetched body text of the top sources
-5. Converts each script to speech and stores per-story audio (Supabase Storage, or local files in `LOCAL_MODE`)
+5. Converts each script to speech and stores per-story audio (Supabase Storage, or local files in `LOCAL_MODE`); each story's narrating voice (A/B alternation) is decided once at this step and persisted as `Story.voiceIndex` — nothing downstream re-derives or guesses it
 6. Fetches OG images from source articles (in parallel with clustering) for visual cards
 
-Open the app, tap a section, and listen. Tap any story card to see all the source articles it was assembled from.
+Open the app, tap a section pill, and listen. Tap any story card to see its summary and source articles. **Quick 15** is a pinned pill alongside the real sections — a client-curated, cross-section, importance-and-voice-balanced 15-story batch (`src/lib/news/quickQueue.ts`) that refreshes in place (only already-heard slots get swapped) without disturbing whatever's currently playing.
+
+Playback lives in a single app-wide `PlayerProvider` (`src/context/player.tsx`) so audio survives navigating between Home/Saved/Settings. There is no full-screen player screen (removed 2026-07-09) — the mini player itself carries a scrub bar and prev/-10s/play-pause/+10s/next, stays visible at all times, and tapping it opens a summary popup for whatever's currently playing (live-follows as playback advances).
 
 > **Scope note (v5):** the pipeline generates **English only**. Hindi/Tamil/Marathi voices exist in the TTS layer and the data model reserves fields for them, but scripting and audio are English in this version. Requesting other languages is ignored (and logged).
 
@@ -55,16 +57,28 @@ Open the app, tap a section, and listen. Tap any story card to see all the sourc
 src/
 ├── routes/
 │   ├── __root.tsx              # Root layout + PWA manifest
-│   ├── index.tsx               # Home screen (briefing player + section nav)
+│   ├── index.tsx               # Home screen (section pills incl. Quick 15, story list)
 │   ├── auth.tsx                # Google OAuth login
 │   └── _authenticated/
-│       ├── browse.tsx          # Browse by section
-│       ├── history.tsx         # Saved stories
-│       └── settings.tsx        # Language + city + account
+│       ├── history.tsx         # Saved stories (own useMonologue instance/mini player)
+│       ├── settings.tsx        # Language + notifications + account
+│       └── browse.tsx          # Dead stub, unused — do not build on this
+├── context/
+│   └── player.tsx              # App-wide PlayerProvider: briefing fetch, Quick 15
+│                                  batch build/refresh, global mini player + the
+│                                  "now playing" summary popup that replaces the old
+│                                  full-screen player
+├── components/
+│   ├── AppHeader.tsx            # Shared logo/tagline/share header — same on every page
+│   ├── BottomNav.tsx
+│   ├── StoryCard.tsx
+│   └── StoryDetailSheet.tsx     # Summary/sources popup — used both for card previews
+│                                   and (via player.tsx) as the "now playing" sheet
 ├── lib/
 │   ├── news/
 │   │   ├── generator.ts        # Main pipeline: fetch → dedup → OG images → script → TTS → save
-│   │   ├── sources.ts          # RSS feed configs + fallback search URLs
+│   │   ├── quickQueue.ts       # Quick 15 batch build/refresh (client-side curation)
+│   │   ├── sources.ts          # Section configs, resolveSection() legacy remap, fallback URLs
 │   │   ├── rss.ts              # RSS fetcher/parser (no external deps)
 │   │   └── briefing.functions.ts  # Server fn: serve latest briefing to client
 │   ├── tts/
@@ -75,7 +89,8 @@ src/
 │   ├── abort.ts                # Shared abort flag for in-progress generation
 │   └── supabase-storage.ts     # Server-side Supabase Storage client
 ├── hooks/
-│   └── useMonologue.ts         # Audio playback state machine (4 languages)
+│   └── useMonologue.ts         # Audio playback state machine — story-id-based resume,
+│                                  not raw index (see Known Issues history in git log)
 └── integrations/
     └── supabase/               # Supabase client, auth middleware, types
 ```
