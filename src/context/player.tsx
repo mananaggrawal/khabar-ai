@@ -182,10 +182,22 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // completedIds is backed by, callable directly (no need to wait on `mono`,
   // which doesn't exist yet when the very first batch is built).
   const buildNextQuickBatch = useCallback((): Story[] | null => {
-    if (!briefing) return null;
+    if (!briefing || !rawBriefing) return null;
     const excludeIds = new Set([...quickConsumedRef.current, ...readCompletedIds(briefing.date)]);
-    return buildQuickQueue(briefing.stories, excludeIds);
-  }, [briefing]);
+    // BUG FIX (2026-07-09): must pass rawBriefing.stories — the ORIGINAL
+    // generation-time order — not the client-resorted `briefing.stories`
+    // (resorted by SECTION_DISPLAY_ORDER, see the `briefing` useMemo above).
+    // inferVoiceIndices()'s fallback guess (for any story generated before
+    // voiceIndex was persisted) replicates generator.ts's per-section-counter
+    // algorithm, which ran over the ORIGINAL storage order at generation
+    // time. Feeding it the resorted order made the guess diverge from the
+    // real baked-in voice whenever resorting changed a story's position
+    // relative to other sections' stories — exactly the "random voice/story"
+    // bug reported after Quick 15 refresh. Bucketing by section further down
+    // is unaffected either way, since it only depends on relative order
+    // WITHIN a section, which resorting (a stable sort) never changes.
+    return buildQuickQueue(rawBriefing.stories, excludeIds);
+  }, [briefing, rawBriefing]);
 
   // Build the batch as soon as the day's briefing is available — always, not
   // gated by any mode, so it's ready the moment Home renders the pill.
@@ -331,7 +343,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   );
   const canRefreshQuick = !!quickBatch?.some((s) => isQuickSlotStale(s.id));
   const refreshQuickBatch = useCallback(() => {
-    if (!briefing || !quickBatch) return;
+    if (!briefing || !rawBriefing || !quickBatch) return;
     // Which SLOTS in the current batch need replacing — current-batch-scoped
     // is correct here, since refreshQuickQueue walks exactly this array.
     const staleIds = new Set(quickBatch.filter((s) => isQuickSlotStale(s.id)).map((s) => s.id));
@@ -347,8 +359,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       ...mono.completedIds,
       ...readCompletedIds(briefing.date),
     ]);
-    setQuickBatch(refreshQuickQueue(quickBatch, briefing.stories, staleIds, excludeFromPool));
-  }, [briefing, quickBatch, isQuickSlotStale, mono.completedIds]);
+    // Same rawBriefing-vs-briefing fix as buildNextQuickBatch above — the
+    // voice-inference fallback inside refreshQuickQueue must see the
+    // ORIGINAL generation-time order, not the client-resorted one.
+    setQuickBatch(refreshQuickQueue(quickBatch, rawBriefing.stories, staleIds, excludeFromPool));
+  }, [briefing, rawBriefing, quickBatch, isQuickSlotStale, mono.completedIds]);
 
   const saved = useSavedStories();
   const [playerOpen, setPlayerOpen] = useState(false);
