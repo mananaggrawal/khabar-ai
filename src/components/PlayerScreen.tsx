@@ -13,7 +13,7 @@ import { VoiceOrb } from "./VoiceOrb";
 import { StoryDetailSheet } from "./StoryDetailSheet";
 import type { useMonologue } from "@/hooks/useMonologue";
 import { getStoryTitle, getSectionLabel } from "@/hooks/useMonologue";
-import type { SectionId } from "@/lib/news/sources";
+import { resolveSection, type SectionId } from "@/lib/news/sources";
 
 type MonoHook = ReturnType<typeof useMonologue>;
 
@@ -23,15 +23,6 @@ interface PlayerScreenProps {
   onClose: () => void;
   isSaved?: boolean;
   onSave?: () => void;
-}
-
-const LEGACY_SECTION: Record<string, SectionId> = {
-  politics: "india", techlife: "technology", entertainment: "india",
-};
-function resolveSection(s: string): SectionId {
-  if (s in LEGACY_SECTION) return LEGACY_SECTION[s];
-  if (["headlines", "india", "world", "business", "technology", "sports", "science", "health"].includes(s)) return s as SectionId;
-  return "india";
 }
 
 const SECTION_COLOR: Record<SectionId, string> = {
@@ -79,7 +70,7 @@ export function PlayerScreen({ mono, visible, onClose, isSaved, onSave }: Player
   const accent    = currentStory ? (SECTION_COLOR[resolveSection(currentStory.section)] ?? "#EF4444") : "#EF4444";
 
   const sectionStories = currentFeed
-    ? storiesWithAudio.filter((s) => s.section === currentFeed.id)
+    ? storiesWithAudio.filter((s) => resolveSection(s.section) === currentFeed.id)
     : [];
   const storyPosInSection = currentStory
     ? sectionStories.findIndex((s) => s.id === currentStory.id) + 1

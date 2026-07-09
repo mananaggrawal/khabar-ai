@@ -7,21 +7,9 @@ import { useEffect } from "react";
 import { motion, AnimatePresence, useDragControls } from "motion/react";
 import { X, ExternalLink, ArrowUpRight, Bookmark, Newspaper } from "lucide-react";
 import type { Story } from "@/lib/news/generator";
-import { FEED_MAP } from "@/lib/news/sources";
+import { FEED_MAP, resolveSection } from "@/lib/news/sources";
 import { type Language, getStoryTitle, getSectionLabel } from "@/hooks/useMonologue";
 import { SECTION_COLOR } from "@/components/StoryCard";
-import type { SectionId } from "@/lib/news/sources";
-
-// Same legacy-section fallback as useMonologue.ts/StoryCard.tsx (2026-07-09) —
-// without it, a story tagged with a removed/legacy section (e.g. "local")
-// showed a blank section label and default accent color here instead of
-// falling back to India like every other place that reads story.section.
-const LEGACY_SECTION: Record<string, SectionId> = { politics: "india", techlife: "technology", entertainment: "india" };
-function resolveSection(s: string): SectionId {
-  if (s in LEGACY_SECTION) return LEGACY_SECTION[s];
-  if (FEED_MAP.has(s as SectionId)) return s as SectionId;
-  return "india";
-}
 
 interface StoryDetailSheetProps {
   story: Story | null;

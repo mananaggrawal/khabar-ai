@@ -47,6 +47,7 @@
  * day's briefing without repeats until it's exhausted.
  */
 import type { Story } from "@/lib/news/generator";
+import { resolveSection } from "@/lib/news/sources";
 
 export const QUICK_BATCH_SIZE = 15;
 const HEADLINES_LEAD_SHARE = 0.2; // ~20% of the batch, minimum 2
@@ -95,11 +96,19 @@ export function buildQuickQueue(
 ): Story[] {
   const voiceOf = inferVoiceIndices(stories);
 
+  // Bucketed by RESOLVED section (2026-07-09 fix) — a legacy/removed section
+  // tag used to form its own stray pseudo-bucket here (e.g. never matching
+  // "headlines" for the lead-in below, or "india" for round-robin diversity),
+  // separate from where the story actually displays. voiceOf above is
+  // deliberately NOT resolved — it mirrors generator.ts's exact raw-section
+  // voice-assignment algorithm, so it must match on the same raw key that
+  // algorithm used, not the display-resolved one.
   const bySection = new Map<string, Story[]>();
   for (const s of stories) {
     if (consumedIds.has(s.id)) continue;
-    if (!bySection.has(s.section)) bySection.set(s.section, []);
-    bySection.get(s.section)!.push(s);
+    const section = resolveSection(s.section);
+    if (!bySection.has(section)) bySection.set(section, []);
+    bySection.get(section)!.push(s);
   }
 
   const result: Story[] = [];
@@ -204,8 +213,9 @@ export function refreshQuickQueue(
   const bySection = new Map<string, Story[]>();
   for (const s of pool) {
     if (excludeIds.has(s.id)) continue;
-    if (!bySection.has(s.section)) bySection.set(s.section, []);
-    bySection.get(s.section)!.push(s);
+    const section = resolveSection(s.section);
+    if (!bySection.has(section)) bySection.set(section, []);
+    bySection.get(section)!.push(s);
   }
   const sectionIds = shuffle([...bySection.keys()]);
   const cursors = new Map(sectionIds.map((id) => [id, 0]));

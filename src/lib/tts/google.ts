@@ -106,10 +106,13 @@ async function synthesizeRaw(script: string, style?: string, embedStyle = false)
     },
   };
   if (style && !embedStyle) body.system_instruction = { parts: [{ text: style }] };
+  // Timeout (2026-07-09 audit fix) — same gap as elevenlabs.ts had: no bound
+  // meant a hung Gemini connection could stall an entire generation run.
   const res = await fetch(GEMINI_TTS_URL(model, getKey()), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(60_000),
   });
 
   if (!res.ok) {

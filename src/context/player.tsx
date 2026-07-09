@@ -18,16 +18,8 @@ import { useSavedStories } from "@/hooks/useSavedStories";
 import { useQuickConsumed } from "@/hooks/useQuickConsumed";
 import { buildQuickQueue, refreshQuickQueue } from "@/lib/news/quickQueue";
 import { PlayerScreen } from "@/components/PlayerScreen";
-import { type SectionId } from "@/lib/news/sources";
+import { resolveSection, SECTION_ORDER as SECTION_DISPLAY_ORDER, type SectionId } from "@/lib/news/sources";
 import type { Story, DailyBriefing } from "@/lib/news/generator";
-
-const SECTION_DISPLAY_ORDER: SectionId[] = ["headlines", "india", "world", "business", "technology", "sports", "science", "health"];
-const LEGACY_SECTION: Record<string, SectionId> = { politics: "india", techlife: "technology", entertainment: "india" };
-function resolveSection(s: string): SectionId {
-  if (s in LEGACY_SECTION) return LEGACY_SECTION[s];
-  if (SECTION_DISPLAY_ORDER.includes(s as SectionId)) return s as SectionId;
-  return "india";
-}
 
 type PlayerContextValue = {
   mono: ReturnType<typeof useMonologue>;

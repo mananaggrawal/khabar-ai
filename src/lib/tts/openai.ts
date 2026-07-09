@@ -44,8 +44,10 @@ function estimateDuration(text: string): number {
   return (words / 150) * 60;
 }
 
-async function synthesize(script: string, voice: string): Promise<Buffer> {
+async function synthesizeOnce(script: string, voice: string): Promise<Buffer> {
   const model = getModel();
+  // Timeout (2026-07-09 audit fix) — matches the other TTS providers, which
+  // all bound their fetch so a hung connection can't stall a whole run.
   const res = await fetch(OPENAI_TTS_URL, {
     method: "POST",
     headers: {
@@ -58,6 +60,7 @@ async function synthesize(script: string, voice: string): Promise<Buffer> {
       voice,
       response_format: "mp3",
     }),
+    signal: AbortSignal.timeout(60_000),
   });
 
   if (!res.ok) {
@@ -69,25 +72,28 @@ async function synthesize(script: string, voice: string): Promise<Buffer> {
   return Buffer.from(arrayBuffer);
 }
 
-async function saveMp3(
-  mp3: Buffer,
-  filename: string,
-  voice: string,
-): Promise<{ url: string; durationSec: number }> {
-  const durationSec = estimateDuration(filename); // fallback — caller can override
-  const kb = (mp3.length / 1024).toFixed(0);
-
-  if (LOCAL_MODE) {
-    const dir = join(process.cwd(), "public", "audio");
-    await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, `${filename}.mp3`), mp3);
-    console.log(`[tts/openai] ✓ ${filename}.mp3 — voice: ${voice}, ${kb}KB`);
-    return { url: `/audio/${filename}.mp3`, durationSec };
+// Retry wrapper (2026-07-09 audit fix) — this provider previously had NO
+// retry at all, unlike every other TTS provider (edge.ts, elevenlabs.ts,
+// google.ts all retry transient failures) — a single transient 429/5xx
+// permanently failed that story's audio instead of recovering.
+async function synthesize(script: string, voice: string, maxAttempts = 3): Promise<Buffer> {
+  let lastErr: Error | null = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await synthesizeOnce(script, voice);
+    } catch (err: any) {
+      lastErr = err;
+      const msg: string = err.message ?? "";
+      const isFatal = msg.includes("401") || msg.includes("invalid_api_key");
+      console.warn(`[tts/openai] attempt ${attempt}/${maxAttempts}: ${msg.slice(0, 120)}`);
+      if (isFatal) break;
+      if (attempt < maxAttempts) {
+        const delay = msg.includes("429") ? 10_000 * attempt : 2_000 * attempt;
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
   }
-
-  const url = await uploadAudio(`${filename}.mp3`, mp3, "audio/mpeg");
-  console.log(`[tts/openai] ✓ ${filename}.mp3 — voice: ${voice}, ${kb}KB`);
-  return { url, durationSec };
+  throw lastErr!;
 }
 
 export async function openaiTTS(

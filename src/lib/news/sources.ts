@@ -135,6 +135,30 @@ export const FEED_MAP = new Map<SectionId, SectionConfig>(
   SECTION_CONFIGS.map((c) => [c.id, c]),
 );
 
+// Legacy/removed section names → current SectionId (2026-07-09 centralization)
+// — previously hand-copied near-identically across 6 different files
+// (useMonologue.ts, context/player.tsx, routes/index.tsx, StoryCard.tsx,
+// PlayerScreen.tsx, StoryDetailSheet.tsx), which is exactly how the Home-page
+// crash happened: one copy (useMonologue.ts's sectionsWithStories) was never
+// updated to fall back safely when "local" was removed, while the other five
+// already had. Single source of truth now — every one of those files should
+// import resolveSection from here instead of keeping its own copy.
+const LEGACY_SECTION: Record<string, SectionId> = {
+  politics: "india",
+  techlife: "technology",
+  entertainment: "india",
+};
+
+/** Normalizes any raw `Story.section` value — current, legacy, or otherwise
+ * unrecognized — into a real, FEED_MAP-backed SectionId. Falls back to
+ * "india" for anything unmapped, matching the fallback every one of the
+ * duplicated copies already used. */
+export function resolveSection(s: string): SectionId {
+  if (s in LEGACY_SECTION) return LEGACY_SECTION[s];
+  if (FEED_MAP.has(s as SectionId)) return s as SectionId;
+  return "india";
+}
+
 // ── Publisher allowlist (2026-07-02) ──────────────────────────────────────────
 // Generation only keeps articles from these 7 mastheads — everything else is
 // dropped during fetch. `match` recognises the RSS <source> string variants

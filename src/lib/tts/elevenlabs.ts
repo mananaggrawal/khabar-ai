@@ -68,6 +68,10 @@ async function synthesize(text: string, filename: string): Promise<Buffer> {
   // English is omitted entirely — "en-IN" is invalid and returns 400.
   if (LANG_CODES[lang]) payload.language_code = LANG_CODES[lang];
 
+  // Timeout (2026-07-09 audit fix) — unlike the LLM script calls (90s) and
+  // Edge TTS (25s), this fetch had no bound at all: a hung ElevenLabs
+  // connection could stall an entire generation run indefinitely, since
+  // nothing here would ever move on to the next story.
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -75,6 +79,7 @@ async function synthesize(text: string, filename: string): Promise<Buffer> {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(60_000),
   });
 
   if (!res.ok) {

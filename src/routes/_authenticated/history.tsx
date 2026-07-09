@@ -10,6 +10,7 @@ import { PlayerScreen } from "@/components/PlayerScreen";
 import { useSavedStories } from "@/hooks/useSavedStories";
 import { useMonologue, getStoryTitle, getSectionLabel, getAudioUrl } from "@/hooks/useMonologue";
 import { usePlayer } from "@/context/player";
+import { resolveSection } from "@/lib/news/sources";
 import type { DailyBriefing, Story } from "@/lib/news/generator";
 
 export const Route = createFileRoute("/_authenticated/history")({
@@ -173,7 +174,7 @@ function SavedPage() {
                         language={mono.language}
                         isPlaying={isActive && mono.state === "playing"}
                         hasAudio={hasAudio}
-                        onPlay={() => storyIdx >= 0 && mono.playFromInSection(storyIdx, story.section)}
+                        onPlay={() => storyIdx >= 0 && mono.playFromInSection(storyIdx, resolveSection(story.section))}
                         onPause={mono.pause}
                         onTap={() => setDetailStory(story)}
                       />
@@ -204,7 +205,7 @@ function SavedPage() {
         onPlay={() => {
           if (detailStory) {
             const idx = mono.storiesWithAudio.findIndex((s) => s.id === detailStory.id);
-            if (idx >= 0) mono.playFromInSection(idx, detailStory.section);
+            if (idx >= 0) mono.playFromInSection(idx, resolveSection(detailStory.section));
           }
           setDetailStory(null);
         }}

@@ -17,29 +17,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DailyBriefing, Story } from "@/lib/news/generator";
-import { FEED_MAP, type SectionId } from "@/lib/news/sources";
+import { FEED_MAP, resolveSection, type SectionId } from "@/lib/news/sources";
 import { track } from "@/lib/analytics/track";
 import { EVENTS, HEARTBEAT_SEC } from "@/lib/analytics/events";
 
 export type MonologueState = "idle" | "playing" | "paused" | "error";
 export type Language = "en" | "hi";
-
-// Legacy/removed section names → current section (2026-07-09 bug fix) — every
-// OTHER file that reads a story's `.section` (routes/index.tsx, StoryCard.tsx,
-// PlayerScreen.tsx, context/player.tsx) already normalizes it through an
-// equivalent map before touching FEED_MAP; this file was the one place that
-// didn't, and did `FEED_MAP.get(story.section)!` (non-null asserted). Any
-// story still carrying an old tag no longer in FEED_MAP — most concretely
-// "local" (removed 2026-07-08), but also the older politics/techlife/
-// entertainment tags — made that assertion lie and crashed the whole app on
-// "Cannot read properties of undefined (reading 'label')" the moment such a
-// story showed up in a loaded briefing.
-const LEGACY_SECTION: Record<string, SectionId> = { politics: "india", techlife: "technology", entertainment: "india" };
-function resolveSection(s: SectionId): SectionId {
-  if (s in LEGACY_SECTION) return LEGACY_SECTION[s];
-  if (FEED_MAP.has(s)) return s;
-  return "india";
-}
 
 const RESUME_KEY    = "khabar-resume-pos";
 const LANGUAGE_KEY  = "khabar-language";
@@ -459,7 +442,7 @@ export function useMonologue({
               if (mode === "all") onQueueEnd?.();
               return;
             }
-            if (mode !== "all" && storiesWithAudio[next]?.section !== mode) {
+            if (mode !== "all" && resolveSection(storiesWithAudio[next].section) !== mode) {
               setState("idle"); setCurrentStoryIdx(-1); setQueueMode(null);
               try { localStorage.removeItem(RESUME_KEY); } catch {}
               return;
@@ -484,7 +467,7 @@ export function useMonologue({
         return;
       }
 
-      track(EVENTS.STORY_START, { storyId: story.id, section: story.section, index: idx, mode: mode ?? "single", queueSource });
+      track(EVENTS.STORY_START, { storyId: story.id, section: resolveSection(story.section), index: idx, mode: mode ?? "single", queueSource });
 
       const audio = attachAudio(url!, seekTo, onEnded);
       audio.play().catch((e: any) => {
@@ -518,7 +501,7 @@ export function useMonologue({
   /** Play all stories within a given section */
   const playSection = useCallback(
     (sectionId: SectionId) => {
-      const firstIdx = storiesWithAudio.findIndex((s) => s.section === sectionId);
+      const firstIdx = storiesWithAudio.findIndex((s) => resolveSection(s.section) === sectionId);
       if (firstIdx >= 0) playAt(firstIdx, sectionId);
     },
     [storiesWithAudio, playAt],
@@ -655,7 +638,7 @@ export function useMonologue({
         playing,
         visible,
         storyId: s?.id ?? null,
-        section: s?.section ?? null,
+        section: s ? resolveSection(s.section) : null,
         queueSource: playing ? queueSource ?? null : null,
       });
     }, HEARTBEAT_SEC * 1000);
