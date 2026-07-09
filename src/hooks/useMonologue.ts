@@ -199,28 +199,6 @@ export function useMonologue({
   useEffect(() => { currentIdxRef.current = currentStoryIdx; }, [currentStoryIdx]);
   useEffect(() => { queueModeRef.current = queueMode; }, [queueMode]);
 
-  // BUG FIX (2026-07-09) — "random story/voice after refresh": currentStoryIdx
-  // is a bare integer POSITION into storiesWithAudio, which is re-derived
-  // fresh every time `briefing.stories` changes (e.g. Quick 15's "Refresh"
-  // swaps stale slots in quickBatch for fresh candidates — see
-  // refreshQuickQueue in quickQueue.ts, whose candidate pool isn't filtered
-  // by audio-availability). If a replacement's audio-availability differs
-  // from what it replaced, the audio-filtered array's SHAPE shifts at that
-  // point — every index after it now points one story earlier/later — even
-  // though the actively-playing <audio> element never stopped or changed.
-  // currentStoryIdx just kept its old numeric value, so `currentStory`
-  // (title, section, everything the UI shows) silently started pointing at
-  // a NEIGHBORING story while the real audio kept playing the original one
-  // — reported as "the story and voice don't match" right after a refresh.
-  // Fix: whenever storiesWithAudio itself changes shape, re-find the actual
-  // playing story BY ID and re-anchor the index to wherever it now lands.
-  useEffect(() => {
-    const id = currentStoryIdRef.current;
-    if (!id) return;
-    const idx = storiesWithAudio.findIndex((s) => s.id === id);
-    if (idx >= 0 && idx !== currentIdxRef.current) setCurrentStoryIdx(idx);
-  }, [storiesWithAudio]);
-
   // React to language changes from settings
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
@@ -277,6 +255,34 @@ export function useMonologue({
       result.find((s) => s.id === section)!.stories.push(story);
     }
     return result;
+  }, [storiesWithAudio]);
+
+  // BUG FIX (2026-07-09) — "random story/voice after refresh": currentStoryIdx
+  // is a bare integer POSITION into storiesWithAudio, which is re-derived
+  // fresh every time `briefing.stories` changes (e.g. Quick 15's "Refresh"
+  // swaps stale slots in quickBatch for fresh candidates — see
+  // refreshQuickQueue in quickQueue.ts, whose candidate pool isn't filtered
+  // by audio-availability). If a replacement's audio-availability differs
+  // from what it replaced, the audio-filtered array's SHAPE shifts at that
+  // point — every index after it now points one story earlier/later — even
+  // though the actively-playing <audio> element never stopped or changed.
+  // currentStoryIdx just kept its old numeric value, so `currentStory`
+  // (title, section, everything the UI shows) silently started pointing at
+  // a NEIGHBORING story while the real audio kept playing the original one
+  // — reported as "the story and voice don't match" right after a refresh.
+  // Fix: whenever storiesWithAudio itself changes shape, re-find the actual
+  // playing story BY ID and re-anchor the index to wherever it now lands.
+  // Must live AFTER storiesWithAudio's own declaration above — an earlier
+  // version of this effect sat up near the other ref-sync effects and
+  // referenced storiesWithAudio before its useMemo ran, which threw
+  // "Cannot access 'storiesWithAudio' before initialization" on every
+  // single render (dependency arrays are evaluated immediately, not
+  // deferred like the effect body) and broke the whole app's page load.
+  useEffect(() => {
+    const id = currentStoryIdRef.current;
+    if (!id) return;
+    const idx = storiesWithAudio.findIndex((s) => s.id === id);
+    if (idx >= 0 && idx !== currentIdxRef.current) setCurrentStoryIdx(idx);
   }, [storiesWithAudio]);
 
   const currentStory: Story | null =
