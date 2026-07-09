@@ -13,7 +13,7 @@ import { useEffect, type ReactNode } from "react";
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 import { PlayerProvider } from "@/context/player";
-import { CityNudge } from "@/components/CityNudge";
+import { LanguageNudge } from "@/components/LanguageNudge";
 import { useOnboarding } from "@/hooks/useOnboardingGate";
 import { VoiceOrb } from "@/components/VoiceOrb";
 
@@ -146,8 +146,8 @@ function OnboardingGateScreen() {
 // child of it (TanStack Router's file-based routing doesn't nest a bare
 // routes/index.tsx under routes/_authenticated/ just because they're both
 // under src/routes/). So the gate was never actually wrapping Home at all —
-// Home rendered immediately and unblocked, while CityNudge only ever
-// appeared once the user navigated into an actual _authenticated/* page
+// Home rendered immediately and unblocked, while the onboarding dialog only
+// ever appeared once the user navigated into an actual _authenticated/* page
 // (Settings, History, Browse), which is exactly the "asks me on Settings,
 // but showed Home first" behavior reported. Moved here, to the one common
 // ancestor of every route, so it actually gates everything including Home.
@@ -165,7 +165,7 @@ function OnboardingGate({ children }: { children: ReactNode }) {
   return (
     <>
       {ready ? children : <OnboardingGateScreen />}
-      <CityNudge shouldPrompt={shouldPrompt} userId={userId} />
+      <LanguageNudge shouldPrompt={shouldPrompt} userId={userId} />
     </>
   );
 }

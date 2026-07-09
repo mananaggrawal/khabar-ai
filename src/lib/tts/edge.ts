@@ -10,8 +10,6 @@
  * Voice roster (A = index 0, B = index 1):
  *   EN: en-IN-PrabhatNeural (male)   | en-IN-NeerjaExpressiveNeural (female, expressive)
  *   HI: hi-IN-MadhurNeural (male)    | hi-IN-SwaraNeural (female)
- *   TA: ta-IN-ValluvarNeural (male)   | ta-IN-PallaviNeural (female)
- *   MR: mr-IN-ManoharNeural (male)   | mr-IN-AarohiNeural (female)
  *
  * Output: MP3 @ 24 kHz 96 kbps mono
  */
@@ -27,8 +25,6 @@ const LOCAL_MODE = process.env.LOCAL_MODE === "true";
 const VOICES: Record<string, [string, string]> = {
   en: ["en-IN-PrabhatNeural",   "en-IN-NeerjaExpressiveNeural"],
   hi: ["hi-IN-MadhurNeural",    "hi-IN-SwaraNeural"],
-  ta: ["ta-IN-ValluvarNeural",  "ta-IN-PallaviNeural"],
-  mr: ["mr-IN-ManoharNeural",   "mr-IN-AarohiNeural"],
 };
 
 /**

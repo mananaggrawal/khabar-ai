@@ -1,42 +1,18 @@
 /**
  * Google News RSS feed configuration.
- * headlines | local | india | world | business | technology | sports | science | health
- * (Local/city-scoped feed removed 2026-07-02 for being hardcoded to a single
- * default city with no real per-user wiring; reintroduced 2026-07-06 — Mumbai
- * only for now, city selection lives in Settings, see CITIES below.
+ * headlines | india | world | business | technology | sports | science | health
  *
- * Multi-city groundwork (2026-07-06): the "local" SectionId stays singular —
- * there's still one shared daily briefing, not one per city — but a "local"
- * story now carries a `city` tag (see Story.city in generator.ts) saying
- * which city's feed it came from. The admin panel can request generation for
- * several cities in one run (their local stories all land in the same
- * "local" bucket, distinguished by that tag); each reader's Home/player then
- * only shows the "local" stories matching their own city preference (see the
- * `briefing` filter in context/player.tsx). Everything downstream of that one
- * filter point (Home's list, playback order) automatically respects it.)
+ * "local" (city-scoped) section and city selection removed entirely
+ * (2026-07-08, per explicit request) — it was reintroduced 2026-07-06 with
+ * Mumbai-only coverage and never grew beyond that. Languages are English and
+ * Hindi only (Tamil/Marathi removed the same day).
  */
 
 // ── Section IDs — straight from Google News feed names ───────────────────────
 
 export type SectionId =
-  | "headlines" | "local" | "india" | "world" | "business"
+  | "headlines" | "india" | "world" | "business"
   | "technology" | "sports" | "science" | "health";
-
-// ── City selection (2026-07-06) ───────────────────────────────────────────────
-// Only Mumbai has a real generated feed right now. The rest are listed so the
-// picker communicates what's coming rather than looking unfinished — they're
-// not selectable until a real feed + generation entry exists for them.
-export type CityId = "mumbai" | "delhi" | "bangalore" | "chennai" | "kolkata";
-
-export type CityConfig = { id: CityId; label: string; available: boolean };
-
-export const CITIES: CityConfig[] = [
-  { id: "mumbai",    label: "Mumbai",    available: true },
-  { id: "delhi",     label: "Delhi",     available: false },
-  { id: "bangalore", label: "Bangalore", available: false },
-  { id: "chennai",   label: "Chennai",   available: false },
-  { id: "kolkata",   label: "Kolkata",   available: false },
-];
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -44,8 +20,6 @@ export type FeedConfig = {
   feedId: SectionId;
   label: string;
   labelHi: string;
-  labelTa: string;
-  labelMr: string;
   emoji: string;
   buildUrl: () => string;
   fallbackUrl?: string;
@@ -55,8 +29,6 @@ export type SectionConfig = {
   id: SectionId;
   label: string;
   labelHi: string;
-  labelTa: string;
-  labelMr: string;
   emoji: string;
 };
 
@@ -75,18 +47,6 @@ const TOPIC: Record<string, string> = {
   health:     "CAAqIQgKIhtDQkFTRGdvSUwyMHZNR3QwTlRFU0FtVnVLQUFQAQ",
 };
 
-// Per-city Google News feed (search-based — there's no topic ID for a city).
-// Every configured city has a real, fetchable feed here regardless of its
-// `available` flag above, so the admin panel can generate/test a city's
-// content ahead of actually flipping it on for readers.
-export const CITY_FEEDS: Record<CityId, { buildUrl: () => string; fallbackUrl: string }> = {
-  mumbai:    { buildUrl: () => `${GN_BASE}/search?q=Mumbai&${LOCALE}`,    fallbackUrl: `${GN_BASE}/search?q=Mumbai+news&${LOCALE}` },
-  delhi:     { buildUrl: () => `${GN_BASE}/search?q=Delhi&${LOCALE}`,     fallbackUrl: `${GN_BASE}/search?q=Delhi+news&${LOCALE}` },
-  bangalore: { buildUrl: () => `${GN_BASE}/search?q=Bangalore&${LOCALE}`, fallbackUrl: `${GN_BASE}/search?q=Bangalore+news&${LOCALE}` },
-  chennai:   { buildUrl: () => `${GN_BASE}/search?q=Chennai&${LOCALE}`,   fallbackUrl: `${GN_BASE}/search?q=Chennai+news&${LOCALE}` },
-  kolkata:   { buildUrl: () => `${GN_BASE}/search?q=Kolkata&${LOCALE}`,   fallbackUrl: `${GN_BASE}/search?q=Kolkata+news&${LOCALE}` },
-};
-
 // ── Feed configs ──────────────────────────────────────────────────────────────
 
 export const FEEDS: FeedConfig[] = [
@@ -94,8 +54,6 @@ export const FEEDS: FeedConfig[] = [
     feedId:  "headlines",
     label:   "Headlines",
     labelHi: "मुख्य खबरें",
-    labelTa: "தலைப்புச் செய்திகள்",
-    labelMr: "ठळक बातम्या",
     emoji:   "🔥",
     buildUrl: () => `${GN_BASE}?${LOCALE}`,
   },
@@ -103,8 +61,6 @@ export const FEEDS: FeedConfig[] = [
     feedId:  "india",
     label:   "India",
     labelHi: "भारत",
-    labelTa: "இந்தியா",
-    labelMr: "भारत",
     emoji:   "🇮🇳",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.india}?${LOCALE}`,
     fallbackUrl: `${GN_BASE}/search?q=india+news&${LOCALE}`,
@@ -113,8 +69,6 @@ export const FEEDS: FeedConfig[] = [
     feedId:  "world",
     label:   "World",
     labelHi: "विश्व",
-    labelTa: "உலகம்",
-    labelMr: "जग",
     emoji:   "🌍",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.world}?${LOCALE}`,
     fallbackUrl: `${GN_BASE}/search?q=world+international+news&${LOCALE}`,
@@ -123,8 +77,6 @@ export const FEEDS: FeedConfig[] = [
     feedId:  "business",
     label:   "Business",
     labelHi: "व्यापार",
-    labelTa: "வணிகம்",
-    labelMr: "व्यवसाय",
     emoji:   "💼",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.business}?${LOCALE}`,
     fallbackUrl: `${GN_BASE}/search?q=india+business+economy+markets&${LOCALE}`,
@@ -133,8 +85,6 @@ export const FEEDS: FeedConfig[] = [
     feedId:  "technology",
     label:   "Technology",
     labelHi: "तकनीक",
-    labelTa: "தொழில்நுட்பம்",
-    labelMr: "तंत्रज्ञान",
     emoji:   "💻",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.technology}?${LOCALE}`,
     fallbackUrl: `${GN_BASE}/search?q=technology&${LOCALE}`,
@@ -143,8 +93,6 @@ export const FEEDS: FeedConfig[] = [
     feedId:  "sports",
     label:   "Sports",
     labelHi: "खेल",
-    labelTa: "விளையாட்டு",
-    labelMr: "क्रीडा",
     emoji:   "🏆",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.sports}?${LOCALE}`,
     fallbackUrl: `${GN_BASE}/search?q=sports&${LOCALE}`,
@@ -153,8 +101,6 @@ export const FEEDS: FeedConfig[] = [
     feedId:  "science",
     label:   "Science",
     labelHi: "विज्ञान",
-    labelTa: "அறிவியல்",
-    labelMr: "विज्ञान",
     emoji:   "🔬",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.science}?${LOCALE}`,
     fallbackUrl: `${GN_BASE}/search?q=science&${LOCALE}`,
@@ -163,8 +109,6 @@ export const FEEDS: FeedConfig[] = [
     feedId:  "health",
     label:   "Health",
     labelHi: "स्वास्थ्य",
-    labelTa: "சுகாதாரம்",
-    labelMr: "आरोग्य",
     emoji:   "🩺",
     buildUrl: () => `${GN_BASE}/topics/${TOPIC.health}?${LOCALE}`,
     fallbackUrl: `${GN_BASE}/search?q=health&${LOCALE}`,
@@ -173,18 +117,17 @@ export const FEEDS: FeedConfig[] = [
 
 // ── Display section configs ───────────────────────────────────────────────────
 
-export const SECTION_ORDER: SectionId[] = ["headlines", "local", "india", "world", "business", "technology", "sports", "science", "health"];
+export const SECTION_ORDER: SectionId[] = ["headlines", "india", "world", "business", "technology", "sports", "science", "health"];
 
 const SECTION_CONFIGS: SectionConfig[] = [
-  { id: "headlines",  label: "Headlines",   labelHi: "मुख्य खबरें", labelTa: "தலைப்புச் செய்திகள்", labelMr: "ठळक बातम्या", emoji: "🔥" },
-  { id: "local",      label: "Mumbai",      labelHi: "मुंबई",        labelTa: "மும்பை",               labelMr: "मुंबई",        emoji: "🏙️" },
-  { id: "india",      label: "India",       labelHi: "भारत",         labelTa: "இந்தியா",              labelMr: "भारत",         emoji: "🇮🇳" },
-  { id: "world",      label: "World",       labelHi: "विश्व",         labelTa: "உலகம்",                labelMr: "जग",           emoji: "🌍" },
-  { id: "business",   label: "Business",    labelHi: "व्यापार",       labelTa: "வணிகம்",               labelMr: "व्यवसाय",      emoji: "💼" },
-  { id: "technology", label: "Technology",  labelHi: "तकनीक",        labelTa: "தொழில்நுட்பம்",         labelMr: "तंत्रज्ञान",   emoji: "💻" },
-  { id: "sports",     label: "Sports",      labelHi: "खेल",          labelTa: "விளையாட்டு",           labelMr: "क्रीडा",       emoji: "🏆" },
-  { id: "science",    label: "Science",     labelHi: "विज्ञान",       labelTa: "அறிவியல்",             labelMr: "विज्ञान",      emoji: "🔬" },
-  { id: "health",     label: "Health",      labelHi: "स्वास्थ्य",     labelTa: "சுகாதாரம்",            labelMr: "आरोग्य",       emoji: "🩺" },
+  { id: "headlines",  label: "Headlines",   labelHi: "मुख्य खबरें", emoji: "🔥" },
+  { id: "india",      label: "India",       labelHi: "भारत",         emoji: "🇮🇳" },
+  { id: "world",      label: "World",       labelHi: "विश्व",         emoji: "🌍" },
+  { id: "business",   label: "Business",    labelHi: "व्यापार",       emoji: "💼" },
+  { id: "technology", label: "Technology",  labelHi: "तकनीक",        emoji: "💻" },
+  { id: "sports",     label: "Sports",      labelHi: "खेल",          emoji: "🏆" },
+  { id: "science",    label: "Science",     labelHi: "विज्ञान",       emoji: "🔬" },
+  { id: "health",     label: "Health",      labelHi: "स्वास्थ्य",     emoji: "🩺" },
 ];
 
 /** FEED_MAP: SectionId → SectionConfig. Used in UI for labels and emojis. */

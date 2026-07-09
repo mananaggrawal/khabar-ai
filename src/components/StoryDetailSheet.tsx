@@ -128,10 +128,7 @@ export function StoryDetailSheet({
   const feed = story ? FEED_MAP.get(story.section) : null;
   const accent = story ? (SECTION_COLOR[story.section] ?? "#7B5CF0") : "#7B5CF0";
   const script = story
-    ? (language === "hi" ? (story.scriptHi || story.scriptEn) :
-       language === "ta" ? ((story as any).scriptTa || story.scriptEn) :
-       language === "mr" ? ((story as any).scriptMr || story.scriptEn) :
-       story.scriptEn) || null
+    ? (language === "hi" ? (story.scriptHi || story.scriptEn) : story.scriptEn) || null
     : null;
 
   return createPortal(

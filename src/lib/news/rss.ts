@@ -7,11 +7,6 @@ export type RssItem = {
   sourceId: string;
   description?: string;
   imageUrl?: string;
-  // Which city this item came from, set only for "local" section items fetched
-  // via multiple per-city feeds (2026-07-06). Loosely typed (not CityId) to
-  // avoid a circular import between rss.ts and sources.ts — generator.ts casts
-  // it when building Story objects.
-  city?: string;
 };
 
 function decodeEntities(s: string): string {

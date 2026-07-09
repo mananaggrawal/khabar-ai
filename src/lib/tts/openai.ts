@@ -5,7 +5,7 @@
  * Voice: configurable per language via OPENAI_TTS_VOICE_EN / OPENAI_TTS_VOICE_HI env vars.
  *        Defaults: onyx (deep male) for EN, onyx for HI.
  *
- * OpenAI TTS handles Hindi/Tamil/Marathi natively — the model detects language from text.
+ * OpenAI TTS handles Hindi natively — the model detects language from text.
  * Output: MP3 @ 24kHz (OpenAI default)
  */
 
@@ -31,8 +31,6 @@ function getModel(): string {
 const DEFAULT_VOICE: Record<string, string> = {
   en: "onyx",   // deep, authoritative male
   hi: "onyx",   // same — OpenAI detects Hindi from text
-  ta: "onyx",
-  mr: "onyx",
 };
 
 function getVoice(lang: string): string {

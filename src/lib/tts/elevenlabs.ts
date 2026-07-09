@@ -1,8 +1,8 @@
 /**
  * ElevenLabs TTS — per-story synthesis.
  *
- * Model: eleven_flash_v2_5 — cheapest multilingual model, supports EN/HI/TA/MR.
- * language_code: set for all non-English languages. English omitted (no "en-IN").
+ * Model: eleven_flash_v2_5 — cheapest multilingual model, supports EN/HI.
+ * language_code: set for Hindi. English omitted (no "en-IN").
  * Voice: configured via ELEVENLABS_VOICE_ID_* env vars per language.
  * Output: MP3 @ 44.1 kHz / 128 kbps.
  */
@@ -26,14 +26,10 @@ const OUTPUT_FMT = "mp3_44100_128";
 // Language codes supported by Flash v2.5. English is omitted (use model default).
 const LANG_CODES: Record<string, string> = {
   hi: "hi",
-  ta: "ta",
-  mr: "mr",
 };
 
 function getLangFromFilename(filename: string): string {
   if (filename.endsWith("-hi")) return "hi";
-  if (filename.endsWith("-ta")) return "ta";
-  if (filename.endsWith("-mr")) return "mr";
   return "en";
 }
 
@@ -45,8 +41,6 @@ function getKey(): string {
 
 function getVoiceId(lang: string): string {
   if (lang === "hi") return process.env.ELEVENLABS_VOICE_ID_HI ?? process.env.ELEVENLABS_VOICE_ID ?? "WuePGPKIAIKI8COZpzce";
-  if (lang === "ta") return process.env.ELEVENLABS_VOICE_ID_TA ?? process.env.ELEVENLABS_VOICE_ID ?? "nwj0s2LU9bDWRKND5yzA";
-  if (lang === "mr") return process.env.ELEVENLABS_VOICE_ID_MR ?? process.env.ELEVENLABS_VOICE_ID ?? "nwj0s2LU9bDWRKND5yzA";
   return process.env.ELEVENLABS_VOICE_ID ?? "nwj0s2LU9bDWRKND5yzA";
 }
 

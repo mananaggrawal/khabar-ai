@@ -7,25 +7,12 @@ import { BottomNav } from "@/components/BottomNav";
 import { InstallNudge } from "@/components/InstallNudge";
 import { usePlayer } from "@/context/player";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
-import { useCityPreference } from "@/hooks/useCityPreference";
-import { CITIES } from "@/lib/news/sources";
+import { LANGUAGES, useLanguagePreference, readAvailableLanguages } from "@/hooks/useLanguagePreference";
 
 // WhatsApp number for feedback (country code, digits only, no +).
 const FEEDBACK_WHATSAPP = "917447434554";
 
-const LANGUAGE_KEY = "khabar-language";
 const AVAILABLE_LANGS_KEY = "khabar-available-languages";
-
-function readLanguage(): string {
-  try { return localStorage.getItem(LANGUAGE_KEY) || "en"; } catch { return "en"; }
-}
-
-function readAvailableLanguages(): string[] {
-  try {
-    const stored = localStorage.getItem(AVAILABLE_LANGS_KEY);
-    return stored ? JSON.parse(stored) : ["en", "hi"];
-  } catch { return ["en", "hi"]; }
-}
 
 export const Route = createFileRoute("/_authenticated/settings")({
   head: () => ({ meta: [{ title: "Settings · Khabar AI" }] }),
@@ -34,12 +21,11 @@ export const Route = createFileRoute("/_authenticated/settings")({
 
 function SettingsPage() {
   const router = useRouter();
-  const { mono, generatedCities } = usePlayer();
+  const { mono } = usePlayer();
   const hasMiniPlayer = mono.state === "playing" || mono.state === "paused";
-  const [selectedLang, setSelectedLang]       = useState<string>(readLanguage);
+  const { language: selectedLang, selectLanguage } = useLanguagePreference();
   const [availableLangs, setAvailableLangs]   = useState<string[]>(readAvailableLanguages);
   const push = usePushNotifications();
-  const { city, selectCity } = useCityPreference();
 
   // Re-read available languages on mount
   useEffect(() => {
@@ -52,14 +38,6 @@ function SettingsPage() {
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
   }, []);
-
-  function selectLanguage(code: string) {
-    setSelectedLang(code);
-    try {
-      localStorage.setItem(LANGUAGE_KEY, code);
-      window.dispatchEvent(new StorageEvent("storage", { key: LANGUAGE_KEY, newValue: code }));
-    } catch {}
-  }
 
   async function signOut() {
     // Stop playback first (2026-07-08 fix) — PlayerProvider lives above the
@@ -98,12 +76,7 @@ function SettingsPage() {
             The language your briefing is read in.
           </p>
           <div className="mt-4 space-y-2">
-            {[
-              { code: "en", label: "English", nativeName: "English" },
-              { code: "hi", label: "हिंदी",   nativeName: "Hindi"   },
-              { code: "ta", label: "தமிழ்",   nativeName: "Tamil"   },
-              { code: "mr", label: "मराठी",   nativeName: "Marathi" },
-            ].map((lang) => {
+            {LANGUAGES.map((lang) => {
               const available = availableLangs.includes(lang.code);
               const active = available && selectedLang === lang.code;
               return (
@@ -130,48 +103,6 @@ function SettingsPage() {
                     </span>
                   ) : !available ? (
                     <span className="text-[10px] uppercase tracking-widest text-muted-foreground/40">Not generated</span>
-                  ) : null}
-                </button>
-              );
-            })}
-          </div>
-        </section>
-
-        {/* City — Mumbai is always on; others unlock the moment the admin has
-            actually generated them (generatedCities), not just once their
-            static `available` flag is flipped in a future deploy. */}
-        <section>
-          <h2 className="font-serif text-lg">City</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Local news for your city, alongside your daily briefing.
-          </p>
-          <div className="mt-4 space-y-2">
-            {CITIES.map((c) => {
-              const available = c.available || generatedCities.has(c.id);
-              const active = available && city === c.id;
-              return (
-                <button
-                  key={c.id}
-                  disabled={!available}
-                  onClick={() => available && selectCity(c.id)}
-                  className={cn(
-                    "flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-colors",
-                    active
-                      ? "border-primary/40 bg-primary/10 text-foreground"
-                      : available
-                      ? "border-border text-foreground/70 hover:border-border/80 hover:bg-black/[0.02]"
-                      : "border-border/40 text-muted-foreground/40 cursor-not-allowed",
-                  )}
-                >
-                  <span className="flex-1 text-sm font-medium">{c.label}</span>
-                  {active ? (
-                    <span className="flex size-5 items-center justify-center rounded-full border border-primary bg-primary">
-                      <svg viewBox="0 0 20 20" fill="white" className="size-full p-0.5">
-                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                      </svg>
-                    </span>
-                  ) : !available ? (
-                    <span className="text-[10px] uppercase tracking-widest text-muted-foreground/40">Coming soon</span>
                   ) : null}
                 </button>
               );

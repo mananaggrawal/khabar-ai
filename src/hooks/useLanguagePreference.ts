@@ -16,13 +16,11 @@ export const LANGUAGE_KEY = "khabar-language";
 // used for the brief window before that computation lands.
 const AVAILABLE_LANGS_KEY = "khabar-available-languages";
 
-export type LanguageCode = "en" | "hi" | "ta" | "mr";
+export type LanguageCode = "en" | "hi";
 
 export const LANGUAGES: Array<{ code: LanguageCode; label: string; nativeName: string }> = [
   { code: "en", label: "English", nativeName: "English" },
   { code: "hi", label: "हिंदी",   nativeName: "Hindi"   },
-  { code: "ta", label: "தமிழ்",   nativeName: "Tamil"   },
-  { code: "mr", label: "मराठी",   nativeName: "Marathi" },
 ];
 
 export function readLanguage(): LanguageCode {

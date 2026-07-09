@@ -33,10 +33,6 @@ services:
         sync: false
       - key: ELEVENLABS_VOICE_ID_HI       # Hindi voice
         sync: false
-      - key: ELEVENLABS_VOICE_ID_TA       # Tamil voice
-        sync: false
-      - key: ELEVENLABS_VOICE_ID_MR       # Marathi voice
-        sync: false
       - key: ADMIN_KEY
         sync: false
       - key: OPENAI_API_KEY
