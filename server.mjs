@@ -645,8 +645,12 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
     });
 
     // Listening time by section (horizontal bars, most-listened first)
-    var bs = d.bySection || [];
-    var SEC_COLOR = { headlines:'#EF4444', india:'#F97316', world:'#0D9488', business:'#16A34A', technology:'#6366F1', sports:'#DB2777', science:'#0EA5E9', health:'#65A30D', quick15:'#A78BFA' };
+    // Quick 15 excluded (2026-07-09) — it's a curated cross-section queue, not
+    // a real topic; its seconds are already counted under the real sections
+    // (see handlers.ts sectionSec), so dropping this row here just avoids
+    // double-showing the same listen time as its own bar.
+    var bs = (d.bySection || []).filter(function(x){ return x.section !== 'quick15'; });
+    var SEC_COLOR = { headlines:'#EF4444', india:'#F97316', world:'#0D9488', business:'#16A34A', technology:'#6366F1', sports:'#DB2777', science:'#0EA5E9', health:'#65A30D' };
     if (charts.sectionChart) charts.sectionChart.destroy();
     charts.sectionChart = new Chart(ctx('sectionChart'), {
       type: 'bar',
