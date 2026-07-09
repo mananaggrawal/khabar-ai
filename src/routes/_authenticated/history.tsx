@@ -112,10 +112,7 @@ function SavedPage() {
   }
 
   return (
-    <div
-      className="min-h-screen bg-background text-foreground flex flex-col"
-      style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 148px)" }}
-    >
+    <div className="min-h-screen bg-background text-foreground flex flex-col">
       {/* Header */}
       <header
         className="sticky top-0 z-20 flex items-center justify-between px-5 pb-2 bg-background/95 backdrop-blur-sm"
@@ -129,7 +126,17 @@ function SavedPage() {
         </span>
       </header>
 
-      <main className="flex-1 px-4 py-4">
+      {/* BUG FIX (2026-07-09): this page was the one route missing an inner
+          overflow-y-auto scroll container — Home and Settings both scroll an
+          inner div, while this <main> previously let the real document/body
+          scroll instead. That's exactly the kind of thing that makes iOS
+          Safari's position:fixed elements (BottomNav, the mini-player) visibly
+          drift/jump during scroll, since they're reliably anchored to the
+          viewport only when the page itself never natively scrolls. */}
+      <main
+        className="flex-1 overflow-y-auto px-4 py-4"
+        style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 148px)" }}
+      >
         <h1 className="font-serif text-2xl mb-1">Saved</h1>
         <p className="text-xs text-muted-foreground mb-5">
           {saved.length > 0
