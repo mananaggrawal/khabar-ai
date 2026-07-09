@@ -1,11 +1,12 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Share2, RotateCw } from "lucide-react";
+import { RotateCw } from "lucide-react";
 import { VoiceOrb } from "@/components/VoiceOrb";
 
 import { StoryCard } from "@/components/StoryCard";
 import { StoryDetailSheet }  from "@/components/StoryDetailSheet";
 import { BottomNav }         from "@/components/BottomNav";
+import { AppHeader }         from "@/components/AppHeader";
 import { InstallNudge }      from "@/components/InstallNudge";
 import { NotificationNudge } from "@/components/NotificationNudge";
 import { getStoryTitle, getAudioUrl } from "@/hooks/useMonologue";
@@ -175,7 +176,6 @@ function HomePage() {
   // real section it belongs to).
   const [detailSource, setDetailSource] = useState<"quick" | "full">("full");
   const [activeSection, setActiveSection] = useState<PillId | null>(null);
-  const [userId, setUserId] = useState<string | null>(null);
   const pillsRef = useRef<HTMLDivElement>(null);
   // True when the open detail drawer is showing the currently-playing story, so
   // it should follow along as autoplay advances. False when opened on another story.
@@ -241,7 +241,6 @@ function HomePage() {
       .then(({ data }) => {
         if (!data?.user) return;
         identify(data.user.id, { email: data.user.email ?? undefined });
-        setUserId(data.user.id);
         // Attribute a referral once, on the first login carrying a stored code.
         try {
           const ref = localStorage.getItem("khabar-ref");
@@ -257,22 +256,6 @@ function HomePage() {
       .catch(() => {})
       .finally(() => track(EVENTS.APP_OPEN));
   }, []);
-
-  // Share / invite via the native share sheet, carrying the user's referral code.
-  async function handleInvite() {
-    const code = userId ?? "";
-    const url = `${window.location.origin}/?ref=${code}`;
-    const text = "I listen to my daily news on Khabar AI — it reads the day's top stories to me in a few minutes. Give it a try:";
-    try {
-      if (navigator.share) {
-        await navigator.share({ title: "Khabar AI", text, url });
-      } else {
-        await navigator.clipboard.writeText(url);
-        alert("Link copied — share it with a friend!");
-      }
-      track(EVENTS.INVITE_SHARED);
-    } catch { /* user cancelled the share sheet */ }
-  }
 
   // If the detail drawer is open ON the playing story, follow autoplay to the next
   useEffect(() => {
@@ -310,27 +293,8 @@ function HomePage() {
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
-      {/* Header */}
-      <header
-        className="sticky top-0 z-20 flex items-center justify-between px-5 pb-3 bg-background/95 backdrop-blur-sm"
-        style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 1rem)" }}
-      >
-        <span className="font-serif text-xl tracking-tight">
-          Khabar <em className="italic text-primary">AI</em>
-        </span>
-        <div className="flex items-center gap-3">
-          <span className="text-xs text-muted-foreground">
-            Today's news, <em className="font-semibold italic">spoken.</em>
-          </span>
-          <button
-            onClick={handleInvite}
-            aria-label="Invite a friend"
-            className="flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-black/5 hover:text-foreground transition-colors"
-          >
-            <Share2 className="size-4" />
-          </button>
-        </div>
-      </header>
+      {/* Header — shared across every page, see AppHeader.tsx */}
+      <AppHeader />
 
       <InstallNudge variant="banner" />
       <NotificationNudge />
@@ -415,7 +379,11 @@ function HomePage() {
               grouped by section, filtered by the active pill, as before. */}
           <div
             className="flex-1 overflow-y-auto px-4 pb-4"
-            style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 148px)" }}
+            // Bumped 148 → 220px (2026-07-09) — the mini player grew a second
+            // row (scrub bar + prev/-10s/play-pause/+10s/next) when the
+            // full-screen player was removed, so the old reservation no
+            // longer cleared it and it was covering the bottom of the list.
+            style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 220px)" }}
           >
             {isQuickPillActive ? (
               <section className="mb-5">

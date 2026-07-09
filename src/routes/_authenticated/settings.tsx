@@ -4,6 +4,7 @@ import { MessageCircle, Bell, BellOff } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import { BottomNav } from "@/components/BottomNav";
+import { AppHeader } from "@/components/AppHeader";
 import { InstallNudge } from "@/components/InstallNudge";
 import { usePlayer } from "@/context/player";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
@@ -22,7 +23,6 @@ export const Route = createFileRoute("/_authenticated/settings")({
 function SettingsPage() {
   const router = useRouter();
   const { mono } = usePlayer();
-  const hasMiniPlayer = mono.state === "playing" || mono.state === "paused";
   const { language: selectedLang, selectLanguage } = useLanguagePreference();
   const [availableLangs, setAvailableLangs]   = useState<string[]>(readAvailableLanguages);
   const push = usePushNotifications();
@@ -51,23 +51,22 @@ function SettingsPage() {
   }
 
   return (
-    <div
-      className="min-h-screen bg-background text-foreground flex flex-col"
-      style={{ paddingBottom: `calc(env(safe-area-inset-bottom, 0px) + ${hasMiniPlayer ? 132 : 60}px)` }}
-    >
-      <header
-        className="sticky top-0 z-20 flex items-center justify-between px-5 pb-2 bg-background/95 backdrop-blur-sm"
-        style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 1rem)" }}
-      >
-        <span className="font-serif text-xl tracking-tight">
-          Khabar <em className="italic text-primary">AI</em>
-        </span>
-        <span className="text-xs text-muted-foreground">
-          Today's news, <em className="font-semibold italic">spoken.</em>
-        </span>
-      </header>
+    <div className="min-h-screen bg-background text-foreground flex flex-col">
+      {/* Header — shared across every page, see AppHeader.tsx */}
+      <AppHeader />
 
-      <main className="flex-1 mx-auto w-full max-w-2xl space-y-10 px-6 py-4 overflow-y-auto">
+      {/* BUG FIX (2026-07-09): the bottom-clearance padding used to live on
+          this whole page's OUTER container instead of on this scrolling
+          <main> — since BottomNav/the mini player are position:fixed (not
+          part of normal layout flow), padding on the outer flex column did
+          nothing to keep them from covering content actually scrolled inside
+          <main>. That's why Sign out specifically was getting hidden behind
+          them. Moved here to match Home/Saved, and bumped for the mini
+          player's new taller two-row layout (scrub bar + 5 buttons). */}
+      <main
+        className="flex-1 mx-auto w-full max-w-2xl space-y-10 px-6 py-4 overflow-y-auto"
+        style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 220px)" }}
+      >
 
         {/* Language */}
         <section>

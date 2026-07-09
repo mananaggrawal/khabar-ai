@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Bookmark, Play, Pause, SkipBack, SkipForward, RotateCcw, RotateCw } from "lucide-react";
 import { BottomNav } from "@/components/BottomNav";
+import { AppHeader } from "@/components/AppHeader";
 import { StoryCard } from "@/components/StoryCard";
 import { StoryDetailSheet } from "@/components/StoryDetailSheet";
 import { useSavedStories } from "@/hooks/useSavedStories";
@@ -133,18 +134,8 @@ function SavedPage() {
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
-      {/* Header */}
-      <header
-        className="sticky top-0 z-20 flex items-center justify-between px-5 pb-2 bg-background/95 backdrop-blur-sm"
-        style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 1rem)" }}
-      >
-        <span className="font-serif text-xl tracking-tight">
-          Khabar <em className="italic text-primary">AI</em>
-        </span>
-        <span className="text-xs text-muted-foreground">
-          Today's news, <em className="font-semibold italic">spoken.</em>
-        </span>
-      </header>
+      {/* Header — shared across every page, see AppHeader.tsx */}
+      <AppHeader />
 
       {/* BUG FIX (2026-07-09): this page was the one route missing an inner
           overflow-y-auto scroll container — Home and Settings both scroll an
@@ -155,7 +146,9 @@ function SavedPage() {
           viewport only when the page itself never natively scrolls. */}
       <main
         className="flex-1 overflow-y-auto px-4 py-4"
-        style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 148px)" }}
+        // Bumped 148 → 220px (2026-07-09) — same mini-player-grew-taller fix
+        // as Home, see routes/index.tsx.
+        style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 220px)" }}
       >
         <h1 className="font-serif text-2xl mb-1">Saved</h1>
         <p className="text-xs text-muted-foreground mb-5">
