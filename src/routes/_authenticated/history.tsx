@@ -2,11 +2,10 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createPortal } from "react-dom";
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Bookmark, Play, Pause, SkipBack, SkipForward } from "lucide-react";
+import { Bookmark, Play, Pause, SkipBack, SkipForward, RotateCcw, RotateCw } from "lucide-react";
 import { BottomNav } from "@/components/BottomNav";
 import { StoryCard } from "@/components/StoryCard";
 import { StoryDetailSheet } from "@/components/StoryDetailSheet";
-import { PlayerScreen } from "@/components/PlayerScreen";
 import { useSavedStories } from "@/hooks/useSavedStories";
 import { useMonologue, getStoryTitle, getSectionLabel, getAudioUrl } from "@/hooks/useMonologue";
 import { usePlayer } from "@/context/player";
@@ -26,10 +25,12 @@ function formatGroup(iso: string): string {
   return date.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "long" });
 }
 
-// Mini player for the saved page
+// Mini player for the saved page (2026-07-09 — same two-row layout as the
+// global one in player.tsx: row 1 opens the now-playing summary, row 2 has
+// a draggable scrub bar + prev/-10s/play-pause/+10s/next).
 function SavedMiniPlayer({ mono, onOpen }: { mono: ReturnType<typeof useMonologue>; onOpen: () => void }) {
   if (typeof document === "undefined") return null;
-  const { state, progress, currentStory, currentFeed, pause, resume, language } = mono;
+  const { state, progress, currentStory, currentFeed, pause, resume, prev, next, seek, seekBackward, seekForward, language } = mono;
   const visible = state === "playing" || state === "paused";
   const isPlaying = state === "playing";
 
@@ -42,9 +43,8 @@ function SavedMiniPlayer({ mono, onOpen }: { mono: ReturnType<typeof useMonologu
           style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 62px)" }}
           className="fixed inset-x-3 z-50"
         >
-          <div className="relative overflow-hidden rounded-2xl border border-border bg-background/95 backdrop-blur-md shadow-xl cursor-pointer" onClick={onOpen}>
-            <div className="absolute top-0 left-0 h-[2px] bg-primary transition-all duration-300" style={{ width: `${progress * 100}%` }} />
-            <div className="flex items-center gap-3 px-4 py-3">
+          <div className="relative overflow-hidden rounded-2xl border border-border bg-background/95 backdrop-blur-md shadow-xl">
+            <div className="flex items-center gap-3 px-4 pt-3 pb-1.5 cursor-pointer" onClick={onOpen}>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[11px] text-muted-foreground">
                   {currentFeed ? getSectionLabel(currentFeed, language) : "Playing"}
@@ -53,15 +53,30 @@ function SavedMiniPlayer({ mono, onOpen }: { mono: ReturnType<typeof useMonologu
                   {currentStory ? getStoryTitle(currentStory, language) : "—"}
                 </p>
               </div>
-              <div className="flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                <button onClick={() => mono.prev()} className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:text-foreground">
+            </div>
+            <div className="px-4 pb-3">
+              <input
+                type="range" min={0} max={1} step={0.001} value={progress}
+                onChange={(e) => seek(parseFloat(e.target.value))}
+                aria-label="Seek"
+                className="w-full h-1 cursor-pointer rounded-full accent-primary"
+                style={{ background: `linear-gradient(to right, var(--primary) ${progress * 100}%, oklch(0 0 0 / 0.12) ${progress * 100}%)` }}
+              />
+              <div className="mt-2 flex items-center justify-center gap-5">
+                <button onClick={prev} aria-label="Previous story" className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:text-foreground">
                   <SkipBack className="size-4 fill-current" />
                 </button>
-                <button onClick={isPlaying ? pause : resume}
-                  className="flex size-8 items-center justify-center rounded-full bg-primary text-white transition-transform active:scale-95">
+                <button onClick={() => seekBackward(10)} aria-label="Rewind 10s" className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:text-foreground">
+                  <RotateCcw className="size-4" />
+                </button>
+                <button onClick={isPlaying ? pause : resume} aria-label={isPlaying ? "Pause" : "Play"}
+                  className="flex size-10 items-center justify-center rounded-full bg-primary text-white transition-transform active:scale-95">
                   {isPlaying ? <Pause className="size-4 fill-current" /> : <Play className="size-4 fill-current ml-0.5" />}
                 </button>
-                <button onClick={() => mono.next()} className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:text-foreground">
+                <button onClick={() => seekForward(10)} aria-label="Forward 10s" className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:text-foreground">
+                  <RotateCw className="size-4" />
+                </button>
+                <button onClick={next} aria-label="Next story" className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:text-foreground">
                   <SkipForward className="size-4 fill-current" />
                 </button>
               </div>
@@ -78,7 +93,12 @@ function SavedPage() {
   const { saved, loading, isSaved, toggle, remove } = useSavedStories();
   const { briefing: liveBriefing } = usePlayer();
   const [detailStory, setDetailStory] = useState<Story | null>(null);
-  const [playerOpen, setPlayerOpen] = useState(false);
+  // "Now playing" summary popup (2026-07-09 — replaces the removed
+  // full-screen PlayerScreen), separate from `detailStory` above which is
+  // for tapping a card to preview a story that may not be playing at all.
+  // Opening this always shows mono.currentStory live, so it follows
+  // playback as it advances rather than staying pinned to a snapshot.
+  const [nowPlayingOpen, setNowPlayingOpen] = useState(false);
 
   // Saved stories are a snapshot taken at save time (useSavedStories writes the
   // full story object into Supabase). If that story's script/title/audio is
@@ -101,7 +121,7 @@ function SavedPage() {
 
   const mono = useMonologue({ briefing: syntheticBriefing });
 
-  useEffect(() => { if (mono.state === "idle") setPlayerOpen(false); }, [mono.state]);
+  useEffect(() => { if (mono.state === "idle") setNowPlayingOpen(false); }, [mono.state]);
 
   // Group by save date
   const groups: { label: string; stories: typeof freshSaved }[] = [];
@@ -195,30 +215,41 @@ function SavedPage() {
       </main>
 
       <BottomNav />
-      <SavedMiniPlayer mono={mono} onOpen={() => setPlayerOpen(true)} />
+      <SavedMiniPlayer mono={mono} onOpen={() => setNowPlayingOpen(true)} />
 
-      <PlayerScreen
-        mono={mono}
-        visible={playerOpen}
-        onClose={() => setPlayerOpen(false)}
-        isSaved={mono.currentStory ? isSaved(mono.currentStory.id) : false}
-        onSave={() => mono.currentStory && toggle(mono.currentStory)}
-      />
-
+      {/* Unified with the preview sheet below — nowPlayingOpen (tapped the
+          mini player) takes precedence and always shows the live current
+          story; otherwise falls back to whatever card was tapped to preview
+          (2026-07-09, replaces the removed full-screen PlayerScreen). */}
       <StoryDetailSheet
-        story={detailStory}
+        story={nowPlayingOpen ? mono.currentStory : detailStory}
         language={mono.language}
-        onClose={() => setDetailStory(null)}
+        onClose={() => { setNowPlayingOpen(false); setDetailStory(null); }}
         onPlay={() => {
+          if (nowPlayingOpen) {
+            mono.state === "playing" ? mono.pause() : mono.resume();
+            return;
+          }
           if (detailStory) {
             const idx = mono.storiesWithAudio.findIndex((s) => s.id === detailStory.id);
             if (idx >= 0) mono.playFromInSection(idx, resolveSection(detailStory.section));
           }
           setDetailStory(null);
         }}
-        isPlaying={!!detailStory && mono.currentStory?.id === detailStory.id && mono.state === "playing"}
-        isSaved={detailStory ? isSaved(detailStory.id) : false}
-        onSave={() => detailStory && toggle(detailStory)}
+        isPlaying={
+          nowPlayingOpen
+            ? mono.state === "playing"
+            : !!detailStory && mono.currentStory?.id === detailStory.id && mono.state === "playing"
+        }
+        isSaved={
+          nowPlayingOpen
+            ? (mono.currentStory ? isSaved(mono.currentStory.id) : false)
+            : (detailStory ? isSaved(detailStory.id) : false)
+        }
+        onSave={() => {
+          const target = nowPlayingOpen ? mono.currentStory : detailStory;
+          if (target) toggle(target);
+        }}
       />
     </div>
   );
