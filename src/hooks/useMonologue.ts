@@ -366,13 +366,27 @@ export function useMonologue({
             }
           }
 
-          // Save resume position every 5s
+          // Save resume position every 5s.
+          // BUG FIX (2026-07-09): this used to save only a bare array INDEX
+          // (currentIdxRef.current) into whatever storiesWithAudio was bound
+          // at save time — which could be either the Quick 15 batch or the
+          // full section list, with no record of which. On the next fresh
+          // page load, PlayerProvider's quickActive always starts false
+          // (never persisted), so hydration below always re-binds against
+          // the FULL list and blindly applies the old index to it — an
+          // index saved while browsing a 15-story Quick batch is almost
+          // always still "in bounds" for the much longer full list, so it
+          // silently resolved to a totally different, arbitrary story.
+          // Reported as "I refreshed, tapped play, something random
+          // starts." Now also saving the actual story id so hydration can
+          // look the story up directly instead of trusting position.
           const now = Date.now();
           if (now - lastSaveRef.current > 5000) {
             lastSaveRef.current = now;
             try {
               localStorage.setItem(RESUME_KEY, JSON.stringify({
                 idx: currentIdxRef.current,
+                storyId: storiesWithAudio[currentIdxRef.current]?.id ?? null,
                 time: ct,
                 date: briefing?.date ?? "",
                 lang: language,
@@ -411,20 +425,29 @@ export function useMonologue({
     try {
       const saved = localStorage.getItem(RESUME_KEY);
       if (!saved) return;
-      const { idx, time, date, lang } = JSON.parse(saved);
+      const { storyId, time, date, lang } = JSON.parse(saved);
       const dateMatch = !date || date === briefing?.date;
       const langMatch = !lang || lang === language;
-      if (idx >= 0 && idx < storiesWithAudio.length && time > 2 && dateMatch && langMatch) {
-        if (!getAudioUrl(storiesWithAudio[idx], language)) return;
-        // Cue the mini-player WITHOUT attaching audio. The first play() goes through
-        // playAt (via resume), which fully wires queue auto-advance. Attaching here
-        // would leave an un-wired element that plays one clip then stops.
-        setCurrentStoryIdx(idx);
-        currentStoryIdRef.current = storiesWithAudio[idx].id;
-        setQueueMode("all");
-        pauseTimeRef.current = time;
-        setState("paused");
-      }
+      if (!dateMatch || !langMatch || !(time > 2)) return;
+      // BUG FIX (2026-07-09): resolve by story id, not by trusting the saved
+      // array position — see the save-side comment above for why a bare
+      // index is unsafe here (whichever list is bound at THIS mount — Quick
+      // 15 batch or full section list — may not be the same one the index
+      // was originally saved against, since quickActive is never persisted
+      // and always starts false on a fresh mount). Old saved entries from
+      // before this fix won't carry storyId — skip resuming rather than
+      // risk applying a position-only value to the wrong list.
+      const idx = storyId ? storiesWithAudio.findIndex((s) => s.id === storyId) : -1;
+      if (idx < 0) return;
+      if (!getAudioUrl(storiesWithAudio[idx], language)) return;
+      // Cue the mini-player WITHOUT attaching audio. The first play() goes through
+      // playAt (via resume), which fully wires queue auto-advance. Attaching here
+      // would leave an un-wired element that plays one clip then stops.
+      setCurrentStoryIdx(idx);
+      currentStoryIdRef.current = storiesWithAudio[idx].id;
+      setQueueMode("all");
+      pauseTimeRef.current = time;
+      setState("paused");
     } catch {}
   }, [storiesWithAudio, briefing, language]);
 
@@ -592,10 +615,16 @@ export function useMonologue({
     try {
       const saved = localStorage.getItem(RESUME_KEY);
       if (saved) {
-        const { idx, time, date, lang } = JSON.parse(saved);
+        const { storyId, time, date, lang } = JSON.parse(saved);
         const dateMatch = !date || date === briefing?.date;
         const langMatch = !lang || lang === language;
-        if (idx >= 0 && idx < storiesWithAudio.length && time > 2 && dateMatch && langMatch) {
+        // Same id-based-not-position-based fix as the hydration effect above
+        // (2026-07-09) — this call site had the identical "wrong list bound
+        // right now" hazard.
+        const idx = storyId && dateMatch && langMatch && time > 2
+          ? storiesWithAudio.findIndex((s) => s.id === storyId)
+          : -1;
+        if (idx >= 0) {
           playAt(idx, "all", time);
           return;
         }
