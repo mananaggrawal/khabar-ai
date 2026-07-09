@@ -10,6 +10,18 @@ import type { Story } from "@/lib/news/generator";
 import { FEED_MAP } from "@/lib/news/sources";
 import { type Language, getStoryTitle, getSectionLabel } from "@/hooks/useMonologue";
 import { SECTION_COLOR } from "@/components/StoryCard";
+import type { SectionId } from "@/lib/news/sources";
+
+// Same legacy-section fallback as useMonologue.ts/StoryCard.tsx (2026-07-09) —
+// without it, a story tagged with a removed/legacy section (e.g. "local")
+// showed a blank section label and default accent color here instead of
+// falling back to India like every other place that reads story.section.
+const LEGACY_SECTION: Record<string, SectionId> = { politics: "india", techlife: "technology", entertainment: "india" };
+function resolveSection(s: string): SectionId {
+  if (s in LEGACY_SECTION) return LEGACY_SECTION[s];
+  if (FEED_MAP.has(s as SectionId)) return s as SectionId;
+  return "india";
+}
 
 interface StoryDetailSheetProps {
   story: Story | null;
@@ -125,8 +137,8 @@ export function StoryDetailSheet({
   const backdropZ = elevated ? "z-[65]" : "z-[55]";
   const sheetZ    = elevated ? "z-[66]" : "z-[56]";
 
-  const feed = story ? FEED_MAP.get(story.section) : null;
-  const accent = story ? (SECTION_COLOR[story.section] ?? "#7B5CF0") : "#7B5CF0";
+  const feed = story ? FEED_MAP.get(resolveSection(story.section)) : null;
+  const accent = story ? (SECTION_COLOR[resolveSection(story.section)] ?? "#7B5CF0") : "#7B5CF0";
   const script = story
     ? (language === "hi" ? (story.scriptHi || story.scriptEn) : story.scriptEn) || null
     : null;

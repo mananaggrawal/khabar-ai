@@ -24,6 +24,23 @@ import { EVENTS, HEARTBEAT_SEC } from "@/lib/analytics/events";
 export type MonologueState = "idle" | "playing" | "paused" | "error";
 export type Language = "en" | "hi";
 
+// Legacy/removed section names → current section (2026-07-09 bug fix) — every
+// OTHER file that reads a story's `.section` (routes/index.tsx, StoryCard.tsx,
+// PlayerScreen.tsx, context/player.tsx) already normalizes it through an
+// equivalent map before touching FEED_MAP; this file was the one place that
+// didn't, and did `FEED_MAP.get(story.section)!` (non-null asserted). Any
+// story still carrying an old tag no longer in FEED_MAP — most concretely
+// "local" (removed 2026-07-08), but also the older politics/techlife/
+// entertainment tags — made that assertion lie and crashed the whole app on
+// "Cannot read properties of undefined (reading 'label')" the moment such a
+// story showed up in a loaded briefing.
+const LEGACY_SECTION: Record<string, SectionId> = { politics: "india", techlife: "technology", entertainment: "india" };
+function resolveSection(s: SectionId): SectionId {
+  if (s in LEGACY_SECTION) return LEGACY_SECTION[s];
+  if (FEED_MAP.has(s)) return s;
+  return "india";
+}
+
 const RESUME_KEY    = "khabar-resume-pos";
 const LANGUAGE_KEY  = "khabar-language";
 const COMPLETED_KEY = "khabar-completed";   // { date, ids: [] } — persists "listened" marks
@@ -238,12 +255,13 @@ export function useMonologue({
     const seen = new Set<SectionId>();
     const result: Array<{ id: SectionId; label: string; labelHi: string; emoji: string; stories: Story[] }> = [];
     for (const story of storiesWithAudio) {
-      if (!seen.has(story.section)) {
-        seen.add(story.section);
-        const feed = FEED_MAP.get(story.section)!;
-        result.push({ id: story.section, label: feed.label, labelHi: feed.labelHi, emoji: feed.emoji, stories: [] });
+      const section = resolveSection(story.section);
+      if (!seen.has(section)) {
+        seen.add(section);
+        const feed = FEED_MAP.get(section)!;
+        result.push({ id: section, label: feed.label, labelHi: feed.labelHi, emoji: feed.emoji, stories: [] });
       }
-      result.find((s) => s.id === story.section)!.stories.push(story);
+      result.find((s) => s.id === section)!.stories.push(story);
     }
     return result;
   }, [storiesWithAudio]);
@@ -251,7 +269,7 @@ export function useMonologue({
   const currentStory: Story | null =
     currentStoryIdx >= 0 ? storiesWithAudio[currentStoryIdx] ?? null : null;
 
-  const currentFeed = currentStory ? FEED_MAP.get(currentStory.section) ?? null : null;
+  const currentFeed = currentStory ? FEED_MAP.get(resolveSection(currentStory.section)) ?? null : null;
 
   // ── Audio attachment ──────────────────────────────────────────────────────
 
