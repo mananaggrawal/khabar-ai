@@ -36,7 +36,11 @@ const BG_ADVANCE_LEAD_SEC = 0.5;
 
 const SUPPORTED_LANGS: Language[] = ["en", "hi"];
 
-function readLanguage(): Language {
+// Exported (2026-07-09) so PlayerProvider can filter Quick 15 candidate
+// pools by audio-availability in the current language without needing
+// `mono` itself in scope yet (buildNextQuickBatch/refreshQuickBatch are
+// defined before `const mono = useMonologue(...)` in player.tsx).
+export function readLanguage(): Language {
   try {
     const v = localStorage.getItem(LANGUAGE_KEY) as Language;
     return SUPPORTED_LANGS.includes(v) ? v : "en";
@@ -151,6 +155,10 @@ export function useMonologue({
   const preloadRef     = useRef<HTMLAudioElement | null>(null);
   const pauseTimeRef   = useRef(0);
   const currentIdxRef  = useRef(-1);
+  // Tracks the ACTUAL story id currently loaded/playing — independent of
+  // currentStoryIdx's bare integer position. See the resync effect below for
+  // why this exists (2026-07-09).
+  const currentStoryIdRef = useRef<string | null>(null);
   const queueModeRef   = useRef<"all" | SectionId | null>(null);
   const lastSaveRef    = useRef(0);
   const playAtRef      = useRef<((idx: number, mode: "all" | SectionId | null, startAt?: number) => void) | null>(null);
@@ -190,6 +198,28 @@ export function useMonologue({
   // Keep refs in sync
   useEffect(() => { currentIdxRef.current = currentStoryIdx; }, [currentStoryIdx]);
   useEffect(() => { queueModeRef.current = queueMode; }, [queueMode]);
+
+  // BUG FIX (2026-07-09) — "random story/voice after refresh": currentStoryIdx
+  // is a bare integer POSITION into storiesWithAudio, which is re-derived
+  // fresh every time `briefing.stories` changes (e.g. Quick 15's "Refresh"
+  // swaps stale slots in quickBatch for fresh candidates — see
+  // refreshQuickQueue in quickQueue.ts, whose candidate pool isn't filtered
+  // by audio-availability). If a replacement's audio-availability differs
+  // from what it replaced, the audio-filtered array's SHAPE shifts at that
+  // point — every index after it now points one story earlier/later — even
+  // though the actively-playing <audio> element never stopped or changed.
+  // currentStoryIdx just kept its old numeric value, so `currentStory`
+  // (title, section, everything the UI shows) silently started pointing at
+  // a NEIGHBORING story while the real audio kept playing the original one
+  // — reported as "the story and voice don't match" right after a refresh.
+  // Fix: whenever storiesWithAudio itself changes shape, re-find the actual
+  // playing story BY ID and re-anchor the index to wherever it now lands.
+  useEffect(() => {
+    const id = currentStoryIdRef.current;
+    if (!id) return;
+    const idx = storiesWithAudio.findIndex((s) => s.id === id);
+    if (idx >= 0 && idx !== currentIdxRef.current) setCurrentStoryIdx(idx);
+  }, [storiesWithAudio]);
 
   // React to language changes from settings
   useEffect(() => {
@@ -384,6 +414,7 @@ export function useMonologue({
         // playAt (via resume), which fully wires queue auto-advance. Attaching here
         // would leave an un-wired element that plays one clip then stops.
         setCurrentStoryIdx(idx);
+        currentStoryIdRef.current = storiesWithAudio[idx].id;
         setQueueMode("all");
         pauseTimeRef.current = time;
         setState("paused");
@@ -396,7 +427,7 @@ export function useMonologue({
   const playAt = useCallback(
     (idx: number, mode: "all" | SectionId | null, startAt = 0) => {
       const story = storiesWithAudio[idx];
-      if (!story) { setState("idle"); setCurrentStoryIdx(-1); return; }
+      if (!story) { setState("idle"); setCurrentStoryIdx(-1); currentStoryIdRef.current = null; return; }
 
       // BUG FIX/FEATURE (2026-07-06): skipping away from a story — next(),
       // prev(), tapping a different story, or auto-advance — now marks it
@@ -417,6 +448,7 @@ export function useMonologue({
 
       setError(null);
       setCurrentStoryIdx(idx);
+      currentStoryIdRef.current = story.id;
       setQueueMode(mode);
 
       const onEnded = mode !== null
@@ -588,6 +620,7 @@ export function useMonologue({
     setProgress(0);
     setDuration(0);
     setCurrentStoryIdx(-1);
+    currentStoryIdRef.current = null;
     setQueueMode(null);
     pauseTimeRef.current = 0;
     try { localStorage.removeItem(RESUME_KEY); } catch {}

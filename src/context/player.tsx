@@ -10,14 +10,14 @@ import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useRouterState } from "@tanstack/react-router";
 import { motion, AnimatePresence } from "motion/react";
-import { Play, Pause, SkipBack, SkipForward } from "lucide-react";
+import { Play, Pause, SkipBack, SkipForward, RotateCcw, RotateCw } from "lucide-react";
 
 import { fetchBriefing } from "@/lib/news/briefing.functions";
-import { useMonologue, getStoryTitle, getSectionLabel, getAudioUrl, readCompletedIds } from "@/hooks/useMonologue";
+import { useMonologue, getStoryTitle, getSectionLabel, getAudioUrl, readCompletedIds, readLanguage } from "@/hooks/useMonologue";
 import { useSavedStories } from "@/hooks/useSavedStories";
 import { useQuickConsumed } from "@/hooks/useQuickConsumed";
 import { buildQuickQueue, refreshQuickQueue } from "@/lib/news/quickQueue";
-import { PlayerScreen } from "@/components/PlayerScreen";
+import { StoryDetailSheet } from "@/components/StoryDetailSheet";
 import { resolveSection, SECTION_ORDER as SECTION_DISPLAY_ORDER, type SectionId } from "@/lib/news/sources";
 import type { Story, DailyBriefing } from "@/lib/news/generator";
 
@@ -26,7 +26,6 @@ type PlayerContextValue = {
   briefing: DailyBriefing | null;
   isLoading: boolean;
   saved: ReturnType<typeof useSavedStories>;
-  openPlayer: () => void;
   // Quick 15 (2026-07-07 rewrite) — no longer a global mode; it's a
   // permanent section/pill on Home that coexists with the real topic
   // sections. `quickBatch` is the current curated 15-story list, built and
@@ -56,9 +55,14 @@ type PlayerContextValue = {
 const PlayerCtx = createContext<PlayerContextValue | null>(null);
 
 // ── Mini Player (portal) — persists across routes ───────────────────────────
+// Two-row layout (2026-07-09 — replaces the removed full-screen PlayerScreen):
+// row 1 (title/section) opens the "now playing" summary popup; row 2 carries
+// a real draggable scrub bar plus prev/-10s/play-pause/+10s/next, so playback
+// stays fully controllable from the mini player alone with the popup open on
+// top of it — no separate full-screen surface needed anymore.
 function MiniPlayer({ mono, onOpen }: { mono: ReturnType<typeof useMonologue>; onOpen: () => void }) {
   if (typeof document === "undefined") return null;
-  const { state, progress, currentStory, currentFeed, pause, resume, language } = mono;
+  const { state, progress, currentStory, currentFeed, pause, resume, prev, next, seek, seekBackward, seekForward, language } = mono;
   const visible = state === "playing" || state === "paused";
   const isPlaying = state === "playing";
 
@@ -76,12 +80,12 @@ function MiniPlayer({ mono, onOpen }: { mono: ReturnType<typeof useMonologue>; o
           style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 62px)", backfaceVisibility: "hidden" }}
           className="fixed inset-x-3 z-50"
         >
-          <div
-            className="relative overflow-hidden rounded-2xl border border-border bg-background/95 backdrop-blur-md shadow-xl cursor-pointer"
-            onClick={onOpen}
-          >
-            <div className="absolute top-0 left-0 h-[2px] bg-primary transition-all duration-300" style={{ width: `${progress * 100}%` }} />
-            <div className="flex items-center gap-3 px-4 py-3">
+          <div className="relative overflow-hidden rounded-2xl border border-border bg-background/95 backdrop-blur-md shadow-xl">
+            {/* Row 1 — tap opens the now-playing summary popup */}
+            <div
+              className="flex items-center gap-3 px-4 pt-3 pb-1.5 cursor-pointer"
+              onClick={onOpen}
+            >
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[11px] text-muted-foreground">
                   {currentFeed ? getSectionLabel(currentFeed, language) : "Playing"}
@@ -90,16 +94,35 @@ function MiniPlayer({ mono, onOpen }: { mono: ReturnType<typeof useMonologue>; o
                   {currentStory ? getStoryTitle(currentStory, language) : "—"}
                 </p>
               </div>
-              <div className="flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                <button onClick={() => mono.prev()} aria-label="Previous"
+            </div>
+
+            {/* Row 2 — scrub bar + transport controls */}
+            <div className="px-4 pb-3">
+              <input
+                type="range" min={0} max={1} step={0.001} value={progress}
+                onChange={(e) => seek(parseFloat(e.target.value))}
+                aria-label="Seek"
+                className="w-full h-1 cursor-pointer rounded-full accent-primary"
+                style={{ background: `linear-gradient(to right, var(--primary) ${progress * 100}%, oklch(0 0 0 / 0.12) ${progress * 100}%)` }}
+              />
+              <div className="mt-2 flex items-center justify-center gap-5">
+                <button onClick={prev} aria-label="Previous story"
                   className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:text-foreground transition-colors">
                   <SkipBack className="size-4 fill-current" />
                 </button>
+                <button onClick={() => seekBackward(10)} aria-label="Rewind 10s"
+                  className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:text-foreground transition-colors">
+                  <RotateCcw className="size-4" />
+                </button>
                 <button onClick={isPlaying ? pause : resume} aria-label={isPlaying ? "Pause" : "Play"}
-                  className="flex size-8 items-center justify-center rounded-full bg-primary text-white transition-transform active:scale-95">
+                  className="flex size-10 items-center justify-center rounded-full bg-primary text-white transition-transform active:scale-95">
                   {isPlaying ? <Pause className="size-4 fill-current" /> : <Play className="size-4 fill-current ml-0.5" />}
                 </button>
-                <button onClick={() => mono.next()} aria-label="Next"
+                <button onClick={() => seekForward(10)} aria-label="Forward 10s"
+                  className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:text-foreground transition-colors">
+                  <RotateCw className="size-4" />
+                </button>
+                <button onClick={next} aria-label="Next story"
                   className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:text-foreground transition-colors">
                   <SkipForward className="size-4 fill-current" />
                 </button>
@@ -196,7 +219,20 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     // bug reported after Quick 15 refresh. Bucketing by section further down
     // is unaffected either way, since it only depends on relative order
     // WITHIN a section, which resorting (a stable sort) never changes.
-    return buildQuickQueue(rawBriefing.stories, excludeIds);
+    //
+    // BUG FIX (2026-07-09, second pass): also drop candidates with no audio
+    // in the CURRENT language before handing them to buildQuickQueue. If a
+    // no-audio story ever landed in quickBatch, useMonologue's own
+    // storiesWithAudio filter would silently exclude it — shifting every
+    // index after it in the audio-filtered array relative to quickBatch's
+    // raw positions. That's what let a "Refresh" swap desync the actively-
+    // playing story's DISPLAYED identity from its actually-playing audio
+    // (see the currentStoryIdRef resync fix in useMonologue.ts) — filtering
+    // here closes the gap that let it happen in the first place, rather than
+    // just recovering from it after the fact.
+    const lang = readLanguage();
+    const candidates = rawBriefing.stories.filter((s) => !!getAudioUrl(s, lang));
+    return buildQuickQueue(candidates, excludeIds);
   }, [briefing, rawBriefing]);
 
   // Build the batch as soon as the day's briefing is available — always, not
@@ -361,15 +397,26 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     ]);
     // Same rawBriefing-vs-briefing fix as buildNextQuickBatch above — the
     // voice-inference fallback inside refreshQuickQueue must see the
-    // ORIGINAL generation-time order, not the client-resorted one.
-    setQuickBatch(refreshQuickQueue(quickBatch, rawBriefing.stories, staleIds, excludeFromPool));
-  }, [briefing, rawBriefing, quickBatch, isQuickSlotStale, mono.completedIds]);
+    // ORIGINAL generation-time order, not the client-resorted one. Also same
+    // audio-availability filter as buildNextQuickBatch, for the same reason
+    // — never draw a no-audio replacement into quickBatch.
+    const candidates = rawBriefing.stories.filter((s) => !!getAudioUrl(s, mono.language));
+    setQuickBatch(refreshQuickQueue(quickBatch, candidates, staleIds, excludeFromPool));
+  }, [briefing, rawBriefing, quickBatch, isQuickSlotStale, mono.completedIds, mono.language]);
 
   const saved = useSavedStories();
-  const [playerOpen, setPlayerOpen] = useState(false);
+  // "Now playing" summary popup (2026-07-09 — replaces the removed
+  // full-screen PlayerScreen). Deliberately global here, not per-route: it
+  // always shows mono.currentStory live, so it naturally follows playback as
+  // it advances, and the mini player (also global) stays visible underneath
+  // it since both are portaled siblings rather than one replacing the other.
+  // This is a SEPARATE concept from each route's own "tap a story card to
+  // preview its summary" sheet (routes/index.tsx, history.tsx) — that one is
+  // pinned to whatever was tapped and may not be the playing story at all.
+  const [nowPlayingOpen, setNowPlayingOpen] = useState(false);
 
-  // Close the full player when playback stops
-  useEffect(() => { if (mono.state === "idle") setPlayerOpen(false); }, [mono.state]);
+  // Close the now-playing popup when playback stops entirely.
+  useEffect(() => { if (mono.state === "idle") setNowPlayingOpen(false); }, [mono.state]);
 
   // Persist which languages are available in this briefing. Requires at least
   // half the stories to have audio in that language (2026-07-05, was "any
@@ -394,7 +441,6 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     briefing,
     isLoading: briefingQuery.isLoading,
     saved,
-    openPlayer: () => setPlayerOpen(true),
     quickBatch,
     quickActive,
     playFromQuick,
@@ -418,11 +464,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       {children}
       {!onAuthPage && (
         <>
-          <MiniPlayer mono={mono} onOpen={() => setPlayerOpen(true)} />
-          <PlayerScreen
-            mono={mono}
-            visible={playerOpen}
-            onClose={() => setPlayerOpen(false)}
+          <MiniPlayer mono={mono} onOpen={() => setNowPlayingOpen(true)} />
+          <StoryDetailSheet
+            story={nowPlayingOpen ? mono.currentStory : null}
+            language={mono.language}
+            onClose={() => setNowPlayingOpen(false)}
+            onPlay={() => (mono.state === "playing" ? mono.pause() : mono.resume())}
+            isPlaying={mono.state === "playing"}
             isSaved={mono.currentStory ? saved.isSaved(mono.currentStory.id) : false}
             onSave={() => mono.currentStory && saved.toggle(mono.currentStory)}
           />
