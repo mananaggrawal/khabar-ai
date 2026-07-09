@@ -14,7 +14,19 @@ export function BottomNav() {
   return (
     <nav
       className="fixed bottom-0 left-0 right-0 z-40 bg-background/95 backdrop-blur-sm"
-      style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
+      // GPU-layer promotion (2026-07-09) — iOS Safari doesn't always keep a
+      // position:fixed element reliably pinned to the viewport during active/
+      // momentum scroll using software repaint alone, which is what "the
+      // navbar scrolls up when I scroll" actually is. Forcing this onto its
+      // own compositing layer makes Safari track it via hardware compositing
+      // instead, which is the standard fix for this specific, long-documented
+      // class of bug.
+      style={{
+        paddingBottom: "env(safe-area-inset-bottom, 0px)",
+        transform: "translateZ(0)",
+        WebkitTransform: "translateZ(0)",
+        backfaceVisibility: "hidden",
+      }}
     >
       <div className="h-[56px] flex items-center justify-around">
         {TABS.map(({ to, label, Icon }) => {

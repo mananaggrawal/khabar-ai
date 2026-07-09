@@ -142,6 +142,7 @@ export function StoryDetailSheet({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className={`fixed inset-0 ${backdropZ} bg-black/30 backdrop-blur-sm`}
+            style={{ backfaceVisibility: "hidden" }}
             onClick={onClose}
           />
 
@@ -159,7 +160,11 @@ export function StoryDetailSheet({
             dragElastic={{ top: 0, bottom: 0.6 }}
             onDragEnd={(_e, info) => { if (info.offset.y > 110 || info.velocity.y > 600) onClose(); }}
             className={`fixed inset-x-0 bottom-0 ${sheetZ} flex max-h-[85vh] flex-col rounded-t-3xl bg-white shadow-2xl`}
-            style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
+            // backfaceVisibility (2026-07-09) — same GPU-layer pinning fix as
+            // BottomNav.tsx/MiniPlayer, for "the drawer scrolls with the
+            // screen" — iOS Safari not reliably keeping a fixed/portaled
+            // element pinned to the viewport during active scroll.
+            style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)", backfaceVisibility: "hidden" }}
           >
             {/* Drag-to-dismiss zone: handle + header (content below stays scrollable) */}
             <div onPointerDown={(e) => dragControls.start(e)} style={{ touchAction: "none", cursor: "grab" }}>

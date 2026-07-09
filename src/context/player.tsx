@@ -70,7 +70,10 @@ function MiniPlayer({ mono, onOpen }: { mono: ReturnType<typeof useMonologue>; o
           animate={{ y: 0, opacity: 1 }}
           exit={{ y: 100, opacity: 0 }}
           transition={{ type: "spring", damping: 28, stiffness: 320 }}
-          style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 62px)" }}
+          // backfaceVisibility (2026-07-09) — same GPU-layer pinning fix as
+          // BottomNav.tsx, for the same reported "fixed elements drift during
+          // scroll" iOS Safari behavior.
+          style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 62px)", backfaceVisibility: "hidden" }}
           className="fixed inset-x-3 z-50"
         >
           <div

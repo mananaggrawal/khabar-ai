@@ -88,7 +88,9 @@ export function PlayerScreen({ mono, visible, onClose, isSaved, onSave }: Player
           exit={{ y: "100%" }}
           transition={{ type: "spring", damping: 32, stiffness: 300 }}
           className="fixed inset-0 z-[60] flex flex-col bg-white"
-          style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
+          // backfaceVisibility (2026-07-09) — same GPU-layer pinning fix as
+          // BottomNav.tsx/StoryDetailSheet.tsx.
+          style={{ paddingTop: "env(safe-area-inset-top, 0px)", backfaceVisibility: "hidden" }}
         >
           {/* Header */}
           <div className="flex items-center justify-between px-5 pt-4 pb-2">
