@@ -313,12 +313,27 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mono.storiesWithAudio, pendingPlay]);
 
+  // BUG FIX (2026-07-09) — "playing stories from the first Quick 15, not the
+  // ones shown after refresh": these two were memoized on [quickActive]
+  // ONLY (the eslint-disable below was deliberate, to avoid recreating them
+  // on every mono-internal state tick) — but the body also closes over
+  // `mono`, specifically `mono.playFrom`/`mono.playFromInSection`. Those are
+  // fresh closures bound to the CURRENT storiesWithAudio every time
+  // quickBatch changes (see useMonologue's playAt, deps include
+  // storiesWithAudio). Hitting "Refresh" changes quickBatch WITHOUT
+  // changing quickActive (you're already playing Quick 15, just swapping
+  // stale slots) — so this callback was never recreated, and kept calling
+  // the STALE mono.playFrom it captured back when Quick 15 first started,
+  // still bound to the pre-refresh batch. The on-screen list was correctly
+  // refreshed; the function that actually played whatever you tapped was
+  // not. Including `mono` here means these get recreated whenever mono
+  // itself changes (every render, same as everything else that depends on
+  // storiesWithAudio) — correctness over the micro-optimization.
   const playFromQuick = useCallback((idx: number) => {
     if (quickActive) { mono.playFrom(idx); return; }
     setQuickActive(true);
     setPendingPlay({ idx, section: null });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quickActive]);
+  }, [quickActive, mono]);
 
   const playFromFull = useCallback((idx: number, section?: SectionId) => {
     if (!quickActive) {
@@ -328,8 +343,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     }
     setQuickActive(false);
     setPendingPlay({ idx, section: section ?? null });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quickActive]);
+  }, [quickActive, mono]);
 
   // Auto-continue into the freshly-built next batch once it lands (see
   // handleQuickQueueEnd above) — without this, the queue would correctly
