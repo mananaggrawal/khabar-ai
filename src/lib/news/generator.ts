@@ -15,7 +15,7 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fetchRss, type RssItem } from "./rss";
-import { FEEDS, FEED_MAP, SECTION_ORDER, CITY_FEEDS, matchPublisher, type SectionId, type CityId } from "./sources";
+import { FEEDS, FEED_MAP, SECTION_ORDER, matchPublisher, type SectionId } from "./sources";
 import { edgeTTS } from "@/lib/tts/edge";
 import { elevenLabsTTS, isQuotaExhausted } from "@/lib/tts/elevenlabs";
 import { googleTTS, isDailyQuotaExhausted } from "@/lib/tts/google";
@@ -50,29 +50,25 @@ export type Story = {
   id: string;
   title: string;
   titleHi?: string;
-  titleTa?: string;
-  titleMr?: string;
   source: string;
   link: string;
   publishedAt: string;
   section: SectionId;
-  // Which city this came from — only set for "local"-section stories
-  // (2026-07-06). Lets several cities' local news share the one "local"
-  // section/bucket in a single shared briefing; readers are filtered down to
-  // their own city's stories client-side (see context/player.tsx).
-  city?: CityId;
   imageUrl?: string;
   description?: string;
   sources?: StorySource[];
   scriptEn: string;
-  scriptHi: string;       // reserved for future language support
-  scriptTa?: string;
-  scriptMr?: string;
+  scriptHi: string;
   audioUrlEn?: string;
   audioUrlHi?: string;
-  audioUrlTa?: string;
-  audioUrlMr?: string;
   audioStartSec?: number;
+  // The A/B voice actually baked into this story's audio clips, set once at
+  // TTS-generation time (see generateAllTTS's sectionCounters below) and
+  // persisted here so nothing downstream (Quick 15, player) has to guess it
+  // back by re-running the assignment algorithm — a guess that silently
+  // drifts whenever playback-time ordering differs from generation-time
+  // ordering. Undefined only for stories generated before this field existed.
+  voiceIndex?: 0 | 1;
   importanceReason?: string;
   wordCount?: number;
   publisherCount?: number;
@@ -331,11 +327,7 @@ function aiJson(prompt: string, model: string, maxTokens = 8192): Promise<any> {
 
 // ─── Step 1: Fetch all feeds ──────────────────────────────────────────────────
 
-// `cities` controls which per-city "local" feeds get fetched this run
-// (2026-07-06) — the admin panel can request several at once. Defaults to
-// just Mumbai (the one available-to-readers city today) when omitted, so
-// existing callers (cron, generateMissingSections) keep their old behavior.
-async function fetchAllFeeds(cities: CityId[] = ["mumbai"]): Promise<Map<SectionId, RssItem[]>> {
+async function fetchAllFeeds(): Promise<Map<SectionId, RssItem[]>> {
   const topicalResults = await Promise.allSettled(
     FEEDS.map(async (feed) => {
       const url = feed.buildUrl();
@@ -353,27 +345,6 @@ async function fetchAllFeeds(cities: CityId[] = ["mumbai"]): Promise<Map<Section
     if (r.status === "fulfilled" && r.value.items.length > 0) {
       map.set(r.value.feedId, r.value.items);
     }
-  }
-
-  // Fetch each requested city's feed separately and tag every item with its
-  // city, then merge them all into the one "local" bucket — one AI-facing
-  // section, several cities' worth of stories distinguished by `.city`.
-  const uniqueCities = [...new Set(cities)].filter((c) => CITY_FEEDS[c]);
-  if (uniqueCities.length > 0) {
-    const cityResults = await Promise.allSettled(
-      uniqueCities.map(async (city) => {
-        const feed = CITY_FEEDS[city];
-        let items = await fetchRss(feed.buildUrl(), `local:${city}`, "local");
-        if (items.length === 0 && feed.fallbackUrl) {
-          console.warn(`[feeds] local:${city}: primary returned 0 — trying fallback`);
-          items = await fetchRss(feed.fallbackUrl, `local:${city}`, "local");
-        }
-        return items.map((item) => ({ ...item, city }));
-      }),
-    );
-    const localItems: RssItem[] = [];
-    for (const r of cityResults) if (r.status === "fulfilled") localItems.push(...r.value);
-    if (localItems.length > 0) map.set("local", localItems);
   }
 
   return map;
@@ -505,7 +476,7 @@ async function buildRawStories(feedMap: Map<SectionId, RssItem[]>): Promise<{ st
     stories.push({
       id, title: item.title, source: item.source, link: item.link,
       publishedAt: item.pubDate ? new Date(item.pubDate).toISOString() : new Date().toISOString(),
-      section, city: item.city as CityId | undefined,
+      section,
       imageUrl: item.imageUrl, description: item.description,
       scriptEn: "", scriptHi: "",
     });
@@ -517,7 +488,7 @@ async function buildRawStories(feedMap: Map<SectionId, RssItem[]>): Promise<{ st
   }
 
   // Process topical feeds first
-  for (const feedId of ["local", "india", "world", "business", "technology", "sports", "science", "health"] as SectionId[]) {
+  for (const feedId of ["india", "world", "business", "technology", "sports", "science", "health"] as SectionId[]) {
     for (const item of feedMap.get(feedId) ?? []) {
       const id  = storyId(item.link);
       const key = normalize(item.title).slice(0, 60);
@@ -833,11 +804,11 @@ ${list}`;
 /**
  * Editorial bias applied on top of raw fetch volume: >1 boosts a section's share,
  * <1 shrinks it. Keeps the split proportional to supply, but weights Top Stories /
- * India / Business / World up and Science / Local / Health down.
+ * India / Business / World up and Science / Health down.
  */
 const SECTION_BIAS: Record<string, number> = {
   headlines: 2.4, india: 1.3, world: 1.4, business: 1.4,
-  technology: 1.0, sports: 1.0, science: 0.5, health: 0.6, local: 0.6,
+  technology: 1.0, sports: 1.0, science: 0.5, health: 0.6,
 };
 
 /**
@@ -948,7 +919,7 @@ Return a JSON object with a single key "events":
 {"events": [
   {
     "title": "specific, factual event title — max 10 words",
-    "section": "headlines|india|world|business|technology|sports|science|health|local",
+    "section": "headlines|india|world|business|technology|sports|science|health",
     "sourceIndices": [0, 4, 12],
     "imageIndex": 0,
     "whyImportant": "one sentence — the key reason this matters"
@@ -958,7 +929,7 @@ Return a JSON object with a single key "events":
 RULES:
 - Return exactly ${maxStories} events (or fewer if total distinct events is less)
 - Every index used in sourceIndices must be in range 0–${stories.length - 1}
-- section: assign based on content — "headlines" for major cross-cutting stories, "local" ONLY for stories specifically about Mumbai, else the best-fitting topic: india, world, business, technology, sports, science, or health
+- section: assign based on content — "headlines" for major cross-cutting stories, else the best-fitting topic: india, world, business, technology, sports, science, or health
 - imageIndex: which sourceIndex is most likely to have a good image (Reuters, AP, PTI, AFP > others)
 - Keep clusters tight — only group articles covering the SAME specific event
 
@@ -1016,7 +987,7 @@ ${articleList}`;
     const title    = (g.title ?? "").trim();
     if (!title) continue;
 
-    const section  = (["headlines", "local", "india", "world", "business", "technology", "sports", "science", "health"].includes(g.section)
+    const section  = (["headlines", "india", "world", "business", "technology", "sports", "science", "health"].includes(g.section)
       ? g.section : stories[indices[0]].section) as SectionId;
 
     const imageIdx      = (g.imageIndex != null && indices.includes(g.imageIndex)) ? g.imageIndex : indices[0];
@@ -1228,36 +1199,28 @@ async function synthesizeOne(text: string, filename: string, provider: TtsProvid
 
 // ─── Step 5b: Translate English → other languages ────────────────────────────
 
-const LANG_NAMES: Record<string, string> = { hi: "Hindi", ta: "Tamil", mr: "Marathi" };
-// Validate the translation came back in the right script (Devanagari / Tamil)
-const LANG_SCRIPT_RE: Record<string, RegExp> = { hi: /[ऀ-ॿ]/, mr: /[ऀ-ॿ]/, ta: /[஀-௿]/ };
+const LANG_NAMES: Record<string, string> = { hi: "Hindi" };
+// Validate the translation came back in the right script (Devanagari)
+const LANG_SCRIPT_RE: Record<string, RegExp> = { hi: /[ऀ-ॿ]/ };
 
 // gpt-4o-mini is cheap and good enough for short news translation. Override via TRANSLATE_MODEL.
 function getTranslateModel(): string { return process.env.TRANSLATE_MODEL ?? "gpt-4o-mini"; }
 
 function setScript(s: Story, lang: string, text: string): void {
   if (lang === "hi") s.scriptHi = text;
-  else if (lang === "ta") s.scriptTa = text;
-  else if (lang === "mr") s.scriptMr = text;
 }
 function setTitle(s: Story, lang: string, text: string): void {
   if (!text) return;
   if (lang === "hi") s.titleHi = text;
-  else if (lang === "ta") s.titleTa = text;
-  else if (lang === "mr") s.titleMr = text;
 }
 function scriptForLang(s: Story, lang: string): string | undefined {
   if (lang === "en") return s.scriptEn || undefined;
   if (lang === "hi") return s.scriptHi || undefined;
-  if (lang === "ta") return s.scriptTa || undefined;
-  if (lang === "mr") return s.scriptMr || undefined;
   return undefined;
 }
 function setAudioUrl(s: Story, lang: string, url: string): void {
   if (lang === "en") s.audioUrlEn = url;
   else if (lang === "hi") s.audioUrlHi = url;
-  else if (lang === "ta") s.audioUrlTa = url;
-  else if (lang === "mr") s.audioUrlMr = url;
 }
 
 type TransItem = { title: string; script: string };
@@ -1397,6 +1360,9 @@ async function generateAllTTS(
   const voiceIndexByStory = updated.map((s) => {
     const n = sectionCounters.get(s.section) ?? 0;
     sectionCounters.set(s.section, n + 1);
+    // Persist the real assignment on the story itself (2026-07-09) — this is
+    // the single source of truth going forward; nothing should re-derive it.
+    s.voiceIndex = (n % 2) as 0 | 1;
     return n;
   });
 
@@ -1464,9 +1430,6 @@ function mapOldSection(cat: string): SectionId {
   const m: Record<string, SectionId> = {
     headlines: "headlines", india: "india", world: "world", business: "business",
     technology: "technology", sports: "sports", science: "science", health: "health",
-    // old taxonomy → nearest new section ("local" reintroduced 2026-07-06 as a
-    // real Mumbai-only section — no longer aliased away to "india")
-    local: "local",
     politics: "india", techlife: "technology", entertainment: "india",
     // legacy v2/v3
     "india-national": "india", "india-business": "business", "india-sports": "india",
@@ -1523,7 +1486,6 @@ export async function generateDailyBriefing(
   logger: Logger = () => {},
   ttsProvider: TtsProvider = "edge",
   languages: string[] = ["en"],
-  cities: CityId[] = ["mumbai"],
 ): Promise<DailyBriefing & { runSummary?: RunSummary }> {
   const runStart = Date.now();
   const date     = new Date().toISOString().slice(0, 10);
@@ -1531,16 +1493,17 @@ export async function generateDailyBriefing(
 
   log(`Starting briefing v5 — ${date} | TTS: ${ttsProvider}`);
 
-  // English is always scripted; every other supported language is TRANSLATED from it.
-  const SUPPORTED_LANGS = ["en", "hi", "ta", "mr"];
+  // English is always scripted; Hindi (the only other supported language) is
+  // TRANSLATED from it.
+  const SUPPORTED_LANGS = ["en", "hi"];
   const targetLangs = ["en", ...SUPPORTED_LANGS.filter(l => l !== "en" && languages.includes(l))];
   const generatedLanguages = targetLangs;
   if (targetLangs.length > 1) log(`Languages: ${targetLangs.join(", ")} (English scripted, others translated)`);
 
   // Step 1: Fetch
   const t0 = Date.now();
-  log(`Fetching ${FEEDS.length} Google News feeds + local (${cities.join(", ")})…`);
-  const feedMap  = await fetchAllFeeds(cities);
+  log(`Fetching ${FEEDS.length} Google News feeds…`);
+  const feedMap  = await fetchAllFeeds();
   const rawTotal = [...feedMap.values()].reduce((n, v) => n + v.length, 0);
   log(`Fetched ${rawTotal} raw items from ${feedMap.size} feeds (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
 
@@ -1807,10 +1770,7 @@ export async function patchScripts(
       scriptEn: patched.scriptEn,
       wordCount: patched.wordCount,
       scriptHi: "", titleHi: undefined,
-      scriptTa: undefined, titleTa: undefined,
-      scriptMr: undefined, titleMr: undefined,
       audioUrlEn: undefined, audioUrlHi: undefined,
-      audioUrlTa: undefined, audioUrlMr: undefined,
     };
   });
 

@@ -4,7 +4,6 @@
  * needing routeTree.gen.ts to be updated.
  */
 import { generateDailyBriefing, generateMissingSections, generateMissingTTS, patchScripts, getLatestBriefing as getTodayBriefing, type TtsProvider } from "@/lib/news/generator";
-import { CITIES, type CityId } from "@/lib/news/sources";
 import { elevenLabsTTS, isQuotaExhausted, resetQuota } from "@/lib/tts/elevenlabs";
 import { resetDailyQuota } from "@/lib/tts/google";
 import { loadBriefingFromStorage, saveLogToStorage, loadLogFromStorage } from "@/lib/supabase-storage";
@@ -252,20 +251,10 @@ export async function handleGenerate(request: Request): Promise<Response> {
 
   const reqUrl       = new URL(request.url, "http://localhost");
   const provider     = (reqUrl.searchParams.get("provider") ?? "edge") as TtsProvider;
-  const languages    = (reqUrl.searchParams.get("languages") ?? "en,hi,ta,mr").split(",").map(l => l.trim()).filter(Boolean);
+  const languages    = (reqUrl.searchParams.get("languages") ?? "en,hi").split(",").map(l => l.trim()).filter(Boolean);
   const scriptProvider = reqUrl.searchParams.get("scriptProvider");
   const scriptModel    = reqUrl.searchParams.get("scriptModel");
   const ttsModel       = reqUrl.searchParams.get("ttsModel");
-  // Which cities' local feeds to include this run (2026-07-06) — validated
-  // against the configured CITIES list (not gated by `available`, so a city
-  // can be test-generated before it's flipped on for readers). Defaults to
-  // just Mumbai to match prior behavior when the admin panel sends nothing.
-  const knownCityIds = new Set(CITIES.map((c) => c.id));
-  const citiesParam  = reqUrl.searchParams.get("cities");
-  const parsedCities = citiesParam
-    ? citiesParam.split(",").map((c) => c.trim()).filter((c): c is CityId => knownCityIds.has(c as CityId))
-    : [];
-  const cities: CityId[] = parsedCities.length > 0 ? parsedCities : ["mumbai"];
 
   // Apply per-request model overrides via env vars (safe: generation is gated to one job at a time)
   if (scriptProvider) process.env.SCRIPT_PROVIDER   = scriptProvider;
@@ -282,11 +271,11 @@ export async function handleGenerate(request: Request): Promise<Response> {
   (async () => {
     const logWriter = await createLiveLogWriter(dateKey, `manual:${provider}`);
     try {
-      console.log(`[admin] generation triggered (provider: ${provider}, langs: ${languages.join(",")}, cities: ${cities.join(",")})`);
+      console.log(`[admin] generation triggered (provider: ${provider}, langs: ${languages.join(",")})`);
       const briefing = await generateDailyBriefing((msg) => {
         logWriter.log(msg);
         send({ type: "log", msg });
-      }, provider, languages, cities);
+      }, provider, languages);
       const rs = briefing.runSummary;
       void logServerEvent("generation_run", {
         date:        briefing.date,
@@ -353,15 +342,12 @@ export async function handleCron(request: Request): Promise<Response> {
     const logWriter = await createLiveLogWriter(dateKey, "cron");
     let succeeded = false;
     try {
-      // TEMPORARY (2026-07-06): English-only for now, per explicit request —
-      // was ["en", "hi"]. NOTE for whoever re-enables Hindi: a run REPLACES
-      // the whole day's briefing rather than merging, so an English-only run
-      // after an earlier en+hi run wipes that day's Hindi scripts/audio
-      // outright — readers on Hindi would see English titles with no Hindi
-      // audio at all ("no voice") until the next en+hi run regenerates it.
-      // Re-add "hi" here (and consider a manual en+hi run the same day) once
-      // Hindi is turned back on.
-      await generateDailyBriefing(logWriter.log, "edge", ["en"]);
+      // Back to en+hi by default (2026-07-08) — the English-only window was
+      // temporary. A run REPLACES the whole day's briefing rather than
+      // merging, so keep both languages generated together going forward to
+      // avoid ever wiping one language's scripts/audio out from under the
+      // other mid-day.
+      await generateDailyBriefing(logWriter.log, "edge", ["en", "hi"]);
       succeeded = true;
     } catch (e: any) {
       console.error("[cron] generation failed:", e?.message ?? e);
@@ -429,12 +415,8 @@ export async function handleStatus(request: Request): Promise<Response> {
         const sections = new Set(stories.map((s: any) => s.section)).size;
         const enScript = stories.filter((s: any) => s.scriptEn).length;
         const hiScript = stories.filter((s: any) => s.scriptHi).length;
-        const taScript = stories.filter((s: any) => s.scriptTa).length;
-        const mrScript = stories.filter((s: any) => s.scriptMr).length;
         const enAudio  = stories.filter((s: any) => s.audioUrlEn).length;
         const hiAudio  = stories.filter((s: any) => s.audioUrlHi).length;
-        const taAudio  = stories.filter((s: any) => s.audioUrlTa).length;
-        const mrAudio  = stories.filter((s: any) => s.audioUrlMr).length;
 
         const entry = {
           date,
@@ -443,12 +425,8 @@ export async function handleStatus(request: Request): Promise<Response> {
           totalTopics: stories.length,
           enScript,
           hiScript,
-          taScript,
-          mrScript,
           enAudio,
           hiAudio,
-          taAudio,
-          mrAudio,
           generatedLanguages: briefing.generatedLanguages ?? null,
           generatedAt: briefing.generatedAt ?? null,
         };
@@ -718,6 +696,11 @@ export async function handleAnalytics(request: Request): Promise<Response> {
     const url  = new URL(request.url, "http://localhost");
     const days = Math.min(Math.max(Number(url.searchParams.get("days") ?? 30), 1), 90);
     const since = new Date(Date.now() - days * 86_400_000).toISOString();
+    // Chart granularity toggle (2026-07-09) — "day" (default) or "week". Only
+    // affects the two time-series arrays fed to the DAU/growth charts
+    // (perDay, perDayGrowth); retention (D1/D7), hourly, and section
+    // breakdowns are unrelated concepts and stay exactly as they were.
+    const granularity: "day" | "week" = url.searchParams.get("granularity") === "week" ? "week" : "day";
 
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const { data, error } = await (supabaseAdmin as any)
@@ -784,6 +767,16 @@ export async function handleAnalytics(request: Request): Promise<Response> {
           d.listenSec += sec; totalListenSec += sec;
           hourly[istHour(r.occurred_at)] += sec;
           if (p.section) sectionSec.set(String(p.section), (sectionSec.get(String(p.section)) ?? 0) + sec);
+          // Quick 15 listens (2026-07-09) — Quick 15 isn't a real content
+          // section (see sources.ts SECTION_ORDER), it's a curated queue
+          // pulled from the real sections at play time. So this adds ON TOP
+          // of the section credit above, rather than replacing it: the real
+          // section (e.g. "india") still gets its listen time, AND those
+          // same seconds also roll into a separate "quick15" bucket so it
+          // shows up as its own row alongside Headlines/India/etc.
+          if (p.queueSource === "quick15") {
+            sectionSec.set("quick15", (sectionSec.get("quick15") ?? 0) + sec);
+          }
           if (uid) userRec(uid).listenSec += sec;
           if (p.storyId) storyListenSec.set(String(p.storyId), (storyListenSec.get(String(p.storyId)) ?? 0) + sec);
         }
@@ -860,6 +853,40 @@ export async function handleAnalytics(request: Request): Promise<Response> {
 
     const avgMinPerActiveUser = totalUsers ? +((totalListenSec / 60) / totalUsers).toFixed(1) : 0;
 
+    // Weekly re-bucketing of the two chart time-series (2026-07-09). Weeks are
+    // Monday-start, keyed by that Monday's date (so labels sort/format the
+    // same way daily keys do). Built from dayMap/perDayGrowth rather than
+    // re-scanning raw rows — day-level aggregates are already exact, so
+    // summing/unioning them per week is lossless.
+    const mondayOf = (k: string) => {
+      const d = new Date(k + "T00:00:00Z");
+      const dow = d.getUTCDay(); // 0=Sun..6=Sat
+      d.setUTCDate(d.getUTCDate() + ((dow === 0 ? -6 : 1) - dow));
+      return d.toISOString().slice(0, 10);
+    };
+    const weekBuckets = new Map<string, { users: Set<string>; appSec: number; listenSec: number; stories: number }>();
+    for (const [k, d] of dayMap) {
+      const wk = mondayOf(k);
+      let w = weekBuckets.get(wk);
+      if (!w) { w = { users: new Set(), appSec: 0, listenSec: 0, stories: 0 }; weekBuckets.set(wk, w); }
+      for (const u of d.users) w.users.add(u);
+      w.appSec += d.appSec; w.listenSec += d.listenSec; w.stories += d.stories;
+    }
+    const weekKeys = [...weekBuckets.keys()].sort();
+    const perWeek = weekKeys.map((wk) => {
+      const w = weekBuckets.get(wk)!;
+      return { day: wk, users: w.users.size, appMin: +(w.appSec / 60).toFixed(1), listenMin: +(w.listenSec / 60).toFixed(1), stories: w.stories };
+    });
+    const perWeekGrowth = weekKeys.map((wk) => {
+      const daysInWeek = allDays.filter((k) => mondayOf(k) === wk);
+      const newUsersSum = daysInWeek.reduce((acc, k) => acc + (perDayGrowth.find((g) => g.day === k)?.newUsers ?? 0), 0);
+      const dauWeek = weekBuckets.get(wk)!.users.size;
+      const returning = Math.max(0, dauWeek - newUsersSum);
+      const lastDay = daysInWeek[daysInWeek.length - 1];
+      const cumUsers = perDayGrowth.find((g) => g.day === lastDay)?.cumUsers ?? 0;
+      return { day: wk, dau: dauWeek, newUsers: newUsersSum, returning, cumUsers };
+    });
+
     // user_id → email so the admin sees who's who
     const emailById = new Map<string, string>();
     try {
@@ -881,8 +908,9 @@ export async function handleAnalytics(request: Request): Promise<Response> {
 
     return json({
       days,
-      perDay,
-      perDayGrowth,
+      granularity,
+      perDay: granularity === "week" ? perWeek : perDay,
+      perDayGrowth: granularity === "week" ? perWeekGrowth : perDayGrowth,
       hourly,
       bySection: [...sectionSec.entries()]
         .map(([section, s]) => ({ section, min: +(s / 60).toFixed(1) }))

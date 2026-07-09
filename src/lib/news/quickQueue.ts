@@ -61,17 +61,26 @@ function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
-// Replicates generator.ts's voice assignment exactly: a running counter per
-// section, incremented in array order, voice = counter % 2. Requires
-// `stories` to be in the same relative per-section order the generation
-// pipeline used (true for briefing.stories — see the comment above) to
-// actually match the real audio file's voice; this is inference, not a
-// stored fact (the pipeline doesn't persist which voice a story got), so
-// treat it as a strong heuristic rather than a guarantee.
+// Reads the real, baked-in voice off each story (generator.ts now persists
+// this as `voiceIndex` at TTS-generation time — 2026-07-09). Previously this
+// function *guessed* the voice by re-running generator.ts's per-section
+// counter algorithm client-side, which silently diverged from the real
+// baked-in voice whenever playback-time ordering (re-sorted/re-bucketed by
+// SECTION_DISPLAY_ORDER, legacy section remapping — see player.tsx) differed
+// from generation-time ordering. That's what caused "random voices against
+// stories" — this now reads the stored fact instead of inferring it.
+//
+// Only stories generated before `voiceIndex` existed lack it; for those we
+// fall back to the old per-section-counter guess so playback doesn't crash,
+// but new stories always carry the real value.
 function inferVoiceIndices(stories: Story[]): Map<string, 0 | 1> {
   const counters = new Map<string, number>();
   const voices = new Map<string, 0 | 1>();
   for (const s of stories) {
+    if (s.voiceIndex !== undefined) {
+      voices.set(s.id, s.voiceIndex);
+      continue;
+    }
     const n = counters.get(s.section) ?? 0;
     voices.set(s.id, (n % 2) as 0 | 1);
     counters.set(s.section, n + 1);

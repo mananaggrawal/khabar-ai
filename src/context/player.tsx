@@ -15,14 +15,13 @@ import { Play, Pause, SkipBack, SkipForward } from "lucide-react";
 import { fetchBriefing } from "@/lib/news/briefing.functions";
 import { useMonologue, getStoryTitle, getSectionLabel, getAudioUrl, readCompletedIds } from "@/hooks/useMonologue";
 import { useSavedStories } from "@/hooks/useSavedStories";
-import { useCityPreference } from "@/hooks/useCityPreference";
 import { useQuickConsumed } from "@/hooks/useQuickConsumed";
 import { buildQuickQueue, refreshQuickQueue } from "@/lib/news/quickQueue";
 import { PlayerScreen } from "@/components/PlayerScreen";
-import { type SectionId, type CityId } from "@/lib/news/sources";
+import { type SectionId } from "@/lib/news/sources";
 import type { Story, DailyBriefing } from "@/lib/news/generator";
 
-const SECTION_DISPLAY_ORDER: SectionId[] = ["headlines", "local", "india", "world", "business", "technology", "sports", "science", "health"];
+const SECTION_DISPLAY_ORDER: SectionId[] = ["headlines", "india", "world", "business", "technology", "sports", "science", "health"];
 const LEGACY_SECTION: Record<string, SectionId> = { politics: "india", techlife: "technology", entertainment: "india" };
 function resolveSection(s: string): SectionId {
   if (s in LEGACY_SECTION) return LEGACY_SECTION[s];
@@ -36,12 +35,6 @@ type PlayerContextValue = {
   isLoading: boolean;
   saved: ReturnType<typeof useSavedStories>;
   openPlayer: () => void;
-  // Which cities actually have "local" content in TODAY's briefing (2026-07-06)
-  // — computed from the UNFILTERED raw briefing, since `briefing` above is
-  // already narrowed to the reader's own city. Lets Settings/CityNudge offer
-  // a city as soon as the admin has generated it, without waiting for its
-  // static `available` flag in sources.ts to be flipped in a deploy.
-  generatedCities: Set<CityId>;
   // Quick 15 (2026-07-07 rewrite) — no longer a global mode; it's a
   // permanent section/pill on Home that coexists with the real topic
   // sections. `quickBatch` is the current curated 15-story list, built and
@@ -135,36 +128,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   });
 
   const rawBriefing = briefingQuery.data ?? null;
-  // 2026-07-06: several cities' local stories can share the one "local"
-  // section in a single generation run (see generator.ts Story.city / the
-  // admin panel's city checkboxes). Readers only see their OWN city's local
-  // stories — this is the one place that filter is applied, so Home's list
-  // and the playback order (which both read this same `briefing`) stay in
-  // sync automatically. Stories with no `.city` tag (non-local sections, or
-  // pre-this-change local stories) are never filtered out.
-  const { city } = useCityPreference();
   const briefing = useMemo(() => {
     if (!rawBriefing) return null;
-    const myCity = city ?? "mumbai";
     const rank = (s: Story) => {
       const i = SECTION_DISPLAY_ORDER.indexOf(resolveSection(s.section));
       return i < 0 ? SECTION_DISPLAY_ORDER.length : i;
     };
-    const stories = rawBriefing.stories
-      .filter((s) => resolveSection(s.section) !== "local" || !s.city || s.city === myCity)
+    const stories = [...rawBriefing.stories]
       .map((s, i) => ({ s, i }))
       .sort((a, b) => rank(a.s) - rank(b.s) || a.i - b.i)
       .map((x) => x.s);
     return { ...rawBriefing, stories };
-  }, [rawBriefing, city]);
-
-  // Computed from rawBriefing (pre-city-filter) — see PlayerContextValue note.
-  const generatedCities = useMemo(() => {
-    const set = new Set<CityId>();
-    for (const s of rawBriefing?.stories ?? []) {
-      if (resolveSection(s.section) === "local" && s.city) set.add(s.city);
-    }
-    return set;
   }, [rawBriefing]);
 
   // ── Quick 15 (2026-07-07 rewrite — no longer a global mode) ─────────────
@@ -272,6 +246,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const mono = useMonologue({
     briefing: activeBriefing,
     onQueueEnd: quickActive ? handleQuickQueueEnd : undefined,
+    // Tags analytics events (story_start, heartbeat) so Quick 15 listens can
+    // be surfaced as their own bucket alongside the real sections (2026-07-09)
+    // — see handleAnalytics in handlers.ts, which now sums these on TOP OF
+    // (not instead of) the underlying section's own totals.
+    queueSource: quickActive ? "quick15" : undefined,
   });
 
   // Switching between Full and Quick is a deliberate two-step handshake, not
@@ -392,7 +371,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!briefing?.stories?.length) return;
     const total = briefing.stories.length;
-    const allLangs: Array<"en" | "hi" | "ta" | "mr"> = ["en", "hi", "ta", "mr"];
+    const allLangs: Array<"en" | "hi"> = ["en", "hi"];
     const langs = allLangs.filter((lang) => {
       const withAudio = briefing.stories.filter((s) => !!getAudioUrl(s, lang)).length;
       return withAudio / total >= AVAILABLE_LANG_COVERAGE;
@@ -406,7 +385,6 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     isLoading: briefingQuery.isLoading,
     saved,
     openPlayer: () => setPlayerOpen(true),
-    generatedCities,
     quickBatch,
     quickActive,
     playFromQuick,

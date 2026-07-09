@@ -7,7 +7,7 @@ import { motion, AnimatePresence } from "motion/react";
 import {
   ChevronDown, SkipBack, SkipForward, Play, Pause,
   RotateCcw, RotateCw, Bookmark, FileText,
-  Flame, LandmarkIcon, Globe, TrendingUp, Cpu, Trophy, FlaskConical, HeartPulse, MapPin,
+  Flame, LandmarkIcon, Globe, TrendingUp, Cpu, Trophy, FlaskConical, HeartPulse,
 } from "lucide-react";
 import { VoiceOrb } from "./VoiceOrb";
 import { StoryDetailSheet } from "./StoryDetailSheet";
@@ -30,13 +30,12 @@ const LEGACY_SECTION: Record<string, SectionId> = {
 };
 function resolveSection(s: string): SectionId {
   if (s in LEGACY_SECTION) return LEGACY_SECTION[s];
-  if (["headlines", "local", "india", "world", "business", "technology", "sports", "science", "health"].includes(s)) return s as SectionId;
+  if (["headlines", "india", "world", "business", "technology", "sports", "science", "health"].includes(s)) return s as SectionId;
   return "india";
 }
 
 const SECTION_COLOR: Record<SectionId, string> = {
   headlines:  "#EF4444",
-  local:      "#8B5CF6",
   india:      "#F97316",
   world:      "#0D9488",
   business:   "#16A34A",
@@ -48,7 +47,6 @@ const SECTION_COLOR: Record<SectionId, string> = {
 
 const SECTION_ICON: Record<SectionId, React.ReactNode> = {
   headlines:  <Flame        className="size-8" />,
-  local:      <MapPin       className="size-8" />,
   india:      <LandmarkIcon className="size-8" />,
   world:      <Globe        className="size-8" />,
   business:   <TrendingUp   className="size-8" />,

@@ -504,6 +504,9 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
     <div class="seg" id="seg">
       <button data-d="7">7d</button><button data-d="30" class="on">30d</button><button data-d="90">90d</button>
     </div>
+    <div class="seg" id="gran">
+      <button data-g="day" class="on">Daily</button><button data-g="week">Weekly</button>
+    </div>
   </div>
   <div id="err"></div>
   <div class="muted" id="dataNote" style="font-size:11px;margin:-4px 0 12px"></div>
@@ -555,6 +558,7 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
   var SB = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
   var TOKEN = '';
   var days = 30;
+  var granularity = 'day';
   var charts = {};
 
   function txt(id, v){ document.getElementById(id).textContent = v; }
@@ -618,7 +622,10 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
 
     // Active users per day: new vs returning (stacked bars) + total base (line)
     var g = d.perDayGrowth || [];
-    var glabels = g.map(function(x){ return x.day.slice(5); });
+    var isWeekly = d.granularity === 'week';
+    // Weekly keys are the Monday date of that week — show a short "Wk of"
+    // label so it's clear these aren't single days.
+    var glabels = g.map(function(x){ return isWeekly ? ('Wk ' + x.day.slice(5)) : x.day.slice(5); });
     if (charts.dauChart) charts.dauChart.destroy();
     charts.dauChart = new Chart(ctx('dauChart'), {
       data: { labels: glabels, datasets: [
@@ -639,7 +646,7 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
 
     // Listening time by section (horizontal bars, most-listened first)
     var bs = d.bySection || [];
-    var SEC_COLOR = { headlines:'#EF4444', india:'#F97316', world:'#0D9488', business:'#16A34A', technology:'#6366F1', sports:'#DB2777', science:'#0EA5E9', health:'#65A30D', local:'#2563EB' };
+    var SEC_COLOR = { headlines:'#EF4444', india:'#F97316', world:'#0D9488', business:'#16A34A', technology:'#6366F1', sports:'#DB2777', science:'#0EA5E9', health:'#65A30D', quick15:'#A78BFA' };
     if (charts.sectionChart) charts.sectionChart.destroy();
     charts.sectionChart = new Chart(ctx('sectionChart'), {
       type: 'bar',
@@ -685,7 +692,7 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
   async function load(){
     document.getElementById('err').textContent = '';
     try {
-      var res = await fetch('/api/admin/analytics?days=' + days, { headers: { 'Authorization': 'Bearer ' + TOKEN } });
+      var res = await fetch('/api/admin/analytics?days=' + days + '&granularity=' + granularity, { headers: { 'Authorization': 'Bearer ' + TOKEN } });
       if (res.status === 401) { showGate('Session expired — sign in again.', true); return; }
       if (res.status === 403) { showGate('This account is not authorized to view analytics.', false); return; }
       if (!res.ok) { document.getElementById('err').textContent = 'Error ' + res.status; return; }
@@ -712,6 +719,13 @@ function adminAnalyticsPage(supabaseUrl, supabaseKey) {
   document.getElementById('seg').addEventListener('click', function(e){
     var b = e.target.closest('button'); if (!b) return;
     days = Number(b.getAttribute('data-d'));
+    Array.prototype.forEach.call(this.querySelectorAll('button'), function(x){ x.classList.toggle('on', x === b); });
+    load();
+  });
+
+  document.getElementById('gran').addEventListener('click', function(e){
+    var b = e.target.closest('button'); if (!b) return;
+    granularity = b.getAttribute('data-g');
     Array.prototype.forEach.call(this.querySelectorAll('button'), function(x){ x.classList.toggle('on', x === b); });
     load();
   });
@@ -1049,21 +1063,6 @@ function adminPage(supabaseUrl, supabaseKey) {
           <span class="config-label">Languages</span>
           <label><input type="checkbox" name="gen-lang" value="en" checked><span>EN</span></label>
           <label><input type="checkbox" name="gen-lang" value="hi" checked><span>HI</span></label>
-          <label><input type="checkbox" name="gen-lang" value="ta"><span>TA</span></label>
-          <label><input type="checkbox" name="gen-lang" value="mr"><span>MR</span></label>
-        </div>
-
-        <!-- Cities (2026-07-06) — which cities' local feeds to include this run.
-             Mumbai is the only one live for readers today; the rest can still be
-             generated here ahead of actually flipping them on (see CITIES in
-             src/lib/news/sources.ts). -->
-        <div class="config-row" style="margin-bottom:16px;">
-          <span class="config-label">Cities</span>
-          <label><input type="checkbox" name="gen-city" value="mumbai" checked><span>Mumbai</span></label>
-          <label><input type="checkbox" name="gen-city" value="delhi"><span>Delhi</span></label>
-          <label><input type="checkbox" name="gen-city" value="bangalore"><span>Bangalore</span></label>
-          <label><input type="checkbox" name="gen-city" value="chennai"><span>Chennai</span></label>
-          <label><input type="checkbox" name="gen-city" value="kolkata"><span>Kolkata</span></label>
         </div>
 
         <button class="btn-primary" id="gen-btn" onclick="runGenerate()">Generate now</button>
@@ -1112,8 +1111,6 @@ function adminPage(supabaseUrl, supabaseKey) {
           <span class="config-label">Languages</span>
           <label><input type="checkbox" name="tts-patch-lang" value="en" checked><span>EN</span></label>
           <label><input type="checkbox" name="tts-patch-lang" value="hi" checked><span>HI</span></label>
-          <label><input type="checkbox" name="tts-patch-lang" value="ta"><span>TA</span></label>
-          <label><input type="checkbox" name="tts-patch-lang" value="mr"><span>MR</span></label>
         </div>
         <button class="btn-primary" id="tts-btn" onclick="runPatchTTS()">Patch missing TTS</button>
         <div id="tts-log" class="log-terminal"></div>
@@ -1292,8 +1289,6 @@ function adminPage(supabaseUrl, supabaseKey) {
     const langs = [
       { code: 'en', label: 'EN', script: todayStats.enScript ?? 0, audio: todayStats.enAudio ?? 0 },
       { code: 'hi', label: 'HI', script: todayStats.hiScript ?? 0, audio: todayStats.hiAudio ?? 0 },
-      { code: 'ta', label: 'TA', script: todayStats.taScript ?? 0, audio: todayStats.taAudio ?? 0 },
-      { code: 'mr', label: 'MR', script: todayStats.mrScript ?? 0, audio: todayStats.mrAudio ?? 0 },
     ].filter(l => l.script > 0 || l.audio > 0);
 
     for (const lang of langs) {
@@ -1441,13 +1436,7 @@ function adminPage(supabaseUrl, supabaseKey) {
         btn.disabled = false; btn.textContent = 'Generate now';
         return;
       }
-      const selectedCities = [...document.querySelectorAll('input[name="gen-city"]:checked')].map(el => el.value);
-      if (selectedCities.length === 0) {
-        appendLog('error', 'Select at least one city before generating.');
-        btn.disabled = false; btn.textContent = 'Generate now';
-        return;
-      }
-      const params = new URLSearchParams({ provider: ttsProvider, languages: selectedLangs.join(','), cities: selectedCities.join(','), scriptProvider, scriptModel });
+      const params = new URLSearchParams({ provider: ttsProvider, languages: selectedLangs.join(','), scriptProvider, scriptModel });
       if (ttsModel) params.set('ttsModel', ttsModel);
       const r = await fetch('/api/admin/generate?' + params, { method: 'POST', headers: { 'x-admin-key': AKEY } });
       if (r.status === 409) {

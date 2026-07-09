@@ -22,7 +22,7 @@ import { track } from "@/lib/analytics/track";
 import { EVENTS, HEARTBEAT_SEC } from "@/lib/analytics/events";
 
 export type MonologueState = "idle" | "playing" | "paused" | "error";
-export type Language = "en" | "hi" | "ta" | "mr";
+export type Language = "en" | "hi";
 
 const RESUME_KEY    = "khabar-resume-pos";
 const LANGUAGE_KEY  = "khabar-language";
@@ -34,7 +34,7 @@ const COMPLETED_KEY = "khabar-completed";   // { date, ids: [] } — persists "l
 // foreground clips play fully (advance on 'ended'); only background trims this much.
 const BG_ADVANCE_LEAD_SEC = 0.5;
 
-const SUPPORTED_LANGS: Language[] = ["en", "hi", "ta", "mr"];
+const SUPPORTED_LANGS: Language[] = ["en", "hi"];
 
 function readLanguage(): Language {
   try {
@@ -65,33 +65,26 @@ export function readCompletedIds(date: string | undefined): Set<string> {
 export function getAudioUrl(story: import("@/lib/news/generator").Story, lang: Language): string | undefined {
   if (lang === "en") return story.audioUrlEn;
   if (lang === "hi") return story.audioUrlHi;
-  if (lang === "ta") return story.audioUrlTa;
-  if (lang === "mr") return story.audioUrlMr;
   return undefined;
 }
 
 export function getStoryTitle(story: import("@/lib/news/generator").Story, lang: Language): string {
   if (lang === "hi") return story.titleHi || story.title;
-  if (lang === "ta") return (story as any).titleTa || story.title;
-  if (lang === "mr") return (story as any).titleMr || story.title;
   return story.title;
 }
 
 // Language-aware section label. Previously every call site hardcoded
-// `language === "hi" ? labelHi : label`, so Tamil/Marathi listeners saw English
-// section headers (Headlines/India/World/…) everywhere even though their story
-// titles and scripts were correctly localized — FEED_MAP has labelTa/labelMr
-// (added 2026-07-05) but nothing read them. Centralising here so every screen
-// (StoryCard, PlayerScreen, MiniPlayer, StoryDetailSheet) picks up all 4
-// languages the same way.
+// `language === "hi" ? labelHi : label`, so listeners saw English section
+// headers (Headlines/India/World/…) everywhere even though their story
+// titles and scripts were correctly localized — centralising here so every
+// screen (StoryCard, PlayerScreen, MiniPlayer, StoryDetailSheet) picks up
+// both languages the same way.
 export function getSectionLabel(
-  feed: { label: string; labelHi: string; labelTa?: string; labelMr?: string } | null | undefined,
+  feed: { label: string; labelHi: string } | null | undefined,
   lang: Language,
 ): string {
   if (!feed) return "";
   if (lang === "hi") return feed.labelHi || feed.label;
-  if (lang === "ta") return feed.labelTa || feed.label;
-  if (lang === "mr") return feed.labelMr || feed.label;
   return feed.label;
 }
 
@@ -128,6 +121,7 @@ async function fetchCompleted(date: string): Promise<string[]> {
 export function useMonologue({
   briefing,
   onQueueEnd,
+  queueSource,
 }: {
   briefing: DailyBriefing | null;
   // Fires when an "all"-mode queue runs off the end of storiesWithAudio
@@ -137,6 +131,11 @@ export function useMonologue({
   // finished, build and start the next one" without useMonologue needing to
   // know anything about Quick mode itself.
   onQueueEnd?: () => void;
+  // Tags story_start/heartbeat analytics with which curated queue is playing
+  // (2026-07-09) — e.g. "quick15" when PlayerProvider has substituted
+  // `quickBatch` in as `briefing.stories`. Undefined for ordinary Full-mode
+  // playback. Purely a label for handleAnalytics; doesn't affect playback.
+  queueSource?: string;
 }) {
   const [state, setState]               = useState<MonologueState>("idle");
   const [progress, setProgress]         = useState(0);
@@ -467,7 +466,7 @@ export function useMonologue({
         return;
       }
 
-      track(EVENTS.STORY_START, { storyId: story.id, section: story.section, index: idx, mode: mode ?? "single" });
+      track(EVENTS.STORY_START, { storyId: story.id, section: story.section, index: idx, mode: mode ?? "single", queueSource });
 
       const audio = attachAudio(url!, seekTo, onEnded);
       audio.play().catch((e: any) => {
@@ -482,7 +481,7 @@ export function useMonologue({
         setError(e?.message ?? "Playback blocked — tap again");
       });
     },
-    [storiesWithAudio, language, attachAudio, onQueueEnd, markCompleted, completedIds],
+    [storiesWithAudio, language, attachAudio, onQueueEnd, markCompleted, completedIds, queueSource],
   );
 
   useEffect(() => { playAtRef.current = playAt; }, [playAt]);
@@ -639,10 +638,11 @@ export function useMonologue({
         visible,
         storyId: s?.id ?? null,
         section: s?.section ?? null,
+        queueSource: playing ? queueSource ?? null : null,
       });
     }, HEARTBEAT_SEC * 1000);
     return () => clearInterval(id);
-  }, [storiesWithAudio]);
+  }, [storiesWithAudio, queueSource]);
 
   // ── MediaSession API — enables background audio on iOS PWA ────────────────
   // Without this, iOS suspends audio the moment you switch apps.
