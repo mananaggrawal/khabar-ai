@@ -59,7 +59,14 @@ export function NotificationNudge() {
       <button
         onClick={() => void push.subscribe()}
         disabled={push.loading}
-        className="flex flex-1 min-w-0 items-center gap-3 rounded-2xl px-4 py-3 text-left transition-colors hover:bg-primary/[0.06] disabled:opacity-60"
+        // items-start (not items-center, 2026-07-10 fix): the subtitle can
+        // wrap to 2+ lines on narrower Android widths (or 3 with push.error
+        // shown) — items-center was centering the icon circle and "Turn on"
+        // pill against that variable-height block, so they visibly drifted
+        // down away from the title's first line once it wrapped. Pinning to
+        // the top keeps them aligned regardless of how much the text wraps,
+        // same fix as InstallNudge's icon/text alignment.
+        className="flex flex-1 min-w-0 items-start gap-3 rounded-2xl px-4 py-3 text-left transition-colors hover:bg-primary/[0.06] disabled:opacity-60"
       >
         <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10">
           <Bell className="size-4 text-primary" />
