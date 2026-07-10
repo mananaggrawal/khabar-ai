@@ -72,8 +72,15 @@ src/
 │   ├── AppHeader.tsx            # Shared logo/tagline/share header — same on every page
 │   ├── BottomNav.tsx
 │   ├── StoryCard.tsx
-│   └── StoryDetailSheet.tsx     # Summary/sources popup — used both for card previews
-│                                   and (via player.tsx) as the "now playing" sheet
+│   ├── StoryDetailSheet.tsx     # Summary/sources popup — used both for card previews
+│   │                               and (via player.tsx) as the "now playing" sheet
+│   ├── InstallNudge.tsx         # PWA install nudge (Home banner + Settings row).
+│   │                               Real "Install" button when `beforeinstallprompt`
+│   │                               is available; otherwise generic manual steps
+│   │                               (Android: browser menu → Add to Home screen; iOS:
+│   │                               Share → Add to Home Screen). Renders nothing once
+│   │                               already installed (standalone display mode).
+│   └── NotificationNudge.tsx
 ├── lib/
 │   ├── news/
 │   │   ├── generator.ts        # Main pipeline: fetch → dedup → OG images → script → TTS → save
@@ -87,10 +94,14 @@ src/
 │   │   ├── elevenlabs.ts       # ElevenLabs TTS: EN+HI
 │   │   └── kokoro.ts           # Kokoro local TTS: EN only
 │   ├── abort.ts                # Shared abort flag for in-progress generation
+│   ├── platform.ts             # Shared UA/display-mode checks: isIOS, isAndroid,
+│   │                               isMobileDevice, isStandalone
 │   └── supabase-storage.ts     # Server-side Supabase Storage client
 ├── hooks/
-│   └── useMonologue.ts         # Audio playback state machine — story-id-based resume,
-│                                  not raw index (see Known Issues history in git log)
+│   ├── useMonologue.ts         # Audio playback state machine — story-id-based resume,
+│   │                              not raw index (see Known Issues history in git log)
+│   └── useInstallPrompt.ts     # Captures beforeinstallprompt (Android/Chrome) +
+│                                   tracks standalone/installed state for InstallNudge
 └── integrations/
     └── supabase/               # Supabase client, auth middleware, types
 ```
