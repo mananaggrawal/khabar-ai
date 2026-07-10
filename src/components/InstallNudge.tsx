@@ -64,16 +64,21 @@ export function InstallNudge({ variant = "banner" }: InstallNudgeProps) {
   const androidFallbackBody = (
     <>
       <p className="text-sm font-medium text-foreground">Install Khabar AI</p>
-      <p className="text-xs text-muted-foreground mt-0.5 inline-flex items-center gap-1.5 flex-wrap">
-        Tap <MoreVertical className="size-3.5 inline shrink-0 mx-0.5" /> menu, then "Add to Home screen" or "Install app".
+      {/* No flex wrapper here — flexbox wraps whole children onto new lines
+          instead of wrapping word-by-word, which detached the icon from the
+          text it belonged to on longer lines (2026-07-10 fix). An
+          inline-block icon inside plain text flows and wraps like a normal
+          inline image, staying glued to its neighboring words. */}
+      <p className="text-xs text-muted-foreground mt-0.5">
+        Tap <MoreVertical className="inline-block size-3.5 align-text-bottom mx-0.5" /> menu, then "Add to Home screen" or "Install app".
       </p>
     </>
   );
   const iosBody = (
     <>
       <p className="text-sm font-medium text-foreground">Install Khabar AI</p>
-      <p className="text-xs text-muted-foreground mt-0.5 inline-flex items-center gap-1.5 flex-wrap">
-        Tap <Share className="size-3.5 inline shrink-0 mx-0.5" /> Share, then "Add to Home Screen".
+      <p className="text-xs text-muted-foreground mt-0.5">
+        Tap <Share className="inline-block size-3.5 align-text-bottom mx-0.5" /> Share, then "Add to Home Screen".
       </p>
     </>
   );
@@ -93,10 +98,10 @@ export function InstallNudge({ variant = "banner" }: InstallNudgeProps) {
             // nothing to tap here (iOS has no programmatic install), so it
             // shouldn't visually read as an interactive control (2026-07-06).
             <ol className="space-y-2.5">
-              <li className="flex items-center gap-2.5 text-sm text-foreground/70">
+              <li className="flex items-start gap-2.5 text-sm text-foreground/70">
                 <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-medium text-muted-foreground">1</span>
-                <span className="inline-flex items-center gap-1 flex-wrap">
-                  Tap <Share className="size-3.5 inline shrink-0 mx-0.5 text-muted-foreground" /> Share in Safari
+                <span>
+                  Tap <Share className="inline-block size-3.5 align-text-bottom mx-0.5 text-muted-foreground" /> Share in Safari
                 </span>
               </li>
               <li className="flex items-center gap-2.5 text-sm text-foreground/70">
@@ -118,10 +123,10 @@ export function InstallNudge({ variant = "banner" }: InstallNudgeProps) {
             // no button to offer. Same plain-steps, non-interactive treatment
             // as the iOS block above rather than an empty section.
             <ol className="space-y-2.5">
-              <li className="flex items-center gap-2.5 text-sm text-foreground/70">
+              <li className="flex items-start gap-2.5 text-sm text-foreground/70">
                 <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-medium text-muted-foreground">1</span>
-                <span className="inline-flex items-center gap-1 flex-wrap">
-                  Tap <MoreVertical className="size-3.5 inline shrink-0 mx-0.5 text-muted-foreground" /> menu in your browser
+                <span>
+                  Tap <MoreVertical className="inline-block size-3.5 align-text-bottom mx-0.5 text-muted-foreground" /> menu in your browser
                 </span>
               </li>
               <li className="flex items-center gap-2.5 text-sm text-foreground/70">
