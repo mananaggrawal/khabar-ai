@@ -59,30 +59,33 @@ export function NotificationNudge() {
       <button
         onClick={() => void push.subscribe()}
         disabled={push.loading}
-        // items-start (not items-center, 2026-07-10 fix): the subtitle can
-        // wrap to 2+ lines on narrower Android widths (or 3 with push.error
-        // shown) — items-center was centering the icon circle and "Turn on"
-        // pill against that variable-height block, so they visibly drifted
-        // down away from the title's first line once it wrapped. Pinning to
-        // the top keeps them aligned regardless of how much the text wraps,
-        // same fix as InstallNudge's icon/text alignment.
-        className="flex flex-1 min-w-0 items-start gap-3 rounded-2xl px-4 py-3 text-left transition-colors hover:bg-primary/[0.06] disabled:opacity-60"
+        className="flex-1 min-w-0 rounded-2xl px-4 py-3 text-left transition-colors hover:bg-primary/[0.06] disabled:opacity-60"
       >
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10">
-          <Bell className="size-4 text-primary" />
+        {/* icon + text row */}
+        <div className="flex items-start gap-3">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10">
+            <Bell className="size-4 text-primary" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-foreground">Never miss your briefing</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Get a nudge the moment it's ready — no need to keep checking back.
+            </p>
+            {push.error && (
+              <p className="mt-1 text-xs text-destructive/80">{push.error}</p>
+            )}
+            {/* "Turn on" pill (2026-07-10 fix): moved below the text instead of
+                sharing the row with it. Sitting beside the subtitle left the
+                subtitle competing with the icon AND the pill for width,
+                squeezing it into 3 wrapped lines on narrower Android screens
+                (confirmed via screenshot). Same convention InstallNudge's
+                banner already uses for its "Install" button — CTA sits under
+                the copy, in the same column, not to the side of it. */}
+            <span className="mt-2 inline-block rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground">
+              {push.loading ? "Working…" : "Turn on"}
+            </span>
+          </div>
         </div>
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium text-foreground">Never miss your briefing</p>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Get a nudge the moment it's ready — no need to keep checking back.
-          </p>
-          {push.error && (
-            <p className="mt-1 text-xs text-destructive/80">{push.error}</p>
-          )}
-        </div>
-        <span className="shrink-0 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground">
-          {push.loading ? "Working…" : "Turn on"}
-        </span>
       </button>
       <button
         onClick={() => setDismissed(true)}
