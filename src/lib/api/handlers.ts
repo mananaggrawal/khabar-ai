@@ -6,7 +6,7 @@
 import { generateDailyBriefing, generateMissingSections, generateMissingTTS, patchScripts, getLatestBriefing as getTodayBriefing, type TtsProvider } from "@/lib/news/generator";
 import { elevenLabsTTS, isQuotaExhausted, resetQuota } from "@/lib/tts/elevenlabs";
 import { resetDailyQuota } from "@/lib/tts/google";
-import { loadBriefingFromStorage, saveLogToStorage, loadLogFromStorage } from "@/lib/supabase-storage";
+import { loadBriefingFromStorage, saveLogToStorage, loadLogFromStorage, pruneOldStorage } from "@/lib/supabase-storage";
 import { requestAbort, resetAbort } from "@/lib/abort";
 import { sendBriefingPushNotifications, sendPushToAll, loadPushLog } from "@/lib/push-notifications";
 
@@ -19,6 +19,7 @@ function json(data: unknown, status = 200): Response {
 
 let generating = false;
 let runningJob: string | null = null;
+let generatingSince: number | null = null;
 
 /** Exposed so server.mjs can log a clear message if the process is being
  * killed (e.g. a Render deploy) while a generation is mid-run (2026-07-06) —
@@ -31,6 +32,39 @@ let runningJob: string | null = null;
  * instead of requiring a support back-and-forth to reconstruct. */
 export function currentGenerationStatus(): { generating: boolean; runningJob: string | null } {
   return { generating, runningJob };
+}
+
+// BUG FIX (2026-07-10) — "cron ran (200 OK), but no generation logs and
+// stale stories": handleCron/handleGenerate both gate on this single
+// in-memory `generating` flag with NO timeout — if a run ever truly hangs
+// (rather than throwing, which the try/finally below already handles) the
+// flag stays true until the whole process restarts, and EVERY subsequent
+// trigger — cron or manual — was silently rejected with ok:false, still
+// inside a 200 OK response (the `json()` helper defaults to 200), which is
+// indistinguishable from "ran successfully" to cron-job.org and leaves zero
+// trace in the persisted per-day log viewer (createLiveLogWriter is never
+// even called on the rejection path). A run genuinely never takes anywhere
+// near this long (~5-15 min per the README) — if `generating` has been true
+// longer than this, treat it as stuck rather than trusting it forever.
+const STUCK_GENERATION_MS = 25 * 60_000;
+
+function isGenerationStuck(): boolean {
+  return generating && generatingSince !== null && Date.now() - generatingSince > STUCK_GENERATION_MS;
+}
+
+// Persist a one-line note even for a rejected/overridden trigger, so it's
+// visible in the SAME per-day log viewer as real runs instead of only in
+// console output (which rolls off Render's log retention) — this is what
+// makes a silent rejection diagnosable after the fact.
+async function logSkippedTrigger(dateKey: string, source: string, msg: string): Promise<void> {
+  console.error(`[${source}] ${msg}`);
+  try {
+    const writer = await createLiveLogWriter(dateKey, `${source} (skipped)`);
+    writer.log(msg);
+    await writer.finish();
+  } catch (e: any) {
+    console.error("[logs] failed to persist skipped-trigger note:", e?.message ?? e);
+  }
 }
 
 function authCheck(request: Request): Response | null {
@@ -329,10 +363,19 @@ export async function handleCron(request: Request): Promise<Response> {
   const err = authCheck(request);
   if (err) return err;
 
-  if (generating) return json({ ok: false, message: "Already generating" });
+  if (generating) {
+    if (!isGenerationStuck()) {
+      await logSkippedTrigger(todayDateKey(), "cron",
+        `Skipped — already generating (job: ${runningJob ?? "unknown"}, running ${Math.round((Date.now() - (generatingSince ?? Date.now())) / 1000)}s). This is exactly the kind of thing that looks like "cron ran, 200 OK, but no logs and stale stories" from the outside — see the persisted skipped-trigger note above.`);
+      return json({ ok: false, message: "Already generating" });
+    }
+    await logSkippedTrigger(todayDateKey(), "cron",
+      `Previous run (job: ${runningJob ?? "unknown"}) has been "generating" for over ${Math.round(STUCK_GENERATION_MS / 60_000)} min — treating as stuck, proceeding anyway.`);
+  }
 
   generating = true;
   runningJob = "cron";
+  generatingSince = Date.now();
   resetAbort();
   resetQuota();
   resetDailyQuota();
@@ -341,6 +384,25 @@ export async function handleCron(request: Request): Promise<Response> {
     const logWriter = await createLiveLogWriter(dateKey, "cron");
     let succeeded = false;
     try {
+      // BUG FIX (2026-07-10): prune Storage BEFORE generating, not after —
+      // see pruneOldStorage's own comment in supabase-storage.ts for the
+      // full story. This was previously invoke-it-yourself only (a script +
+      // an Edge Function, neither ever actually scheduled), which let usage
+      // climb back over the free-tier 1GB quota after the one manual
+      // cleanup and broke both new saves AND log persistence at once. Runs
+      // every cron trigger now — a day with nothing to prune is a cheap
+      // no-op — so it can't be silently forgotten again. Failure here is
+      // logged but never blocks generation from at least attempting.
+      try {
+        const pruned = await pruneOldStorage(2);
+        logWriter.log(
+          `Storage pruned (cutoff ${pruned.cutoff}): ${pruned.briefings.deleted} briefing(s), ` +
+          `${pruned.logs.deleted} log(s), ${pruned.audio.deleted} audio file(s) deleted.`
+        );
+      } catch (e: any) {
+        console.error("[cron] storage prune failed:", e?.message ?? e);
+        logWriter.log(`⚠ Storage prune failed (continuing anyway): ${e?.message ?? e}`);
+      }
       // Back to en+hi by default (2026-07-08) — the English-only window was
       // temporary. A run REPLACES the whole day's briefing rather than
       // merging, so keep both languages generated together going forward to
@@ -352,7 +414,7 @@ export async function handleCron(request: Request): Promise<Response> {
       console.error("[cron] generation failed:", e?.message ?? e);
       logWriter.log(`✗ FAILED: ${e?.message ?? e}`);
     } finally {
-      generating = false; runningJob = null;
+      generating = false; runningJob = null; generatingSince = null;
     }
     if (succeeded) {
       // IST hour decides morning vs evening copy — the two daily cron
