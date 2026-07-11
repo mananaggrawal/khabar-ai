@@ -7,6 +7,7 @@
  */
 import webpush from "web-push";
 import { loadLogFromStorage, saveLogToStorage } from "@/lib/supabase-storage";
+import { istDateKey } from "@/lib/ist";
 
 const VAPID_PUBLIC_KEY  = process.env.VAPID_PUBLIC_KEY ?? "";
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY ?? "";
@@ -15,10 +16,11 @@ const VAPID_SUBJECT      = process.env.VAPID_SUBJECT ?? "mailto:manan.aggrawal@v
 // Persisted history of every push send attempt (cron-automatic or
 // admin-manual), so the admin panel can show "what notifications went out"
 // after the fact — mirrors the generation-log storage pattern (one entry per
-// UTC day, appended, keyed as its own storage "date" so it doesn't collide
-// with generation logs).
+// IST day, appended, keyed as its own storage "date" so it doesn't collide
+// with generation logs). IST, not UTC (2026-07-11 fix) — see src/lib/ist.ts,
+// same reasoning as the generation logs it mirrors.
 function pushLogKey(): string {
-  return `pushlog-${new Date().toISOString().slice(0, 10)}`;
+  return `pushlog-${istDateKey()}`;
 }
 
 async function recordPushLog(entry: string): Promise<void> {

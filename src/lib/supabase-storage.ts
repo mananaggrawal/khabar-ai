@@ -6,6 +6,7 @@
  *   briefings/YYYY-MM-DD.json
  */
 import { createClient } from "@supabase/supabase-js";
+import { istDateKeyDaysAgo } from "@/lib/ist";
 
 const BUCKET = "khabar";
 
@@ -157,15 +158,40 @@ export interface PruneResult {
   briefings: { total: number; deleted: number };
   logs: { total: number; deleted: number };
   audio: { total: number; deleted: number };
+  rootEntries: string[];
+}
+
+// DIAGNOSTIC (2026-07-11) — two cron runs on 2026-07-10 both logged "0
+// briefing(s), 0 log(s), 0 audio file(s) deleted" despite the bucket usage
+// dashboard showing steady growth since mid-June (well past 131% of the 1GB
+// quota) — meaning there SHOULD be weeks of files older than the 2-day
+// cutoff sitting in there. Previously only `deleted` counts were logged, not
+// `total` (how many files were even found in each folder), so there was no
+// way to tell "folder is empty / wrong path" apart from "files exist but the
+// date filter isn't matching them" from the log alone. Logging `total` per
+// folder, plus a one-time listing of whatever sits at the bucket ROOT
+// (outside audio/briefings/logs), should make the next cron run's log
+// self-diagnosing instead of needing a live Storage query to figure out.
+async function listBucketRootEntries(): Promise<string[]> {
+  try {
+    const { data, error } = await client().storage.from(PRUNE_BUCKET).list("", { limit: 100 });
+    if (error) return [`(root list failed: ${error.message})`];
+    return (data ?? []).map((e: any) => `${e.name}${e.id === null ? "/" : ""}`);
+  } catch (e: any) {
+    return [`(root list threw: ${e?.message ?? e})`];
+  }
 }
 
 /** Deletes briefings/logs/audio older than `keepDays` calendar days (today
  * counts as day 0). Safe to call on every cron run — a day with nothing to
  * delete is just a fast no-op list-and-compare. */
 export async function pruneOldStorage(keepDays = 2): Promise<PruneResult> {
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - (keepDays - 1));
-  const cutoffStr = cutoff.toISOString().slice(0, 10);
+  // IST-anchored (2026-07-11) — was UTC via plain Date.setDate/getDate,
+  // consistent with the same bug elsewhere (see src/lib/ist.ts), though the
+  // ~5.5h shift alone doesn't explain weeks-old files not matching; the
+  // total-count logging below is what actually diagnoses that.
+  const cutoffStr = istDateKeyDaysAgo(keepDays - 1);
+  const rootEntries = await listBucketRootEntries();
 
   async function pruneDatedFolder(folder: string) {
     const files = await listAllStorage(folder);
@@ -192,5 +218,5 @@ export async function pruneOldStorage(keepDays = 2): Promise<PruneResult> {
     pruneAudio(),
   ]);
 
-  return { cutoff: cutoffStr, briefings, logs, audio };
+  return { cutoff: cutoffStr, briefings, logs, audio, rootEntries };
 }

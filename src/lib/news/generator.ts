@@ -23,6 +23,7 @@ import { kokoroTTS } from "@/lib/tts/kokoro";
 import { openaiTTS } from "@/lib/tts/openai";
 import { saveBriefingToStorage, loadBriefingFromStorage } from "@/lib/supabase-storage";
 import { isAbortRequested } from "@/lib/abort";
+import { istDateKey, istDateKeyDaysAgo, istMidnightUtcMs } from "@/lib/ist";
 
 export type TtsProvider = "google" | "elevenlabs" | "edge" | "kokoro" | "openai";
 
@@ -449,9 +450,25 @@ async function buildRawStories(feedMap: Map<SectionId, RssItem[]>): Promise<{ st
 
   // Only today's news: drop items older than STORY_MAX_AGE_HOURS (default 24h),
   // and anything dated in the future (clock-skew tolerance 2h).
-  const maxAgeMs     = (Number(process.env.STORY_MAX_AGE_HOURS) || 24) * 3_600_000;
-  const freshCutoff  = Date.now() - maxAgeMs;
-  const futureCutoff = Date.now() + 2 * 3_600_000;
+  const maxAgeMs      = (Number(process.env.STORY_MAX_AGE_HOURS) || 24) * 3_600_000;
+  const rollingCutoff = Date.now() - maxAgeMs;
+  const futureCutoff  = Date.now() + 2 * 3_600_000;
+  // BUG FIX (2026-07-11): the rolling 24h window above is blind to calendar
+  // days — an article genuinely published YESTERDAY (IST) afternoon/evening
+  // is still "fresh" by that rolling clock during an early IST-morning run,
+  // so a day-old-but-technically-<24h article can sail through and show up
+  // as recycled/stale content next to today's real coverage of the same
+  // event (confirmed case: a "Spain's Yamal warned ahead of Belgium clash"
+  // preview, published 2026-07-10, still passing the freshness check during
+  // a 2026-07-11 morning run — Belgium had already been played by then).
+  // `istMidnightCutoff` anchors freshness to today's actual IST calendar
+  // day, with a short grace window before IST midnight so genuinely
+  // late-breaking stories right at the day boundary aren't excluded. The two
+  // cutoffs are combined with whichever is STRICTER (more recent) — this can
+  // only narrow the old window, never widen it.
+  const IST_GRACE_MS     = 6 * 3_600_000;
+  const istMidnightCutoff = istMidnightUtcMs() - IST_GRACE_MS;
+  const freshCutoff = Math.max(rollingCutoff, istMidnightCutoff);
   function isFresh(item: RssItem): boolean {
     if (!item.pubDate) return false;          // no date → can't confirm it's today, skip
     const t = Date.parse(item.pubDate);
@@ -1465,9 +1482,11 @@ function normalizeBriefing(raw: any): DailyBriefing {
 
 export async function getLatestBriefing(): Promise<DailyBriefing | null> {
   if (!LOCAL_MODE) {
+    // IST day-keys, not UTC (2026-07-11 fix) — see src/lib/ist.ts. Saves are
+    // now keyed by IST calendar date; searching by UTC date here would look
+    // one day off from what an early-IST-morning run actually saved under.
     for (let i = 0; i < 7; i++) {
-      const d = new Date(); d.setDate(d.getDate() - i);
-      const raw = await loadBriefingFromStorage(d.toISOString().slice(0, 10));
+      const raw = await loadBriefingFromStorage(istDateKeyDaysAgo(i));
       if (raw) return normalizeBriefing(raw);
     }
     return null;
@@ -1488,7 +1507,12 @@ export async function generateDailyBriefing(
   languages: string[] = ["en"],
 ): Promise<DailyBriefing & { runSummary?: RunSummary }> {
   const runStart = Date.now();
-  const date     = new Date().toISOString().slice(0, 10);
+  // IST, not UTC (2026-07-11 fix, see src/lib/ist.ts) — a UTC date meant the
+  // early-morning IST cron (fires ~4:30 AM IST, still UTC "yesterday" until
+  // 5:30 AM IST) saved its briefing under the previous calendar day, so a
+  // later same-morning run (e.g. a manual retry after 5:30 AM IST) landed
+  // under a DIFFERENT key even though both are "this morning" to a user.
+  const date     = istDateKey();
   const log      = (msg: string) => { console.log(`[generator] ${msg}`); logger(msg); };
 
   log(`Starting briefing v5 — ${date} | TTS: ${ttsProvider}`);

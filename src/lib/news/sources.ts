@@ -37,6 +37,16 @@ export type SectionConfig = {
 const LOCALE  = "hl=en-IN&gl=IN&ceid=IN:en";
 const GN_BASE = "https://news.google.com/rss";
 
+// Still used as each section's FALLBACK feed (2026-07-11) — no longer
+// primary. Google News topic feeds are relevance/prominence-curated, not
+// strictly recency-sorted, so a still-prominent-but-day-old story can sit at
+// the top of a topic feed well after it's been superseded (confirmed case:
+// a "Spain's Yamal warned ahead of Belgium clash" preview, published
+// 2026-07-10, still appearing prominently during a 2026-07-11 run — the
+// match had already been played and superseded by semifinal coverage).
+// Search feeds with an explicit `when:1d` operator are query-driven and
+// rotate on actual publish recency instead, so they're now primary; these
+// topic feeds remain as the fallback if a search feed ever returns 0 items.
 const TOPIC: Record<string, string> = {
   india:      "CAAqIQgKIhtDQkFTRGdvSUwyMHZNRHBxY0dNU0FtVnVLQUFQAQ",
   world:      "CAAqJggKIiBDQkFTRWdvSUwyMHZNRGx1YlY4U0FtVnVHZ0pKVGlnQVAB",
@@ -62,56 +72,61 @@ export const FEEDS: FeedConfig[] = [
     label:   "India",
     labelHi: "भारत",
     emoji:   "🇮🇳",
-    buildUrl: () => `${GN_BASE}/topics/${TOPIC.india}?${LOCALE}`,
-    fallbackUrl: `${GN_BASE}/search?q=india+news&${LOCALE}`,
+    // Search feed + `when:1d` is now PRIMARY, topic feed is the fallback —
+    // swapped 2026-07-11 (see note above TOPIC). fallbackUrl only engages
+    // if the primary returns 0 items (see fetchAllFeeds in generator.ts),
+    // so this keeps the old topic-feed behavior as a safety net rather than
+    // removing it outright.
+    buildUrl: () => `${GN_BASE}/search?q=india+news+when:1d&${LOCALE}`,
+    fallbackUrl: `${GN_BASE}/topics/${TOPIC.india}?${LOCALE}`,
   },
   {
     feedId:  "world",
     label:   "World",
     labelHi: "विश्व",
     emoji:   "🌍",
-    buildUrl: () => `${GN_BASE}/topics/${TOPIC.world}?${LOCALE}`,
-    fallbackUrl: `${GN_BASE}/search?q=world+international+news&${LOCALE}`,
+    buildUrl: () => `${GN_BASE}/search?q=world+international+news+when:1d&${LOCALE}`,
+    fallbackUrl: `${GN_BASE}/topics/${TOPIC.world}?${LOCALE}`,
   },
   {
     feedId:  "business",
     label:   "Business",
     labelHi: "व्यापार",
     emoji:   "💼",
-    buildUrl: () => `${GN_BASE}/topics/${TOPIC.business}?${LOCALE}`,
-    fallbackUrl: `${GN_BASE}/search?q=india+business+economy+markets&${LOCALE}`,
+    buildUrl: () => `${GN_BASE}/search?q=india+business+economy+markets+when:1d&${LOCALE}`,
+    fallbackUrl: `${GN_BASE}/topics/${TOPIC.business}?${LOCALE}`,
   },
   {
     feedId:  "technology",
     label:   "Technology",
     labelHi: "तकनीक",
     emoji:   "💻",
-    buildUrl: () => `${GN_BASE}/topics/${TOPIC.technology}?${LOCALE}`,
-    fallbackUrl: `${GN_BASE}/search?q=technology&${LOCALE}`,
+    buildUrl: () => `${GN_BASE}/search?q=technology+when:1d&${LOCALE}`,
+    fallbackUrl: `${GN_BASE}/topics/${TOPIC.technology}?${LOCALE}`,
   },
   {
     feedId:  "sports",
     label:   "Sports",
     labelHi: "खेल",
     emoji:   "🏆",
-    buildUrl: () => `${GN_BASE}/topics/${TOPIC.sports}?${LOCALE}`,
-    fallbackUrl: `${GN_BASE}/search?q=sports&${LOCALE}`,
+    buildUrl: () => `${GN_BASE}/search?q=sports+when:1d&${LOCALE}`,
+    fallbackUrl: `${GN_BASE}/topics/${TOPIC.sports}?${LOCALE}`,
   },
   {
     feedId:  "science",
     label:   "Science",
     labelHi: "विज्ञान",
     emoji:   "🔬",
-    buildUrl: () => `${GN_BASE}/topics/${TOPIC.science}?${LOCALE}`,
-    fallbackUrl: `${GN_BASE}/search?q=science&${LOCALE}`,
+    buildUrl: () => `${GN_BASE}/search?q=science+when:1d&${LOCALE}`,
+    fallbackUrl: `${GN_BASE}/topics/${TOPIC.science}?${LOCALE}`,
   },
   {
     feedId:  "health",
     label:   "Health",
     labelHi: "स्वास्थ्य",
     emoji:   "🩺",
-    buildUrl: () => `${GN_BASE}/topics/${TOPIC.health}?${LOCALE}`,
-    fallbackUrl: `${GN_BASE}/search?q=health&${LOCALE}`,
+    buildUrl: () => `${GN_BASE}/search?q=health+when:1d&${LOCALE}`,
+    fallbackUrl: `${GN_BASE}/topics/${TOPIC.health}?${LOCALE}`,
   },
 ];
 

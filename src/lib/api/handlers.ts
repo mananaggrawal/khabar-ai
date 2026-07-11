@@ -8,6 +8,7 @@ import { elevenLabsTTS, isQuotaExhausted, resetQuota } from "@/lib/tts/elevenlab
 import { resetDailyQuota } from "@/lib/tts/google";
 import { loadBriefingFromStorage, saveLogToStorage, loadLogFromStorage, pruneOldStorage } from "@/lib/supabase-storage";
 import { requestAbort, resetAbort } from "@/lib/abort";
+import { istDateKey, istDateKeyDaysAgo } from "@/lib/ist";
 import { sendBriefingPushNotifications, sendPushToAll, loadPushLog } from "@/lib/push-notifications";
 
 function json(data: unknown, status = 200): Response {
@@ -78,11 +79,13 @@ function authCheck(request: Request): Response | null {
 // Generation run logs (2026-07-03) — persisted so "what happened" is visible
 // in the admin panel afterward, not just live via SSE to whoever had it open
 // at the exact moment (which nobody does for cron-triggered runs). Keyed by
-// the same UTC date generator.ts uses for the briefing itself. Multiple runs
-// same day (cron + manual) are appended, not overwritten, separated by a
-// run header with a timestamp.
+// the same IST date generator.ts uses for the briefing itself (BUG FIX
+// 2026-07-11: previously UTC — see src/lib/ist.ts for why that misfiled the
+// early-morning IST cron's log under the previous day). Multiple runs same
+// day (cron + manual) are appended, not overwritten, separated by a run
+// header with a timestamp.
 function todayDateKey(): string {
-  return new Date().toISOString().slice(0, 10);
+  return istDateKey();
 }
 
 // Live-flushing writer: periodically re-saves (prefix-from-before-this-run +
@@ -395,9 +398,19 @@ export async function handleCron(request: Request): Promise<Response> {
       // logged but never blocks generation from at least attempting.
       try {
         const pruned = await pruneOldStorage(2);
+        // DIAGNOSTIC (2026-07-11): now logging total-found counts alongside
+        // deleted counts, and the bucket's root-level entries — two prior
+        // runs (2026-07-10) both showed 0/0/0 deleted despite weeks of
+        // storage growth, and there was no way to tell from the old log
+        // line whether the folders were genuinely empty, mis-pathed, or full
+        // of files the date filter just wasn't matching. This makes the next
+        // run's log self-diagnosing instead of needing a live Storage query.
         logWriter.log(
-          `Storage pruned (cutoff ${pruned.cutoff}): ${pruned.briefings.deleted} briefing(s), ` +
-          `${pruned.logs.deleted} log(s), ${pruned.audio.deleted} audio file(s) deleted.`
+          `Storage pruned (cutoff ${pruned.cutoff}): ` +
+          `briefings ${pruned.briefings.deleted}/${pruned.briefings.total} deleted, ` +
+          `logs ${pruned.logs.deleted}/${pruned.logs.total} deleted, ` +
+          `audio ${pruned.audio.deleted}/${pruned.audio.total} deleted. ` +
+          `Bucket root: [${pruned.rootEntries.join(", ")}]`
         );
       } catch (e: any) {
         console.error("[cron] storage prune failed:", e?.message ?? e);
@@ -432,8 +445,8 @@ export async function handleCron(request: Request): Promise<Response> {
 
 // GET /api/admin/logs?date=YYYY-MM-DD — persisted logs for a day's run(s)
 // (cron-triggered runs have no live viewer, so this is the only way to see
-// what happened after the fact). Defaults to today (UTC, matching the date
-// key generator.ts/briefings use).
+// what happened after the fact). Defaults to today (IST, matching the date
+// key generator.ts/briefings use — see src/lib/ist.ts).
 export async function handleLogs(request: Request): Promise<Response> {
   const err = authCheck(request);
   if (err) return err;
@@ -466,9 +479,7 @@ export async function handleStatus(request: Request): Promise<Response> {
   let todayStats: object | null = null;
 
   for (let i = 0; i < 3; i++) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    const date = d.toISOString().slice(0, 10);
+    const date = istDateKeyDaysAgo(i); // IST, not UTC — see src/lib/ist.ts (2026-07-11 fix)
     try {
       const briefing: any = await loadBriefingFromStorage(date);
       if (briefing) {
