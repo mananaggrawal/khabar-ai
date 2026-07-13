@@ -1106,6 +1106,49 @@ function hasUngroundedNumbers(scriptEn: string, sourcesText: string): boolean {
   return scriptNums.some(n => !sourceNums.has(n));
 }
 
+// BUG FIX (2026-07-13, round 2) — the check above only catches digit-form
+// numbers ("4", "1250"). Confirmed real case: a Golden Boot race script said
+// "Messi leads with four goals, while Mbappe has three... Kane and
+// Bellingham follow closely with two goals each" — every count was spelled
+// out as a word, not a digit, so extractNumbers() saw nothing and the retry
+// never fired. Single digits are normally too noisy to check (see the 2+
+// digit floor above — "day 3", scorelines, etc.), but a spelled-out number
+// directly attached to a countable stat noun ("four goals", "twelve
+// percent", "two medals") is exactly the shape of an attributed statistic,
+// which is the highest-stakes place for a hallucinated tally to hide. This
+// targets that specific pattern instead of every lone digit/word-number.
+const NUMBER_WORDS: Record<string, string> = {
+  zero: "0", one: "1", two: "2", three: "3", four: "4", five: "5", six: "6",
+  seven: "7", eight: "8", nine: "9", ten: "10", eleven: "11", twelve: "12",
+  thirteen: "13", fourteen: "14", fifteen: "15", sixteen: "16", seventeen: "17",
+  eighteen: "18", nineteen: "19", twenty: "20", thirty: "30", forty: "40",
+  fifty: "50", sixty: "60", seventy: "70", eighty: "80", ninety: "90",
+  hundred: "100", thousand: "1000",
+};
+const STAT_UNITS = "goals?|points?|runs?|wickets?|medals?|votes?|seats?|matches?|games?|assists?|centuries|wins?|titles?|percent|per cent|crore|lakh|rupees?|dollars?|years?( old)?";
+const STAT_CLAIM_RE = new RegExp(`\\b(\\d+|${Object.keys(NUMBER_WORDS).join("|")})\\s+(${STAT_UNITS})\\b`, "gi");
+
+function extractStatClaims(text: string): Set<string> {
+  const claims = new Set<string>();
+  let m: RegExpExecArray | null;
+  STAT_CLAIM_RE.lastIndex = 0;
+  while ((m = STAT_CLAIM_RE.exec(text)) !== null) {
+    const raw  = m[1].toLowerCase();
+    const num  = /^\d+$/.test(raw) ? raw : (NUMBER_WORDS[raw] ?? raw);
+    const unit = m[2].toLowerCase().replace(/s$/, "").replace(/ old$/, "");
+    claims.add(`${num} ${unit}`);
+  }
+  return claims;
+}
+
+function hasUngroundedStatClaims(scriptEn: string, sourcesText: string): boolean {
+  const scriptClaims = extractStatClaims(scriptEn);
+  if (scriptClaims.size === 0) return false;
+  const sourceClaims = extractStatClaims(sourcesText);
+  for (const c of scriptClaims) if (!sourceClaims.has(c)) return true;
+  return false;
+}
+
 async function scriptEvent(
   ev: SelectedEvent,
   logger: Logger,
@@ -1161,7 +1204,7 @@ HARD RULES:
 - FORBIDDEN: interpretation, analysis, predictions, or editorializing — facts only
 - FORBIDDEN words: "reportedly", "sources say", "it is said", "stakeholders", "signals", "could mean", "experts say", "analysts"
 - FORBIDDEN vague filler (2026-07-13 — these are empty-content padding, not facts): "much to follow", "more details are expected", "developments continue", "reactions have been mixed", "many are talking about this", "this has drawn attention", "the situation is being watched", or any similar sentence that names WHO is reacting/feeling without saying WHAT they specifically said or did
-- NUMBERS: only state a number (price, amount, percentage, count) if it appears EXACTLY in the sources below — copy the digits as given, do not round, estimate, average, or convert units. If the sources don't clearly give a number for something, omit that detail entirely rather than approximate one
+- NUMBERS: only state a number (price, amount, percentage, count, tally, score) if it appears EXACTLY in the sources below — copy the digits as given, whether you write it as a digit or spell it out ("4" or "four"), do not round, estimate, average, invent, or convert units. This applies just as much to per-person stats like goal/point/medal counts as to prices. If the sources don't clearly give a number for something, omit that detail entirely rather than approximate or guess one
 - BREVITY OVER PADDING: the 45-65 word target is a ceiling, not a quota — if the sources only support a shorter script, write a shorter one (as few as 20-25 words). Never stretch a thin story with vague sentiment or restated headline to hit the word count
 - NO demographic mentions: "Indians", "citizens", "the public", "people"
 - NO bullet points, no parentheses, no lists
@@ -1194,6 +1237,9 @@ Return ONLY valid JSON: {"title": "...", "scriptEn": "..."}`;
       // since it's copied source text, not model-generated.
       if (hasUngroundedNumbers(scriptEn, sourcesText)) {
         throw new Error(`Script has a number not found in sources`);
+      }
+      if (hasUngroundedStatClaims(scriptEn, sourcesText)) {
+        throw new Error(`Script has a stat claim (e.g. "X goals") not found in sources`);
       }
       logger(`    ✓ ${scriptEn.split(/\s+/).length}w: ${title.slice(0, 55)}`);
       return { title, scriptEn };
