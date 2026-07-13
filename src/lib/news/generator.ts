@@ -453,21 +453,23 @@ async function buildRawStories(feedMap: Map<SectionId, RssItem[]>): Promise<{ st
   const maxAgeMs      = (Number(process.env.STORY_MAX_AGE_HOURS) || 24) * 3_600_000;
   const rollingCutoff = Date.now() - maxAgeMs;
   const futureCutoff  = Date.now() + 2 * 3_600_000;
-  // BUG FIX (2026-07-11): the rolling 24h window above is blind to calendar
-  // days — an article genuinely published YESTERDAY (IST) afternoon/evening
-  // is still "fresh" by that rolling clock during an early IST-morning run,
-  // so a day-old-but-technically-<24h article can sail through and show up
-  // as recycled/stale content next to today's real coverage of the same
-  // event (confirmed case: a "Spain's Yamal warned ahead of Belgium clash"
-  // preview, published 2026-07-10, still passing the freshness check during
-  // a 2026-07-11 morning run — Belgium had already been played by then).
-  // `istMidnightCutoff` anchors freshness to today's actual IST calendar
-  // day, with a short grace window before IST midnight so genuinely
-  // late-breaking stories right at the day boundary aren't excluded. The two
-  // cutoffs are combined with whichever is STRICTER (more recent) — this can
-  // only narrow the old window, never widen it.
-  const IST_GRACE_MS     = 6 * 3_600_000;
-  const istMidnightCutoff = istMidnightUtcMs() - IST_GRACE_MS;
+  // BUG FIX (2026-07-11), TIGHTENED (2026-07-13): the rolling 24h window
+  // above is blind to calendar days — an article genuinely published
+  // YESTERDAY (IST) is still "fresh" by that rolling clock during an early
+  // IST-morning run, so day-old content sails through and shows up next to
+  // today's real coverage (confirmed cases: a "Spain's Yamal warned ahead
+  // of Belgium clash" preview from 2026-07-10 surviving into a 2026-07-11
+  // run; an NDTV story explicitly timestamped "Jul 12, 2026 21:16 IST"
+  // surviving into the 2026-07-13 04:31 AM IST run). The first version of
+  // this fix anchored to IST midnight MINUS a 6h grace window, to avoid
+  // starving the early-morning run of content — but that grace window is
+  // exactly what let the July-12-21:16-IST story through: 9:16 PM is inside
+  // "6 PM the day before" grace. Per explicit direction (2026-07-13):
+  // strict "today's IST calendar date, evaluated at run time" — no grace
+  // window at all. Trade-off accepted: the early-morning cron only draws
+  // from whatever's been published since IST midnight (a few hours), which
+  // can mean fewer stories in some sections that run.
+  const istMidnightCutoff = istMidnightUtcMs();
   const freshCutoff = Math.max(rollingCutoff, istMidnightCutoff);
   function isFresh(item: RssItem): boolean {
     if (!item.pubDate) return false;          // no date → can't confirm it's today, skip
