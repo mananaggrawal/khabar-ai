@@ -1080,6 +1080,32 @@ function isValidScript(text: string | undefined): boolean {
   return true;
 }
 
+// BUG FIX (2026-07-13) — hallucinated numbers in scripts (confirmed case:
+// gold/silver prices stated incorrectly, sometimes inconsistently within the
+// same script). The prompt now says "only state a number that appears
+// exactly in the sources," but a prompt instruction alone doesn't stop an
+// LLM from occasionally not following it — this is a cheap, deterministic
+// safety net: extract every digit-sequence the script states and confirm
+// each one also appears in the source text it was grounded on. No AI call
+// needed, just string matching.
+//
+// Restricted to numbers with 2+ digits (drops 0-9) — single digits are too
+// common/noisy in ordinary prose (scorelines, "day 3", list positions) to be
+// a reliable hallucination signal; the numbers that actually matter for
+// trust (prices, counts, percentages, years-as-figures) virtually always
+// have 2+ digits anyway.
+function extractNumbers(text: string): string[] {
+  const matches = text.match(/\d[\d,]*\.?\d*/g) ?? [];
+  return matches.map(m => m.replace(/,/g, "")).filter(n => n.replace(/\D/g, "").length >= 2);
+}
+
+function hasUngroundedNumbers(scriptEn: string, sourcesText: string): boolean {
+  const scriptNums = extractNumbers(scriptEn);
+  if (scriptNums.length === 0) return false;
+  const sourceNums = new Set(extractNumbers(sourcesText));
+  return scriptNums.some(n => !sourceNums.has(n));
+}
+
 async function scriptEvent(
   ev: SelectedEvent,
   logger: Logger,
@@ -1134,6 +1160,9 @@ HARD RULES:
 - FORBIDDEN endings: "Stay tuned", "Watch this space", "Keep an eye on", any tease or CTA
 - FORBIDDEN: interpretation, analysis, predictions, or editorializing — facts only
 - FORBIDDEN words: "reportedly", "sources say", "it is said", "stakeholders", "signals", "could mean", "experts say", "analysts"
+- FORBIDDEN vague filler (2026-07-13 — these are empty-content padding, not facts): "much to follow", "more details are expected", "developments continue", "reactions have been mixed", "many are talking about this", "this has drawn attention", "the situation is being watched", or any similar sentence that names WHO is reacting/feeling without saying WHAT they specifically said or did
+- NUMBERS: only state a number (price, amount, percentage, count) if it appears EXACTLY in the sources below — copy the digits as given, do not round, estimate, average, or convert units. If the sources don't clearly give a number for something, omit that detail entirely rather than approximate one
+- BREVITY OVER PADDING: the 45-65 word target is a ceiling, not a quota — if the sources only support a shorter script, write a shorter one (as few as 20-25 words). Never stretch a thin story with vague sentiment or restated headline to hit the word count
 - NO demographic mentions: "Indians", "citizens", "the public", "people"
 - NO bullet points, no parentheses, no lists
 - NEVER invent facts — only use what is in the sources
@@ -1154,6 +1183,17 @@ Return ONLY valid JSON: {"title": "...", "scriptEn": "..."}`;
       const scriptEn = (raw.scriptEn || "").trim();
       if (!isValidScript(scriptEn)) {
         throw new Error(`Script invalid: ${scriptEn.split(/\s+/).length} words`);
+      }
+      // BUG FIX (2026-07-13): reject + retry if the script states a number
+      // (2+ digits) that doesn't appear anywhere in the source text it was
+      // grounded on — same retry budget as the word-count check above, since
+      // an ungrounded number is exactly the kind of thing a second attempt
+      // (with the same "copy exact digits, omit if unclear" instruction) can
+      // often fix. Falls through to the stitched-description fallback below
+      // if attempt 2 still doesn't ground cleanly, which is inherently safe
+      // since it's copied source text, not model-generated.
+      if (hasUngroundedNumbers(scriptEn, sourcesText)) {
+        throw new Error(`Script has a number not found in sources`);
       }
       logger(`    ✓ ${scriptEn.split(/\s+/).length}w: ${title.slice(0, 55)}`);
       return { title, scriptEn };
